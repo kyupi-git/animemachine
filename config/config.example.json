@@ -1,0 +1,668 @@
+{
+  "schemaVersion": 2,
+  "deployment": {
+    "libraryUncRoot": "/Library",
+    "qbtLibraryRoot": "/Library",
+    "torrentPoolRoot": "/Torrents",
+    "historyDirectoryName": ".anm-history"
+  },
+  "components": {
+    "discovery": {
+      "kind": "directory",
+      "pollMinutes": 30,
+      "deepReconcileDays": 14
+    },
+    "downloadClient": {
+      "kind": "qbittorrent",
+      "mode": "managed",
+      "endpoint": "http://127.0.0.1:8080",
+      "credentialRef": "secret://qbittorrent/default",
+      "category": "anm",
+      "tags": [
+        "anm",
+        "torrent-meta"
+      ]
+    },
+    "aniRss": {
+      "endpoint": "http://127.0.0.1:7789",
+      "mode": "prefer",
+      "credentialRef": "secret://ani-rss/default",
+      "mediaPath": "/Media",
+      "syncMinutes": 30,
+      "deleteGraceSyncs": 2
+    }
+  },
+  "performance": {
+    "initialTorrentBatch": 500,
+    "poolScanWorkers": 0,
+    "poolCommitEvery": 100,
+    "libraryCommitEvery": 100,
+    "asyncPlanThreshold": 25,
+    "catalogReadDuringSync": true
+  },
+  "externalLibraries": [
+    {
+      "id": "external-read-only",
+      "kind": "generic",
+      "enabled": false,
+      "path": "/External",
+      "readOnly": true,
+      "scanMinutes": 60
+    }
+  ],
+  "playback": {
+    "enabled": true,
+    "playlistIdleSeconds": 43200,
+    "playlistMaximumSeconds": 604800,
+    "publicBaseUrl": "",
+    "preferDirectPaths": true,
+    "directPathMappings": []
+  },
+  "subtitles": {
+    "enabled": true,
+    "languages": {
+      "zh-Hans": [
+        "zh-cn",
+        "zh-tw"
+      ],
+      "en": [
+        "en"
+      ],
+      "ja": [
+        "ja"
+      ]
+    },
+    "ffprobe": "ffprobe",
+    "archiveTool": "7z",
+    "providers": [
+      {
+        "id": "assrt",
+        "name": "ASSRT",
+        "enabled": true,
+        "apiKeyEnv": "ASSRT_API_TOKEN",
+        "endpoints": [
+          "https://api.assrt.net",
+          "https://api.makedie.me"
+        ]
+      },
+      {
+        "id": "opensubtitles",
+        "name": "OpenSubtitles",
+        "enabled": true,
+        "apiKeyEnv": "OPEN_SUBTITLES_API_KEY",
+        "endpoints": [
+          "https://api.opensubtitles.com/api/v1"
+        ]
+      }
+    ],
+    "minimumAutomaticConfidence": 0.92,
+    "minimumManualConfidence": 0.78
+  },
+  "security": {
+    "requireAdminAccount": true,
+    "trustReverseProxyAuthentication": false,
+    "secretsDirectory": "/run/secrets"
+  },
+  "ui": {
+    "language": "zh-Hans",
+    "availableLanguages": [
+      "zh-Hans",
+      "en",
+      "ja"
+    ],
+    "catalogView": "cards",
+    "imagesEnabled": true,
+    "pageSize": 12,
+    "sort": "random",
+    "sortDirection": "asc",
+    "filterDefaults": {
+      "mediaTypes": [
+        "tv",
+        "movie"
+      ],
+      "country": "JP",
+      "availability": [
+        "available"
+      ]
+    }
+  },
+  "metadata": {
+    "workUniverse": "bangumi-archive-only",
+    "archive": {
+      "officialManifest": "https://raw.githubusercontent.com/bangumi/Archive/master/aux/latest.json",
+      "userMirrors": [],
+      "requireOfficialSha256": true,
+      "updatePolicy": "weekly"
+    },
+    "onlineRepair": {
+      "enabled": true,
+      "deferUntilLocalReady": true,
+      "batchSize": 50,
+      "providers": [
+        "bangumi",
+        "mal"
+      ],
+      "neverAddOutsideArchive": true,
+      "reasons": [
+        "missing",
+        "unknown_date",
+        "relation_conflict",
+        "stale"
+      ]
+    },
+    "network": {
+      "selection": "health_latency",
+      "probeTimeoutSeconds": 8,
+      "failureCooldownSeconds": 900,
+      "archiveManifestEndpoints": [
+        "https://raw.githubusercontent.com/bangumi/Archive/master/aux/latest.json",
+        "https://cdn.jsdelivr.net/gh/bangumi/Archive@master/aux/latest.json",
+        "https://cdn.jsdmirror.com/gh/bangumi/Archive@master/aux/latest.json"
+      ],
+      "archiveAssetProxyTemplates": [
+        "https://gh-proxy.com/{url}",
+        "https://ghfast.top/{url}"
+      ],
+      "bangumiApiEndpoints": [
+        "https://api.bgm.tv"
+      ],
+      "bangumiSubjectCacheEndpoints": [
+        "https://bgm-cache.wushuo.top"
+      ],
+      "malApiEndpoints": [
+        "https://api.myanimelist.net/v2"
+      ],
+      "useSystemProxy": true
+    },
+    "images": {
+      "primaryProvider": "bangumi",
+      "fallbackProviders": [
+        "mal"
+      ],
+      "fetchOnDemand": true,
+      "fullPrefetch": false,
+      "foregroundRequestsPreemptPrefetch": true
+    }
+  },
+  "catalog": {
+    "defaultHiddenStates": [
+      "nsfw"
+    ],
+    "incompleteMetadataVisible": true,
+    "incompleteMetadataAutoMap": false
+  },
+  "library": {
+    "createPlaceholders": true,
+    "preserveExistingMedia": true,
+    "reuseEquivalentExistingPath": true,
+    "completionRequires": [
+      "qbittorrent_complete",
+      "target_exists",
+      "expected_size"
+    ],
+    "hashRiskyReplacements": true,
+    "completeness": {
+      "method": "kind_episode_name_size_v1",
+      "thresholds": {
+        "complete": 95,
+        "nearComplete": 80,
+        "high": 60,
+        "partial": 30
+      }
+    }
+  },
+  "naming": {
+    "workTemplate": "『{date}』『{title}』",
+    "seriesTemplate": "『{start}－{end}』『「{title}」シリーズ』",
+    "yearKnownMonthUnknown": "YYYY_XX",
+    "dateUnknown": "20XX_XX",
+    "preferExistingEquivalentDirectory": true,
+    "renameMalformedExistingDirectory": true,
+    "preserveVerifiedCompoundTitles": true,
+    "appendSemanticEnglishTitleOnlyWhenVerified": true,
+    "seriesTitleMustBeFranchiseRoot": true
+  },
+  "relations": {
+    "strictSeriesRelations": [
+      "prequel",
+      "sequel",
+      "parent",
+      "main_story",
+      "side_story",
+      "spin_off",
+      "summary",
+      "full_story",
+      "alternative_version"
+    ],
+    "nonGroupingRelations": [
+      "same_setting",
+      "character_appearance",
+      "collaboration",
+      "other"
+    ],
+    "mergeOfficialSplitCours": true,
+    "splitCourRequiresExplicitSameSeasonEvidence": true,
+    "supplementEpisodeHeuristic": {
+      "likelyMergeMaximumEpisodes": 2,
+      "reviewFromEpisodes": 3
+    },
+    "createSeparateMoviesAndIndependentStories": true,
+    "mergeNativeUndividedCollectionsWithSharedAttachments": true,
+    "deprecatedRecutMarker": "deprecated.txt"
+  },
+  "scope": {
+    "excludeLongRunningContinuous": false
+  },
+  "torrentPolicy": {
+    "acquisitionMethods": {
+      "torrent": true,
+      "magnet": true
+    },
+    "contentClasses": {
+      "bdrip": true,
+      "webrip": true,
+      "dvdrip": true,
+      "tvrip": false,
+      "remux": false,
+      "bdmv": false,
+      "iso": false
+    },
+    "allowUnlisted": {
+      "resourceGroup": false,
+      "sourceClass": true,
+      "resolution": true,
+      "subtitle": true
+    },
+    "sourceFamilies": {
+      "archive": [
+        "bdrip",
+        "dvdrip",
+        "remux",
+        "bdmv",
+        "iso",
+        "vhsrip",
+        "ldrip"
+      ],
+      "serial": [
+        "webrip",
+        "tvrip"
+      ]
+    },
+    "serialSubtitle": {
+      "language": "auto"
+    },
+    "archiveGroupIds": [
+      "jsum",
+      "vcb-studio",
+      "philosophy-raws",
+      "beatrice-raws",
+      "ank-raws",
+      "yousei-raws",
+      "kawaiika-raws",
+      "moozzi2",
+      "reinforce",
+      "snow-raws",
+      "lolihouse",
+      "lilith-raws",
+      "ohys-raws",
+      "judas",
+      "anime-time"
+    ],
+    "preferCollections": true,
+    "oneTaskPerInfohash": true,
+    "reuseTaskForAdditionalFiles": true,
+    "incrementalAcquisition": {
+      "enabled": true,
+      "watchAfterCompletion": true,
+      "exactFingerprintDimensions": [
+        "sourceClass",
+        "resourceGroup",
+        "subtitle",
+        "resolution",
+        "videoScan",
+        "bitDepth"
+      ],
+      "preferCompleteCollection": true,
+      "keepCompleteWebUntilCompleteBd": true
+    },
+    "revisionMarkers": [
+      "BDBOX",
+      "BD-BOX",
+      "REV",
+      "FIN",
+      "RESEED"
+    ],
+    "strategyOrder": [
+      "resourceCompleteness",
+      "releaseStrategy",
+      "sourceClass",
+      "seriesCompleteness",
+      "resourceGroup",
+      "collectionOrRevision",
+      "attachmentCompleteness",
+      "resolution",
+      "subtitle",
+      "bitDepth",
+      "torrentCreationDate",
+      "size"
+    ],
+    "contentClassPriority": [
+      "bdrip",
+      "webrip",
+      "dvdrip",
+      "tvrip",
+      "remux",
+      "bdmv",
+      "iso"
+    ],
+    "releaseStrategyPriority": [
+      "bdrip_collection",
+      "bdrip_volume",
+      "webrip_collection",
+      "webrip_episode",
+      "tvrip_collection",
+      "tvrip_episode",
+      "other"
+    ],
+    "collectionRevisionPriority": [
+      "collection_revision",
+      "collection",
+      "revision",
+      "ordinary"
+    ],
+    "attachmentPriority": [
+      "with_attachments",
+      "without_attachments"
+    ],
+    "creationDatePriority": [
+      "newest",
+      "oldest"
+    ],
+    "sizePriority": [
+      "larger",
+      "smaller"
+    ],
+    "resourceGroups": [
+      {
+        "id": "vcb-studio",
+        "name": "VCB-Studio",
+        "aliases": [
+          "VCB-S",
+          "VCB Studio"
+        ],
+        "tier": 1,
+        "order": 2,
+        "enabled": true
+      },
+      {
+        "id": "jsum",
+        "name": "jsum",
+        "aliases": [
+          "jsum@U2"
+        ],
+        "tier": 1,
+        "order": 1,
+        "enabled": true
+      },
+      {
+        "id": "philosophy-raws",
+        "name": "philosophy-raws",
+        "aliases": [
+          "philosophy raws"
+        ],
+        "tier": 1,
+        "order": 3,
+        "enabled": true
+      },
+      {
+        "id": "beatrice-raws",
+        "name": "Beatrice-Raws",
+        "aliases": [
+          "Beatrice Raws"
+        ],
+        "tier": 2,
+        "order": 1,
+        "enabled": true
+      },
+      {
+        "id": "ank-raws",
+        "name": "ANK-Raws",
+        "aliases": [
+          "ANK Raws"
+        ],
+        "tier": 2,
+        "order": 2,
+        "enabled": true
+      },
+      {
+        "id": "yousei-raws",
+        "name": "Yousei-Raws",
+        "aliases": [
+          "Yousei Raws"
+        ],
+        "tier": 3,
+        "order": 1,
+        "enabled": true
+      },
+      {
+        "id": "kawaiika-raws",
+        "name": "Kawaiika-Raws",
+        "aliases": [
+          "Kawaiika Raws"
+        ],
+        "tier": 3,
+        "order": 2,
+        "enabled": true
+      },
+      {
+        "id": "moozzi2",
+        "name": "Moozzi2",
+        "aliases": [
+          "Moozzi2@U2"
+        ],
+        "tier": 4,
+        "order": 1,
+        "enabled": true
+      },
+      {
+        "id": "reinforce",
+        "name": "ReinForce",
+        "aliases": [
+          "Reinforce"
+        ],
+        "tier": 4,
+        "order": 2,
+        "enabled": true
+      },
+      {
+        "id": "snow-raws",
+        "name": "Snow-Raws",
+        "aliases": [
+          "Snow Raws"
+        ],
+        "tier": 4,
+        "order": 3,
+        "enabled": true
+      },
+      {
+        "id": "ani",
+        "name": "ANi",
+        "aliases": [
+          "ANiTorrent",
+          "ANi WEB-DL"
+        ],
+        "tier": 5,
+        "order": 1,
+        "enabled": true
+      },
+      {
+        "id": "lolihouse",
+        "name": "LoliHouse",
+        "aliases": [
+          "LoliHouse-Raws"
+        ],
+        "tier": 5,
+        "order": 2,
+        "enabled": true
+      },
+      {
+        "id": "nix-raws",
+        "name": "Nix-Raws",
+        "aliases": [
+          "Nix Raws"
+        ],
+        "tier": 5,
+        "order": 3,
+        "enabled": true
+      },
+      {
+        "id": "kirara-fantasia",
+        "name": "Kirara Fantasia",
+        "aliases": [
+          "Kirara-Fantasia"
+        ],
+        "tier": 5,
+        "order": 4,
+        "enabled": true
+      },
+      {
+        "id": "lilith-raws",
+        "name": "Lilith-Raws",
+        "aliases": [
+          "Lilith Raws"
+        ],
+        "tier": 5,
+        "order": 5,
+        "enabled": true
+      },
+      {
+        "id": "nc-raws",
+        "name": "NC-Raws",
+        "aliases": [
+          "NC Raws"
+        ],
+        "tier": 5,
+        "order": 6,
+        "enabled": true
+      },
+      {
+        "id": "subsplease",
+        "name": "SubsPlease",
+        "aliases": [],
+        "tier": 5,
+        "order": 7,
+        "enabled": true
+      },
+      {
+        "id": "erai-raws",
+        "name": "Erai-raws",
+        "aliases": [
+          "Erai Raws"
+        ],
+        "tier": 5,
+        "order": 8,
+        "enabled": true
+      },
+      {
+        "id": "ohys-raws",
+        "name": "Ohys-Raws",
+        "aliases": [
+          "Ohys Raws"
+        ],
+        "tier": 5,
+        "order": 9,
+        "enabled": true
+      },
+      {
+        "id": "judas",
+        "name": "Judas",
+        "aliases": [],
+        "tier": 6,
+        "order": 1,
+        "enabled": true
+      },
+      {
+        "id": "anime-time",
+        "name": "Anime Time",
+        "aliases": [],
+        "tier": 6,
+        "order": 2,
+        "enabled": true
+      }
+    ],
+    "resolutions": {
+      "2160p": false,
+      "1080p": true,
+      "1080i": true,
+      "720p": true,
+      "480p-576p": true
+    },
+    "subtitles": {
+      "CHS": true,
+      "CHS+CHT": true,
+      "CHT": true,
+      "ENG": false
+    },
+    "subtitleDefaultsByLanguage": {
+      "zh-Hans": [
+        "CHS",
+        "CHS+CHT",
+        "CHT"
+      ],
+      "en": [
+        "ENG"
+      ],
+      "ja": []
+    },
+    "subtitlePriority": [
+      "CHS",
+      "CHS+CHT",
+      "CHT",
+      "ENG",
+      "unknown"
+    ],
+    "resolutionPriority": [
+      "2160p",
+      "1080p",
+      "1080i",
+      "720p",
+      "480p-576p",
+      "unknown"
+    ],
+    "bitDepthPriority": [
+      "10bit",
+      "8bit",
+      "unknown"
+    ],
+    "seriesExtrasSingleTorrentOnly": true
+  },
+  "download": {
+    "defaultStartMode": "stopped",
+    "requirePlanPreview": true,
+    "requireFreeSpaceCheck": true,
+    "stopLaterSubmissionsWhenSpaceInsufficient": true,
+    "reuseExistingInfohashTask": true
+  },
+  "differentialPlanning": {
+    "stagingDirectoryName": ".anm-staging",
+    "samePathSizePolicy": "size_and_skip",
+    "replacementRequiresRevisionEvidence": true
+  },
+  "storageGuard": {
+    "minimumFreeTiB": 0.1
+  },
+  "runtime": {
+    "metadataRequestDelaySeconds": 1.2,
+    "httpMaximumAttempts": 8,
+    "honorRetryAfter": true,
+    "exponentialBackoff": true,
+    "fullScanOnlyAtMilestonesOrHighRisk": true
+  },
+  "safety": {
+    "neverDeleteExistingMedia": true,
+    "requireExactCollectionPartition": true,
+    "stageVerifiedRevisions": true,
+    "keepOperationHistory": true,
+    "crossSeriesCollectionsRequireReview": true
+  }
+}

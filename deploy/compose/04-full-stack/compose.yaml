@@ -1,0 +1,106 @@
+name: animemachine
+
+include:
+  - ../torrent-collector.yaml
+
+services:
+  qbt-bootstrap:
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: ${ANM_ENV_FILE:-.env}
+    command: ["qbt-bootstrap", "--config-dir", "/QbtConfig"]
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+
+  ani-rss-bootstrap:
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: ${ANM_ENV_FILE:-.env}
+    environment:
+      ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
+    command: ["ani-rss-bootstrap", "--config-dir", "/AniRssConfig"]
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}/ani-rss:/AniRssConfig
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+
+  qbittorrent:
+    image: ${QBITTORRENT_IMAGE:-lscr.io/linuxserver/qbittorrent:5.2.3}
+    restart: unless-stopped
+    depends_on:
+      qbt-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+      WEBUI_PORT: 8080
+      TORRENTING_PORT: ${QBT_LISTEN_PORT:-6881}
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/config
+      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media
+      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
+    ports:
+      - ${QBT_BIND_ADDRESS:-127.0.0.1}:${QBT_WEB_PORT:-8080}:8080
+      - ${QBT_LISTEN_PORT:-6881}:${QBT_LISTEN_PORT:-6881}/tcp
+      - ${QBT_LISTEN_PORT:-6881}:${QBT_LISTEN_PORT:-6881}/udp
+    security_opt: [no-new-privileges:true]
+
+  ani-rss:
+    image: ${ANI_RSS_IMAGE:-wushuo894/ani-rss@sha256:f064a4ff7816fc5ec9cd1cea1044e5c3b790e22b7adb3ad638e49590e9b88571}
+    restart: unless-stopped
+    depends_on:
+      ani-rss-bootstrap:
+        condition: service_completed_successfully
+      qbittorrent:
+        condition: service_started
+    environment:
+      CONFIG: /config
+      SERVER_PORT: 7789
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}/ani-rss:/config
+      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media
+    ports:
+      - ${ANI_RSS_BIND_ADDRESS:-127.0.0.1}:${ANI_RSS_WEB_PORT:-7789}:7789
+    security_opt: [no-new-privileges:true]
+
+  animemachine:
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    restart: unless-stopped
+    init: true
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: ${ANM_ENV_FILE:-.env}
+    environment:
+      ANM_CONFIG_PATH: /Config/config.json
+      ANM_STATE_DIR: /Data/state
+      ANM_IMPORTS_DIR: /Imports
+      ANM_TORRENT_POOL_DIR: /Torrents
+      ANM_LIBRARY_DIR: /Library
+      ANM_QBT_LIBRARY_DIR: /Library
+      ANM_INCOMPLETE_DIR: /downloads/incomplete
+      ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
+      ANM_ANI_RSS_URL: http://ani-rss:7789
+      ANM_ANI_RSS_MODE: prefer
+      ANM_ANI_RSS_MEDIA_DIR: /Media
+      ANM_EXTERNAL_LIBRARY_DIR: /External
+      ANM_MANAGED_QBT: "true"
+      ANM_MANAGED_ANI_RSS: "true"
+      ANM_SUBMISSION_ENABLED: "true"
+      ANM_WEB_PORT: "8787"
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,qbittorrent,ani-rss}
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}:/Config
+      - ${ANM_DATA_DIR:-./data}:/Data
+      - ${ANM_IMPORTS_DIR:-./imports}:/Imports:ro
+      - ${ANM_TORRENT_POOL_DIR:?set ANM_TORRENT_POOL_DIR}:/Torrents:ro
+      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
+      - ${ANM_EXTERNAL_LIBRARY_DIR:-./external/read-only}:/External:ro
+      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media:ro
+    ports:
+      - ${ANM_BIND_ADDRESS:-0.0.0.0}:${ANM_WEB_PORT:-8787}:8787
+    security_opt: [no-new-privileges:true]

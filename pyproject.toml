@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "animemachine"
+dynamic = ["version"]
+description = "Build, curate, and maintain an anime collection automatically."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "AGPL-3.0-only"}
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: GNU Affero General Public License v3",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "certifi==2026.7.22",
+  "httpx[http2]==0.28.1",
+  "Pillow==12.3.0",
+  "truststore==0.10.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/kyupi-git/animemachine"
+Repository = "https://github.com/kyupi-git/animemachine"
+Documentation = "https://github.com/kyupi-git/animemachine/blob/main/docs/guide.md"
+Issues = "https://github.com/kyupi-git/animemachine/issues"
+
+[project.optional-dependencies]
+test = [
+  "coverage==7.10.7",
+  "mypy==1.18.2",
+  "pip-audit==2.9.0",
+  "ruff==0.13.2",
+]
+
+[project.scripts]
+animemachine = "animemachine.cli:main"
+anm = "animemachine.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+animemachine = ["web/static/*", "resources/*.json"]
+
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_configs = true
+
+[tool.unittest]
+start-directory = "tests"

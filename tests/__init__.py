@@ -1,0 +1,1 @@
+"""AnimeMachine test suite."""

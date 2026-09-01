@@ -1,0 +1,621 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://animemachine.example/schema/config-v2.json",
+  "title": "AnimeMachine configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "deployment",
+    "components",
+    "security",
+    "ui",
+    "metadata",
+    "catalog",
+    "library",
+    "naming",
+    "relations",
+    "scope",
+    "torrentPolicy",
+    "download",
+    "differentialPlanning",
+    "storageGuard",
+    "runtime",
+    "safety"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "bootstrap": {
+      "type": "object"
+    },
+    "deployment": {
+      "type": "object",
+      "required": [
+        "libraryUncRoot",
+        "qbtLibraryRoot",
+        "torrentPoolRoot"
+      ],
+      "properties": {
+        "libraryUncRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "qbtLibraryRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "torrentPoolRoot": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "components": {
+      "type": "object",
+      "properties": {
+        "aniRss": {
+          "type": "object",
+          "required": [
+            "endpoint",
+            "mode",
+            "mediaPath",
+            "syncMinutes",
+            "deleteGraceSyncs"
+          ],
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "pattern": "^https?://"
+            },
+            "mode": {
+              "enum": [
+                "prefer",
+                "fallback",
+                "manual"
+              ]
+            },
+            "credentialRef": {
+              "type": "string"
+            },
+            "mediaPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "syncMinutes": {
+              "type": "integer",
+              "minimum": 5
+            },
+            "deleteGraceSyncs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": true
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "initialTorrentBatch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "poolScanWorkers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        },
+        "poolCommitEvery": {
+          "type": "integer",
+          "minimum": 25,
+          "maximum": 2000
+        },
+        "libraryCommitEvery": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 2000
+        },
+        "asyncPlanThreshold": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "catalogReadDuringSync": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "externalLibraries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "enabled",
+          "path",
+          "readOnly",
+          "scanMinutes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "ani-rss",
+              "generic"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "readOnly": {
+            "const": true
+          },
+          "scanMinutes": {
+            "type": "integer",
+            "minimum": 5
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "playback": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "playlistIdleSeconds": {
+          "type": "integer",
+          "minimum": 900,
+          "maximum": 172800
+        },
+        "playlistMaximumSeconds": {
+          "type": "integer",
+          "minimum": 900,
+          "maximum": 2592000
+        },
+        "publicBaseUrl": {
+          "type": "string"
+        },
+        "preferDirectPaths": {
+          "type": "boolean"
+        },
+        "directPathMappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "serverPathPrefix",
+              "clientPathPrefix"
+            ],
+            "properties": {
+              "serverPathPrefix": {
+                "type": "string",
+                "minLength": 1
+              },
+              "clientPathPrefix": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "subtitles": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "languages": {
+          "type": "object"
+        },
+        "ffprobe": {
+          "type": "string"
+        },
+        "archiveTool": {
+          "type": "string"
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "minimumAutomaticConfidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "minimumManualConfidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "security": {
+      "type": "object",
+      "required": [
+        "requireAdminAccount"
+      ],
+      "properties": {
+        "requireAdminAccount": {
+          "const": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "ui": {
+      "type": "object",
+      "required": [
+        "language",
+        "catalogView",
+        "imagesEnabled",
+        "pageSize",
+        "sort"
+      ],
+      "properties": {
+        "language": {
+          "enum": [
+            "zh-Hans",
+            "en",
+            "ja"
+          ]
+        },
+        "catalogView": {
+          "enum": [
+            "cards",
+            "table"
+          ]
+        },
+        "imagesEnabled": {
+          "type": "boolean"
+        },
+        "pageSize": {
+          "enum": [
+            20,
+            50,
+            100,
+            "all"
+          ]
+        },
+        "sort": {
+          "enum": [
+            "random",
+            "date",
+            "title",
+            "studio",
+            "type"
+          ]
+        },
+        "sortDirection": {
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "workUniverse"
+      ],
+      "properties": {
+        "workUniverse": {
+          "const": "bangumi-archive-only"
+        }
+      },
+      "additionalProperties": true
+    },
+    "catalog": {
+      "type": "object"
+    },
+    "library": {
+      "type": "object"
+    },
+    "naming": {
+      "type": "object",
+      "required": [
+        "workTemplate",
+        "seriesTemplate"
+      ]
+    },
+    "relations": {
+      "type": "object",
+      "required": [
+        "strictSeriesRelations",
+        "nonGroupingRelations",
+        "mergeOfficialSplitCours",
+        "splitCourRequiresExplicitSameSeasonEvidence"
+      ]
+    },
+    "scope": {
+      "type": "object"
+    },
+    "torrentPolicy": {
+      "type": "object",
+      "required": [
+        "acquisitionMethods",
+        "contentClasses",
+        "sourceFamilies",
+        "serialSubtitle",
+        "archiveGroupIds",
+        "oneTaskPerInfohash",
+        "reuseTaskForAdditionalFiles",
+        "strategyOrder",
+        "resourceGroups"
+      ],
+      "properties": {
+        "acquisitionMethods": {
+          "type": "object",
+          "required": [
+            "torrent",
+            "magnet"
+          ],
+          "properties": {
+            "torrent": {
+              "const": true
+            },
+            "magnet": {
+              "const": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "contentClasses": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "resolutions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "subtitles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "sourceFamilies": {
+          "type": "object",
+          "required": [
+            "archive",
+            "serial"
+          ],
+          "properties": {
+            "archive": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "serial": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "serialSubtitle": {
+          "type": "object",
+          "required": [
+            "language"
+          ],
+          "properties": {
+            "language": {
+              "enum": [
+                "auto",
+                "zh",
+                "en",
+                "ja"
+              ]
+            },
+            "enabledByLanguage": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": true
+        },
+        "archiveGroupIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "oneTaskPerInfohash": {
+          "const": true
+        },
+        "reuseTaskForAdditionalFiles": {
+          "const": true
+        },
+        "strategyOrder": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "resourceCompleteness",
+              "releaseStrategy",
+              "seriesCompleteness",
+              "resourceGroup",
+              "collectionOrRevision",
+              "attachmentCompleteness",
+              "sourceClass",
+              "resolution",
+              "subtitle",
+              "bitDepth",
+              "torrentCreationDate",
+              "size"
+            ]
+          }
+        },
+        "contentClassPriority": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "releaseStrategyPriority": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "bdrip_collection",
+              "bdrip_volume",
+              "webrip_collection",
+              "webrip_episode",
+              "tvrip_collection",
+              "tvrip_episode",
+              "other"
+            ]
+          }
+        },
+        "collectionRevisionPriority": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "collection_revision",
+              "collection",
+              "revision",
+              "ordinary"
+            ]
+          }
+        },
+        "attachmentPriority": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "with_attachments",
+              "without_attachments"
+            ]
+          }
+        },
+        "creationDatePriority": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "newest",
+              "oldest"
+            ]
+          }
+        },
+        "sizePriority": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "larger",
+              "smaller"
+            ]
+          }
+        },
+        "resourceGroups": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "download": {
+      "type": "object",
+      "required": [
+        "defaultStartMode",
+        "requirePlanPreview",
+        "requireFreeSpaceCheck"
+      ],
+      "properties": {
+        "defaultStartMode": {
+          "const": "stopped"
+        },
+        "requirePlanPreview": {
+          "const": true
+        },
+        "requireFreeSpaceCheck": {
+          "const": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "differentialPlanning": {
+      "type": "object",
+      "required": [
+        "stagingDirectoryName",
+        "samePathSizePolicy",
+        "replacementRequiresRevisionEvidence"
+      ],
+      "properties": {
+        "stagingDirectoryName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "samePathSizePolicy": {
+          "enum": [
+            "size_and_skip",
+            "hash_and_skip"
+          ],
+          "default": "size_and_skip"
+        },
+        "replacementRequiresRevisionEvidence": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "storageGuard": {
+      "type": "object"
+    },
+    "runtime": {
+      "type": "object"
+    },
+    "safety": {
+      "type": "object"
+    }
+  }
+}

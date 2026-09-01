@@ -1,0 +1,74 @@
+name: animemachine
+
+include:
+  - ../torrent-collector.yaml
+
+services:
+  qbt-bootstrap:
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: ${ANM_ENV_FILE:-.env}
+    command: ["qbt-bootstrap", "--config-dir", "/QbtConfig"]
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+
+  qbittorrent:
+    image: ${QBITTORRENT_IMAGE:-lscr.io/linuxserver/qbittorrent:5.2.3}
+    restart: unless-stopped
+    depends_on:
+      qbt-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Asia/Shanghai}
+      WEBUI_PORT: 8080
+      TORRENTING_PORT: ${QBT_LISTEN_PORT:-6881}
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/config
+      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
+    ports:
+      - ${QBT_BIND_ADDRESS:-127.0.0.1}:${QBT_WEB_PORT:-8080}:8080
+      - ${QBT_LISTEN_PORT:-6881}:${QBT_LISTEN_PORT:-6881}/tcp
+      - ${QBT_LISTEN_PORT:-6881}:${QBT_LISTEN_PORT:-6881}/udp
+    security_opt: [no-new-privileges:true]
+
+  animemachine:
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    restart: unless-stopped
+    init: true
+    user: "${PUID:-1000}:${PGID:-1000}"
+    env_file: ${ANM_ENV_FILE:-.env}
+    environment:
+      ANM_CONFIG_PATH: /Config/config.json
+      ANM_STATE_DIR: /Data/state
+      ANM_IMPORTS_DIR: /Imports
+      ANM_TORRENT_POOL_DIR: /Torrents
+      ANM_LIBRARY_DIR: /Library
+      ANM_QBT_LIBRARY_DIR: /Library
+      ANM_INCOMPLETE_DIR: /downloads/incomplete
+      ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
+      ANM_EXTERNAL_LIBRARY_DIR: /External
+      ANM_ANI_RSS_MEDIA_DIR: /Media
+      ANM_MANAGED_QBT: "true"
+      ANM_MANAGED_ANI_RSS: "false"
+      ANM_SUBMISSION_ENABLED: "true"
+      ANM_WEB_PORT: "8787"
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,qbittorrent,host.docker.internal}
+    volumes:
+      - ${ANM_CONFIG_DIR:-./config}:/Config
+      - ${ANM_DATA_DIR:-./data}:/Data
+      - ${ANM_IMPORTS_DIR:-./imports}:/Imports:ro
+      - ${ANM_TORRENT_POOL_DIR:?set ANM_TORRENT_POOL_DIR}:/Torrents:ro
+      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
+      - ${ANM_EXTERNAL_LIBRARY_DIR:-./external/read-only}:/External:ro
+      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media:ro
+    ports:
+      - ${ANM_BIND_ADDRESS:-0.0.0.0}:${ANM_WEB_PORT:-8787}:8787
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    security_opt: [no-new-privileges:true]
