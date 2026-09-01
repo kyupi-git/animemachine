@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AnimeMachine</title>
+    <link rel="icon" href="data:," />
+    <script src="/boot.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Automated Anime Library</p>
+        <h1 data-i18n="catalog">AnimeMachine</h1>
+      </div>
+      <div class="hero-tools">
+        <div class="toolbar">
+          <div id="scanProgress" class="scan-progress" role="status" aria-live="polite">
+            <span id="scanProgressText" data-i18n="scanIdle">资源池待命</span>
+            <progress id="scanProgressBar" max="100" value="100"></progress>
+          </div>
+          <button id="themeToggle" class="tool theme-toggle" type="button" aria-label="Theme" title="Theme">◐</button>
+          <select id="language" aria-label="Language">
+            <option value="zh-Hans">中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+          </select>
+          <button id="cardsView" class="tool active" data-i18n="cards">
+            磁贴
+          </button>
+          <button id="tableView" class="tool" data-i18n="table">表格</button>
+          <button id="settingsButton" class="tool" data-i18n="settings" hidden>
+            设置
+          </button>
+          <button id="authButton" class="tool" data-i18n="logout" hidden>退出</button>
+        </div>
+        <div
+          class="build boot-copy"
+          id="buildInfo"
+          data-i18n="loadingWorks"
+        >
+          <span lang="zh-Hans">作品加载中，请稍等...</span>
+          <span lang="en">Loading works, please wait...</span>
+          <span lang="ja">作品を読み込んでいます。しばらくお待ちください...</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <aside class="filters">
+        <div class="title-filter">
+          <div class="title-filter-heading">
+            <label for="q" data-i18n="titleAlias">标题 / 别名</label>
+            <button id="reset" class="text-button" data-i18n="resetAll">
+              重置全部
+            </button>
+          </div>
+          <input
+            id="q"
+            type="search"
+            data-i18n-placeholder="searchPlaceholder"
+          />
+        </div>
+        <div class="grid2">
+          <label
+            ><span data-i18n="era">年代</span
+            ><select id="era">
+              <option value="" data-i18n="custom">自定义</option>
+            </select></label
+          >
+          <label
+            ><span data-i18n="country">地区</span
+            ><select id="country">
+              <option value="" data-i18n="all">全部</option>
+            </select></label
+          >
+          <label
+            ><span data-i18n="startMonth">起始月份</span
+            ><input id="start_from" type="month"
+          /></label>
+          <label
+            ><span data-i18n="endMonth">截止月份</span
+            ><input id="start_to" type="month"
+          /></label>
+        </div>
+        <label
+          ><span data-i18n="sourceOrigin">原作来源</span
+          ><select id="source_type">
+            <option value="" data-i18n="all">全部</option>
+          </select></label
+        >
+        <label
+          ><span data-i18n="studio">动画制作</span
+          ><select id="studio">
+            <option value="" data-i18n="all">全部</option>
+          </select></label
+        >
+        <label
+          ><span data-i18n="seriesWork">系列作品</span
+          ><select id="series_member">
+            <option value="" data-i18n="all">全部</option>
+            <option value="yes" data-i18n="yes">是</option>
+            <option value="no" data-i18n="no">否</option>
+          </select></label
+        >
+        <label
+          ><span data-i18n="tag">题材 / 标签</span
+          ><select id="tag">
+            <option value="" data-i18n="all">全部</option>
+          </select></label
+        >
+        <fieldset class="compact-filter">
+          <legend data-i18n="mediaFormat">媒介形式</legend>
+          <div id="media_type" class="status-checks media-checks"></div>
+        </fieldset>
+        <label
+          ><span data-i18n="director">监督</span
+          ><input
+            id="director"
+            type="search"
+            list="directorSuggestions"
+            autocomplete="off"
+            data-i18n-placeholder="personSearch"
+          /><datalist id="directorSuggestions"></datalist></label
+        >
+        <label
+          ><span data-i18n="voiceActor">主要声优</span
+          ><input
+            id="voice_actor"
+            type="search"
+            list="voiceSuggestions"
+            autocomplete="off"
+            data-i18n-placeholder="personSearch"
+          /><datalist id="voiceSuggestions"></datalist></label
+        >
+        <fieldset class="compact-filter">
+          <legend data-i18n="availability">可用来源</legend>
+          <div id="availability" class="status-checks">
+            <label class="check"
+              ><input type="checkbox" value="available" checked /><span
+                data-i18n="available"
+                >有可用来源</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="unavailable" /><span
+                data-i18n="unavailable"
+                >无可用来源</span
+              ></label
+            >
+          </div>
+        </fieldset>
+        <fieldset class="compact-filter">
+          <legend data-i18n="libraryState">收藏库状态</legend>
+          <div id="library_state" class="status-checks">
+            <label class="check"
+              ><input type="checkbox" value="existing" checked /><span
+                data-i18n="existing"
+                >已存在·已下载</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="placeholder" checked /><span
+                data-i18n="placeholder"
+                >无媒体·仅占位</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="queued" checked /><span
+                data-i18n="queued"
+                >已提交·待开始</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="downloading" checked /><span
+                data-i18n="downloading"
+                >已提交·下载中</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="absent" checked /><span
+                data-i18n="absent"
+                >未建目录</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="external" checked /><span
+                data-i18n="externalLibrary"
+                >外部媒体来源</span
+              ></label
+            >
+          </div>
+        </fieldset>
+      </aside>
+
+      <section class="catalog">
+        <div class="catalog-head">
+          <div>
+            <span id="total" class="total">—</span
+            ><span class="muted" data-i18n="works"> 部作品</span>
+          </div>
+          <div class="catalog-controls">
+            <label class="inline"
+              ><span data-i18n="sortBy">排序</span
+              ><select id="sort">
+                <option value="random" data-i18n="random">随机</option>
+                <option value="date" data-i18n="sortDate">年月</option>
+                <option value="title" data-i18n="sortTitle">名称</option>
+                <option value="studio" data-i18n="sortStudio">制作公司</option>
+                <option value="type" data-i18n="sortType">类型</option>
+              </select></label
+            >
+            <button
+              id="reshuffle"
+              class="text-button reshuffle"
+              data-i18n="reshuffle"
+            >
+              重新随机
+            </button>
+            <button
+              id="sortDirection"
+              class="text-button"
+              aria-label="Sort direction"
+            >
+              ↑
+            </button>
+            <label class="inline"
+              ><span data-i18n="perPage">每页</span
+              ><select id="pageSize">
+                <option value="12">12</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all" data-i18n="all">全部</option>
+              </select></label
+            >
+            <label class="check inline-check"
+              ><input id="selectPage" type="checkbox" /><span
+                data-i18n="selectPage"
+                >勾选本页可下载作品</span
+              ></label
+            >
+          </div>
+        </div>
+        <div id="results" class="results cards" aria-live="polite"></div>
+        <div class="pager">
+          <button id="prevPage" class="text-button" data-i18n="previous">
+            上一页</button
+          ><span id="pageInfo" class="muted"></span
+          ><button id="nextPage" class="text-button" data-i18n="next">
+            下一页
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <div id="selectionBar" class="selection-bar" hidden>
+      <span
+        ><b id="selectionCount">0</b>
+        <span data-i18n="selectedWorks">部作品已选择</span></span
+      >
+      <button id="clearSelection" class="tool" data-i18n="clear">清空</button>
+      <button id="createPlan" class="primary" data-i18n="previewPlan">
+        开始下载
+      </button>
+    </div>
+
+    <dialog id="detailDialog">
+      <button class="close" aria-label="Close">×</button>
+      <div id="detail"></div>
+    </dialog>
+    <dialog id="relationDialog" class="relation-dialog">
+      <button class="close" aria-label="Close">×</button>
+      <div id="relationGraph"></div>
+      <aside id="relationSubjectPopover" class="relation-subject-popover" hidden></aside>
+    </dialog>
+    <dialog id="planDialog">
+      <button class="close" aria-label="Close">×</button>
+      <div id="plan"></div>
+    </dialog>
+    <dialog id="loginDialog" class="login-dialog">
+      <form id="loginForm">
+        <p class="login-eyebrow">AnimeMachine · Automated Anime Library</p>
+        <h2 data-i18n="loginTitle">登录 AnimeMachine</h2>
+        <label><span data-i18n="username">用户名</span><input id="loginUsername" autocomplete="username" required /></label>
+        <label><span data-i18n="password">密码</span><input id="loginPassword" type="password" autocomplete="current-password" required /></label>
+        <p id="loginError" class="error" aria-live="polite"></p>
+        <button type="submit" class="primary" data-i18n="login">登录</button>
+      </form>
+    </dialog>
+    <dialog id="settingsDialog">
+      <button class="close" aria-label="Close">×</button>
+      <form id="settingsForm">
+        <nav class="settings-tabs" aria-label="Settings sections">
+          <button
+            type="button"
+            class="tab active"
+            data-tab="general"
+            data-i18n="generalTab"
+          >
+            常规</button
+          ><button
+            type="button"
+            class="tab"
+            data-tab="priority"
+            data-i18n="resourcePriorityTab"
+          >
+            资源优先级</button
+          ><button
+            type="button"
+            class="tab"
+            data-tab="groups"
+            data-i18n="resourceGroupsTab"
+          >
+            资源组</button
+          ><button
+            type="button"
+            class="tab"
+            data-tab="connections"
+            data-i18n="connectionsTab"
+          >
+            连接</button
+          ><button
+            type="button"
+            class="tab"
+            data-tab="subscriptions"
+            data-i18n="subscriptionsTab"
+          >
+            订阅
+          </button><button
+            type="button"
+            class="tab"
+            data-tab="users"
+            data-admin-only
+            data-i18n="usersTab"
+          >
+            用户
+          </button><button
+            type="button"
+            class="tab"
+            data-tab="logs"
+            data-i18n="logsTab"
+          >
+            日志
+          </button><button
+            type="button"
+            class="tab"
+            data-tab="history"
+            data-i18n="historyTab"
+          >
+            历史记录
+          </button><button
+            type="button"
+            class="tab"
+            data-tab="about"
+            data-i18n="aboutTitle"
+          >
+            关于 AnimeMachine
+          </button><span id="saveState" class="settings-save-state muted"></span><button
+            type="submit"
+            class="primary settings-save"
+            data-i18n="save"
+          >保存</button>
+        </nav>
+        <section class="tab-panel active" data-panel="general">
+          <p class="muted" data-i18n="settingsHint">
+            这里修改运行配置；凭据不会写入此文件。
+          </p>
+          <fieldset>
+            <legend data-i18n="catalogData">目录数据</legend>
+            <div class="maintenance-grid">
+              <button id="updateArchive" type="button" class="maintenance-action"><b><span data-i18n="updateArchive">检查并更新底库</span><span id="archiveStatus" class="maintenance-inline-status"></span></b><small data-i18n="updateArchiveHint">检查新版底包，仅合并发生变化的资料。</small></button>
+              <button id="importArchive" type="button" class="maintenance-action"><b data-i18n="importArchive">导入已下载的底包</b><small data-i18n="importArchiveHint">离线导入 Bangumi Archive ZIP；将自动核验文件信息。</small></button>
+              <input id="archiveFile" type="file" accept=".zip,application/zip" hidden />
+              <button id="repairMetadata" type="button" class="maintenance-action"><b data-i18n="repairMetadata">检查并补全作品资料</b><small data-i18n="repairMetadataHint">批量补充本地缺失或明显异常的元数据。</small></button>
+              <button id="auditLibrary" type="button" class="maintenance-action"><b data-i18n="auditLibrary">核验全部本地资源</b><small data-i18n="auditLibraryHint">分批核验文件，并在后台更新收藏完整度。</small></button>
+            </div>
+            <div id="maintenanceStatus" class="maintenance-status muted"></div>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="automation">自动化与容量</legend>
+            <div class="settings-grid">
+              <label
+                ><span data-i18n="pollMinutes">资源池扫描间隔（分钟）</span
+                ><input id="pollMinutes" type="number" min="5" /></label
+              ><label
+                ><span data-i18n="minimumFree">最低保留空间（TiB）</span
+                ><input
+                  id="minimumFree"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value="0.1" /></label
+            </div>
+            <label class="check exact-verification"
+              ><input id="onDemandHash" type="checkbox" /><span data-i18n="onDemandHash"
+                >精确核验文件（默认快速核验，开启后会在存在比较基准时校验文件哈希值）</span></label>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="acceptedContent">允许的资源类别</legend>
+            <h4 data-i18n="classPriority">片源类型</h4>
+            <div id="contentClasses" class="checks"></div>
+            <h4 data-i18n="resolutionPriority">分辨率</h4>
+            <div id="allowedResolutions" class="checks"></div>
+          </fieldset>
+          <div class="checks submission-checks"><label class="check"
+            ><input id="submissionAllowed" type="checkbox" checked /><span
+              data-i18n="submissionAllowed"
+              >允许提交</span
+            ></label
+          >
+</div>
+        </section>
+        <section class="tab-panel" data-panel="priority">
+          <p class="muted" data-i18n="priorityHint">
+            先比较排在前面的维度；点击维度可展开并调整其内部顺序。
+          </p>
+          <ol id="strategyOrder" class="priority-tree"></ol>
+        </section>
+        <section class="tab-panel" data-panel="groups">
+          <p class="muted" data-i18n="resourceGroupsHint">
+            收藏类资源不检查字幕；连载类资源按选定语言匹配资源组与字幕标记。
+          </p>
+          <label class="serial-language"><span data-i18n="serialSubtitleLanguage">连载资源字幕语言</span>
+            <select id="serialSubtitleLanguage">
+              <option value="auto" data-i18n="followInterfaceLanguage">跟随界面语言</option>
+              <option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option>
+            </select>
+          </label>
+          <div class="group-policy-columns">
+            <fieldset><legend data-i18n="archiveGroups">收藏类 / 归档类</legend><ol id="archiveGroups" class="sortable vertical check-sort"></ol><p data-i18n="archiveGroupsHint">默认全部启用，排序不考虑字幕。</p></fieldset>
+            <fieldset><legend data-i18n="chineseSerialGroups">中文连载资源</legend><ol id="serialGroupsZh" class="sortable vertical check-sort"></ol></fieldset>
+            <fieldset><legend data-i18n="englishSerialGroups">English serial releases</legend><ol id="serialGroupsEn" class="sortable vertical check-sort"></ol></fieldset>
+            <fieldset><legend data-i18n="japaneseSerialGroups">日本語連載リリース</legend><ol id="serialGroupsJa" class="sortable vertical check-sort"></ol></fieldset>
+          </div>
+          <label class="check other-groups"><input id="otherGroupsEnabled" type="checkbox"><span data-i18n="otherResourceGroups">其它（未识别或不符合上述规则）</span></label>
+        </section>
+        <section class="tab-panel" data-panel="connections">
+          <p class="muted" data-i18n="connectionHint">
+            Compose 部署会以服务名覆盖回环地址；持久凭据从 .env 环境变量读取。
+          </p>
+          <fieldset>
+            <legend>qBittorrent</legend>
+            <label
+              ><span data-i18n="endpoint">服务地址</span
+              ><input id="qbtEndpoint" type="url" /></label
+            ><label
+              ><span data-i18n="qbtApiKey">API Key（仅当前进程）</span
+              ><input id="qbtApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label
+            ><small id="qbtCredentialState" class="muted" data-i18n="qbtApiKeyHint">推荐通过 .env 环境变量持久配置；在此输入的密钥仅保存在当前进程内，重启后失效。</small
+            ><label
+              ><span data-i18n="libraryPath">动画收藏库路径</span
+              ><input id="libraryPath" type="text" /></label
+            ><label
+              ><span data-i18n="qbtLibraryPath">qBittorrent 容器内路径</span
+              ><input id="qbtLibraryPath" type="text" /></label
+            ><label
+              ><span data-i18n="torrentPoolPath">Torrent 池路径</span
+              ><input id="torrentPoolPath" type="text" /></label
+            ><p class="explain" data-i18n="torrentPoolHint">AnimeMachine 只监视此目录中的种子文件；种子由用户或外部工具自行放入。</p>
+            <button
+              id="testQbt"
+              type="button"
+              class="tool dark-tool"
+              data-i18n="testConnection"
+            >
+              测试连接</button
+            ><span id="qbtState" class="muted"></span>
+          </fieldset>
+          <fieldset>
+            <legend>Ani-RSS</legend>
+            <label><span data-i18n="aniRssMode">调用模式</span><select id="aniRssMode">
+              <option value="prefer" data-i18n="aniRssPrefer">优先调用 Ani-RSS</option>
+              <option value="fallback" data-i18n="aniRssFallback">备选调用 Ani-RSS</option>
+              <option value="manual" data-i18n="aniRssManual">手动调用 Ani-RSS</option>
+            </select></label>
+            <label><span data-i18n="endpoint">服务地址</span><input id="aniRssEndpoint" type="url" /></label>
+            <label><span data-i18n="aniRssApiKey">API Key（仅当前进程）</span><input id="aniRssApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label>
+            <small id="aniRssCredentialState" class="muted" data-i18n="aniRssApiKeyHint">推荐通过 .env 环境变量持久配置；页面输入的密钥不会写入配置文件。</small>
+            <label><span data-i18n="aniRssMediaPath">Ani-RSS 媒体路径</span><input id="aniRssMediaPath" type="text" /></label>
+            <label><span data-i18n="aniRssSyncMinutes">状态同步间隔（分钟）</span><input id="aniRssSyncMinutes" type="number" min="5" /></label>
+            <p class="explain" data-i18n="aniRssHint">连接无效时自动按“手动调用”运行；连接恢复后使用所选模式。媒体目录始终只读。</p>
+            <button id="testAniRss" type="button" class="tool dark-tool" data-i18n="testConnection">测试连接</button><span id="aniRssState" class="muted"></span>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="externalLibraries">外部只读媒体库</legend>
+            <label class="check"
+              ><input id="externalReadOnlyEnabled" type="checkbox" /><span
+                data-i18n="externalReadOnlyEnabled"
+                >映射外部只读媒体库</span
+              ></label
+            ><label
+              ><span data-i18n="externalReadOnlyType">目录结构</span><select id="externalReadOnlyKind"><option value="generic" data-i18n="genericLayout">通用目录</option><option value="ani-rss" data-i18n="aniRssLayout">ani-rss 兼容目录</option></select></label
+            ><label
+              ><span data-i18n="externalReadOnlyPath">容器内只读路径</span
+              ><input id="externalReadOnlyPath" type="text" /></label
+            ><label
+              ><span data-i18n="externalScanMinutes">只读扫描间隔（分钟）</span
+              ><input id="externalScanMinutes" type="number" min="5" /></label
+            ><p class="explain" data-i18n="externalLibraryHint">
+              只读取文件名、路径、大小和修改时间，不写入外部媒体库；ani-rss 是常见的兼容来源之一。
+            </p>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="subtitleSources">字幕源</legend>
+            <label class="check"><input id="subtitlesEnabled" type="checkbox" /><span data-i18n="subtitlesEnabled">启用归档资源字幕匹配</span></label>
+            <label><span data-i18n="assrtEndpoints">ASSRT API 端点（每行一个）</span><textarea id="assrtEndpoints" rows="2"></textarea></label>
+            <label><span data-i18n="assrtToken">ASSRT Token（仅当前进程）</span><input id="assrtToken" type="password" autocomplete="new-password" /></label>
+            <label><span data-i18n="openSubtitlesEndpoint">OpenSubtitles API 端点</span><input id="openSubtitlesEndpoint" type="url" /></label>
+            <label><span data-i18n="openSubtitlesKey">OpenSubtitles API Key（仅当前进程）</span><input id="openSubtitlesKey" type="password" autocomplete="new-password" /></label>
+            <p class="explain" data-i18n="subtitleSourcesHint">只使用已配置的正式 API；按当前界面语言排序，低置信度结果必须由用户选择。</p>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="playbackConnection">外部播放器交接</legend>
+            <label class="check"><input id="playbackEnabled" type="checkbox" /><span data-i18n="playbackEnabled">启用 M3U 播放清单</span></label>
+            <label class="check"><input id="preferDirectPaths" type="checkbox" /><span data-i18n="preferDirectPaths">优先使用播放器可访问的 SMB / NFS 路径</span></label>
+            <label><span data-i18n="playbackPublicUrl">外部设备访问 AnimeMachine 的地址（可留空）</span><input id="playbackPublicUrl" type="url" placeholder="https://anime.example.com" /></label>
+            <label><span data-i18n="playlistTtl">播放会话空闲失效时间（秒）</span><input id="playlistTtl" type="number" min="900" max="172800" /></label>
+            <label><span data-i18n="playlistMaximum">播放会话最长有效时间（秒）</span><input id="playlistMaximum" type="number" min="900" max="2592000" /></label>
+            <label><span data-i18n="directPathMappings">直连路径映射（每行：容器路径 =&gt; 播放器路径）</span><textarea id="directPathMappings" rows="3" placeholder="/Library => smb://nas/Anime"></textarea></label>
+            <p class="explain" data-i18n="playbackConnectionHint">直连不可用时自动生成支持 Range 的短时 HTTP 地址；不会转码或提供 Web 连续播放。</p>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="metadataNetwork">元数据网络与镜像</legend>
+            <label><span data-i18n="archiveManifestEndpoints">Archive 清单端点（每行一个）</span><textarea id="archiveManifestEndpoints" rows="3"></textarea></label>
+            <label><span data-i18n="archiveAssetProxies">Archive 文件代理模板（每行一个，使用 {url}）</span><textarea id="archiveAssetProxyTemplates" rows="2"></textarea></label>
+            <label><span data-i18n="bangumiApiEndpoints">Bangumi API 端点（每行一个）</span><textarea id="bangumiApiEndpoints" rows="2"></textarea></label>
+            <p class="explain" data-i18n="metadataNetworkHint">按健康与延迟自动选择，失败后冷却并切换；支持系统代理。Archive 文件无论来自何处都必须通过官方 SHA-256。</p>
+          </fieldset>
+        </section>
+        <section class="tab-panel" data-panel="subscriptions">
+          <p class="muted" data-i18n="subscriptionsHint">已完成的单集或单卷任务会按精确资源指纹监视后续发布；发现更新后只生成待确认项。</p>
+          <button id="refreshWatches" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
+          <div id="watchList" class="log-list"></div>
+        </section>
+        <section class="tab-panel" data-panel="users" data-admin-only>
+          <p class="muted" data-i18n="usersHint">普通用户可浏览和提交下载，但不能修改设置。</p>
+          <div class="user-create-row">
+            <input id="newUsername" data-i18n-placeholder="username" autocomplete="off" />
+            <input id="newUserPassword" type="password" data-i18n-placeholder="password" autocomplete="new-password" />
+            <select id="newUserRole"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select>
+            <button id="createUser" type="button" class="tool dark-tool" data-i18n="createUser">创建用户</button>
+          </div>
+          <div id="userList" class="log-list"></div>
+        </section>
+        <section class="tab-panel" data-panel="logs">
+          <p class="muted" data-i18n="logsHint">
+            仅显示近期的重要状态、警告和错误；不会显示密钥。
+          </p>
+          <button
+            id="refreshLogs"
+            type="button"
+            class="tool dark-tool"
+            data-i18n="refresh"
+          >
+            刷新
+          </button>
+          <div id="logList" class="log-list"></div>
+        </section>
+        <section class="tab-panel" data-panel="history">
+          <p class="muted" data-i18n="historyHint">显示对用户原有内容执行的移动、改名与可恢复移除；AnimeMachine 自行创建的控制文件不占用此列表。</p>
+          <button id="refreshHistory" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
+          <div id="historyList" class="log-list"></div>
+        </section>
+        <section class="tab-panel about-product" data-panel="about">
+          <div class="about-copy">
+            <p data-i18n="aboutLead">AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据、Torrent 池、媒体目录和外部只读媒体库整理到同一套本地 Catalog 与状态体系。</p>
+            <p data-i18n="aboutDetail">程序连续完成资源筛选、下载投料、多级目录规划、系列关系整理、收藏核验、Web 浏览与长期贮存；qBittorrent、Ani-RSS 与 Torrent Collector 均为可选组件。</p>
+            <p data-i18n="aboutRelations">作品关系图根据 Bangumi Archive 及辅助证据组织前作、续作、总集篇、番外、衍生、不同演绎和跨系列关联，并在可接受的计算时间内优化节点布局与关系线轨道。</p>
+            <p data-i18n="aboutComponents">AnimeMachine 本身不提供动画检索或下载，也不内置 Torrent、磁力链接或媒体内容。外部媒体目录按只读来源处理；实际下载与订阅由用户连接的外部组件完成。</p>
+            <p><span data-i18n="versionLabel">版本</span> <strong id="appVersion">—</strong></p>
+            <p><a href="https://github.com/kyupi-git/animemachine" target="_blank" rel="noreferrer">github.com/kyupi-git/animemachine</a></p>
+            <ul class="about-sources">
+              <li><a href="https://github.com/bangumi/Archive" target="_blank" rel="noreferrer">Bangumi Archive</a><span data-i18n="aboutArchiveSource">提供本地动画元数据底包与作品关系基础。</span></li>
+              <li><a href="https://bangumi.github.io/api/" target="_blank" rel="noreferrer">Bangumi API</a><span data-i18n="aboutBangumiSource">用于补全底包中缺失或明显异常的公开元数据。</span></li>
+              <li><a href="https://myanimelist.net/" target="_blank" rel="noreferrer">MyAnimeList</a><span data-i18n="aboutMalSource">在本地证据不足时作为作品身份和前后作关系的辅助来源。</span></li>
+              <li><a href="https://github.com/wushuo894/ani-rss" target="_blank" rel="noreferrer">ani-rss</a><span data-i18n="aboutAniRssSource">提供可选的新番订阅、状态同步与远程播放能力；AnimeMachine 通过其 HTTP API 连接。</span></li>
+              <li><a href="https://2.assrt.net/api/doc" target="_blank" rel="noreferrer">ASSRT</a><span data-i18n="aboutSubtitleSources">是用户可选的外部字幕 API；字幕版权及使用条件由对应服务说明。</span></li>
+              <li><a href="https://opensubtitles.stoplight.io/docs/opensubtitles-api" target="_blank" rel="noreferrer">OpenSubtitles</a><span data-i18n="aboutSubtitleSources">是用户可选的外部字幕 API；字幕版权及使用条件由对应服务说明。</span></li>
+            </ul>
+          </div>
+        </section>
+      </form>
+    </dialog>
+    <script>
+      (() => {
+        const messages = {
+          "zh-Hans": ["Web 应用未能启动", "前端脚本加载或执行失败，请刷新页面；若问题持续，请检查服务端静态资源响应。"],
+          en: ["Web application failed to start", "The frontend script failed to load or execute. Refresh the page; if the problem persists, check the server's static-file responses."],
+          ja: ["Web アプリを起動できませんでした", "フロントエンドスクリプトの読み込みまたは実行に失敗しました。ページを再読み込みし、解決しない場合はサーバーの静的ファイル応答を確認してください。"],
+        };
+        const fail = () => {
+          if (window.__ANM_APP_STARTED__) return;
+          const language = document.documentElement.lang || "en";
+          const message = messages[language] || messages.en;
+          const build = document.getElementById("buildInfo");
+          const results = document.getElementById("results");
+          if (build) build.textContent = message[0];
+          if (results) results.innerHTML = `<div class="error">${message[1]}</div>`;
+        };
+        window.__ANM_APP_BOOT_FAILURE__ = fail;
+        window.setTimeout(fail, 4000);
+      })();
+    </script>
+    <script src="/app.js" onerror="window.__ANM_APP_BOOT_FAILURE__()"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {"id":"archive-descriptor-official","service":"archive_descriptor","baseUrl":"https://raw.githubusercontent.com/bangumi/Archive/master/aux/latest.json","trust":"official","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"archive-descriptor-jsdelivr","service":"archive_descriptor","baseUrl":"https://cdn.jsdelivr.net/gh/bangumi/Archive@master/aux/latest.json","trust":"established_cdn","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"archive-descriptor-jsdmirror","service":"archive_descriptor","baseUrl":"https://cdn.jsdmirror.com/gh/bangumi/Archive@master/aux/latest.json","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"bangumi-api-official","service":"bangumi_api","baseUrl":"https://api.bgm.tv","trust":"official","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"bangumi-api-anibt","service":"bangumi_api","baseUrl":"https://bgmapi.anibt.net","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"bangumi-api-pro","service":"bangumi_api","baseUrl":"https://api.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"bangumi-subject-cache-ani-rss","service":"bangumi_subject_cache","baseUrl":"https://bgm-cache.wushuo.top","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"bangumi-image-official","service":"bangumi_image","baseUrl":"https://lain.bgm.tv","trust":"official","credentials":"never","capabilities":["image"],"enabled":true},
+    {"id":"bangumi-image-anibt","service":"bangumi_image","baseUrl":"https://bgmimg.anibt.net","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true},
+    {"id":"bangumi-image-pro","service":"bangumi_image","baseUrl":"https://lain.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true}
+  ],
+  "archiveAssetProxies": ["https://gh-proxy.com/{url}", "https://ghfast.top/{url}"]
+}

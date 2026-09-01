@@ -1,0 +1,36 @@
+# Private instance configuration, inventory, evidence and rollback history.
+/AGENTS.md
+/.agents/
+/.anm-history/
+/archive/
+/audit/
+/.codex/
+/config.json
+/state/
+/deploy/private/
+/deploy/compose/*/.env
+/tools/private-library/
+
+# Generated/local runtime data and secrets.
+/artifacts/
+**/*.db*
+/dist/
+/build/
+*.egg-info/
+.coverage
+.pytest_cache/
+**/edge-debug-profile/
+*.lnk
+/.local/
+**/*.pid.json
+**/*.py[cod]
+**/__pycache__/
+**/*.sqlite*
+!/tests/fixtures/anime-catalog.sqlite3
+*.zip
+
+# Local IDE/OS state.
+.DS_Store
+.idea/
+Thumbs.db
+.vscode/

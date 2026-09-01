@@ -1,0 +1,14 @@
+**
+!LICENSE
+!pyproject.toml
+!README.md
+!VERSION
+!src/
+!src/**
+!THIRD-PARTY.md
+**/*.db*
+**/*.py[cod]
+**/__pycache__/
+**/*.egg-info/
+**/*.sqlite*
+**/*.zip

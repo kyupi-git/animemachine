@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "serialProfiles": {
+    "zh": [
+      ["ani", "ANi", ["ANi"], ["CHT", "Baha"]],
+      ["lolihouse", "LoliHouse", ["LoliHouse"], ["简繁内封字幕", "簡繁內封字幕", "简繁日内封字幕", "簡繁日內封字幕"]],
+      ["sweetsub", "SweetSub", ["SweetSub"], ["简日双语", "簡日雙語", "繁日双语", "繁日雙語", "简繁日内封", "簡繁日內封"]],
+      ["nekomoe", "喵萌奶茶屋", ["喵萌"], ["简日双语", "簡日雙語", "繁日双语", "繁日雙語", "简繁日内封", "簡繁日內封"]],
+      ["kitauji", "北宇治字幕组", ["北宇治"], ["简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌", "简繁日内封", "簡繁日內封", "简繁内封", "簡繁內封"]],
+      ["haruhana", "拨雪寻春", ["拨雪寻春", "撥雪尋春", "❀拨雪寻春❀", "❀撥雪尋春❀"], ["简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌", "简繁日内封", "簡繁日內封"]],
+      ["snow-raws", "雪飘工作室", ["雪飘", "雪飄"], ["CHS/CHT&JPN", "CHS&JPN", "CHT&JPN", "简繁外挂", "簡繁外掛", "简繁日外挂", "簡繁日外掛", "简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌"]],
+      ["sakurato", "桜都字幕组", ["桜都"], ["简繁内封", "簡繁內封", "简体内嵌", "簡體內嵌", "繁体内嵌", "繁體內嵌", "CHS", "CHT"]],
+      ["dmguo", "动漫国字幕组", ["动漫国", "動漫國"], ["简体", "簡體", "繁体", "繁體"]],
+      ["greentea", "绿茶字幕组", ["绿茶", "綠茶"], ["简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌", "简日双语", "簡日雙語", "繁日双语", "繁日雙語"]],
+      ["nix-raws", "Nix-Raws", ["Nix-Raws"], ["简繁内封", "簡繁內封"]],
+      ["sandwich", "三明治字幕组", ["三明治", "三明治摆烂组", "三明治擺爛組"], ["简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌", "简繁日内封", "簡繁日內封"]],
+      ["orion", "猎户发布组", ["猎户", "獵戶", "猎户压制部", "獵戶壓制部"], ["简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌"]],
+      ["tsdm", "天使动漫字幕组", ["TSDM", "TSDM字幕组", "TSDM字幕組"], ["简日内封字幕", "簡日內封字幕", "繁日内封字幕", "繁日內封字幕", "简繁日内封字幕", "簡繁日內封字幕"]],
+      ["yuhalis", "悠哈璃羽字幕社", ["悠哈"], ["CHS", "CHT", "CHS_JP", "CHT_JP", "简体内嵌", "簡體內嵌", "繁体内嵌", "繁體內嵌", "简繁日内封", "簡繁日內封"]],
+      ["kisssub", "爱恋字幕组", ["爱恋", "愛戀"], ["简中", "簡中", "繁中", "GB", "BIG5"]],
+      ["sakuramomo", "樱桃花字幕组", ["樱桃花", "櫻桃花"], ["简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌"]],
+      ["fbc", "沸班亚马制作组", ["沸班亚马", "沸班亞馬"], ["简繁内封字幕", "簡繁內封字幕", "简体中文", "簡體中文", "繁体中文", "繁體中文"]],
+      ["skymoon", "Skymoon-Raws", ["Skymoon"], ["CHS", "CHT"]],
+      ["mingy", "MingYSub", ["MingY"], ["简繁日内封", "簡繁日內封", "简日内嵌", "簡日內嵌", "繁日内嵌", "繁日內嵌"]],
+      ["heibai", "黑白字幕组", ["黑白"], ["CHS", "CHT"]],
+      ["yyq", "YYQ字幕组", ["YYQ"], ["简日双语", "簡日雙語", "繁日双语", "繁日雙語", "GB_JP"]],
+      ["nightingale", "夜莺家族", ["夜莺", "夜鶯"], ["简日双语", "簡日雙語", "繁日双语", "繁日雙語", "GB_JP"]],
+      ["baidong", "百冬练习组", ["百冬"], ["简繁内封字幕", "簡繁內封字幕", "简繁日内封字幕", "簡繁日內封字幕"]],
+      ["silver-bullet", "银色子弹字幕组", ["银色子弹", "銀色子彈"], ["简繁日多语", "簡繁日多語", "简日双语", "簡日雙語", "繁日双语", "繁日雙語"]],
+      ["tamers-union", "驯兽师联盟", ["驯兽师联盟", "馴獸師聯盟"], ["简日字幕", "簡日字幕", "繁日字幕"]],
+      ["wandou", "豌豆字幕组", ["豌豆"], ["简繁外挂字幕", "簡繁外掛字幕", "简体", "簡體", "繁体", "繁體"]],
+      ["fzsd", "风之圣殿字幕组", ["风之圣殿", "風之聖殿"], ["简繁外挂字幕", "簡繁外掛字幕", "简体", "簡體", "繁体", "繁體"]],
+      ["marukazoku", "丸子家族", ["丸子家族"], ["GB", "BIG5"]],
+      ["ktxp", "极影字幕社", ["极影", "極影"], ["GB_CN", "BIG5"]]
+    ],
+    "en": [
+      ["subsplease", "SubsPlease", ["SubsPlease"], ["*"]], ["erai-raws", "Erai-raws", ["Erai-raws"], ["MultiSub"]],
+      ["judas", "Judas", ["Judas"], ["Multi-Subs", "Eng-Subs"]], ["asw", "ASW", ["ASW"], ["*"]],
+      ["anime-time", "Anime Time", ["Anime Time"], ["Multi Sub", "Multi-Subs", "Eng Sub", "ENG Sub"]],
+      ["dkb", "DKB", ["DKB"], ["Multi-Subs"]], ["varyg", "VARYG", ["VARYG"], ["Multi-Subs"]],
+      ["toonshub", "ToonsHub", ["ToonsHub"], ["Multi-Subs", "English-Sub"]],
+      ["trix", "Trix", ["Trix"], ["Multi Subs", "Multi-Subs"]], ["ironclad", "Ironclad", ["Ironclad"], ["Multi-Subs"]],
+      ["tsplease", "TSPlease", ["TSPlease"], ["Multi-Subs"]], ["subsplus", "SubsPlus+", ["SubsPlus+"], ["*"]],
+      ["unfucked", "Unfucked", ["Unfucked"], ["Multi-Subs"]], ["anozu", "AnoZu", ["AnoZu"], ["CR WEB-DL"]],
+      ["lazier", "Lazier", ["Lazier"], ["*"]]
+    ],
+    "ja": [
+      ["nest", "NEST", ["NEST"], ["简繁日内封", "簡繁日內封", "简日内封", "簡日內封"]],
+      ["lolihouse", "LoliHouse", ["LoliHouse"], ["简繁内封字幕", "簡繁內封字幕", "简繁日内封字幕", "簡繁日內封字幕"]],
+      ["nix-raws", "Nix-Raws", ["Nix-Raws"], ["简繁内封", "簡繁內封"]],
+      ["kirara-fantasia", "Kirara Fantasia", ["Kirara Fantasia"], ["ABEMA"]], ["kuro-nezumi", "黒ネズミたち", ["黒ネズミたち"], ["ABEMA"]],
+      ["erai-raws", "Erai-raws", ["Erai-raws"], ["MultiSub", "Multi Subs", "Multi-Subs", "Multiple Subtitle"]],
+      ["varyg", "VARYG", ["VARYG"], ["Multi-Subs", "Multi Subs"]], ["toonshub", "ToonsHub", ["ToonsHub"], ["Multi-Subs", "Multi Subs"]],
+      ["judas", "Judas", ["Judas"], ["Multi-Subs", "Multi Subs", "Eng-Subs"]], ["dkb", "DKB", ["DKB"], ["Multi-Subs", "Multi Subs"]],
+      ["trix", "Trix", ["Trix"], ["Multi-Subs", "Multi Subs"]], ["tsplease", "TSPlease", ["TSPlease"], ["Multi-Subs", "Multi Subs"]],
+      ["anime-time", "Anime Time", ["Anime Time"], ["Multi-Subs", "Multi Subs"]], ["subsplease", "SubsPlease", ["SubsPlease"], ["*"]],
+      ["wild-abema", "ABEMA 配信", ["*"], ["ABEMA"]], ["wild-jpn-sub", "日本語字幕付き", ["*"], ["JPN_SUB", "Japanese Sub", "Japanese Subs", "Japanese Subtitle", "Japanese Subtitles", "日字", "日文字幕", "日本語字幕", "日内封", "日內封"]]
+    ]
+  }
+}
