@@ -36,7 +36,7 @@ test = [
   "coverage==7.10.7",
   "mypy==1.18.2",
   "pip-audit==2.9.0",
-  "ruff==0.13.2",
+  "ruff==0.16.5",
 ]
 
 [project.scripts]
