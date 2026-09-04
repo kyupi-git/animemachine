@@ -12,6 +12,10 @@ from animemachine.integrations import subtitle_service
 
 
 class SubtitleServiceTests(unittest.TestCase):
+    def test_title_normalization_keeps_non_japanese_scripts(self) -> None:
+        self.assertEqual(subtitle_service._normalized("도굴왕 - 01"), "도굴왕01")
+        self.assertEqual(subtitle_service._normalized("Смешарики - 01"), "смешарики01")
+
     def test_sidecar_detection_ignores_bonus_video(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -60,6 +64,18 @@ class SubtitleServiceTests(unittest.TestCase):
                     "provider": "local", "providerId": str(outside_subtitle), "language": "zh-cn"
                 }, config)
             self.assertIn("outside configured media roots", str(caught.exception))
+
+    def test_opensubtitles_falls_back_to_next_endpoint(self) -> None:
+        provider = {"apiKeyEnv": "TEST_OPEN_SUBTITLES_KEY",
+                    "endpoints": ["https://first.invalid/api/v1", "https://second.invalid/api/v1"]}
+        payload = {"data": [{"attributes": {"release": "Example Anime", "language": "zh-cn",
+                    "download_count": 3, "files": [{"file_id": 7, "file_name": "Example Anime.ass"}]}}]}
+        with mock.patch.dict(os.environ, {"TEST_OPEN_SUBTITLES_KEY": "secret"}), \
+                mock.patch.object(subtitle_service, "_json_request", side_effect=[OSError("offline"), payload]) as request:
+            rows = subtitle_service._opensubtitles(provider, ["Example Anime"], 2026, ["zh-cn"])
+        self.assertEqual(2, request.call_count)
+        self.assertEqual("https://second.invalid/api/v1", rows[0]["endpoint"])
+        self.assertEqual("7", rows[0]["providerId"])
 
     def test_search_rejects_wrong_remote_title(self) -> None:
         self.assertLess(subtitle_service._title_score("Completely Different Work", ["Example Anime"]), .78)

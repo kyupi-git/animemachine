@@ -62,6 +62,22 @@ class CliBootstrapTests(unittest.TestCase):
             self.assertIn("WORKGROUP\\tester:F", args)
             self.assertIn("*S-1-5-18:F", args)
 
+    def test_initial_credentials_do_not_publish_access_address_before_readiness(self):
+        output = io.StringIO()
+        values = {
+            "address": "http://127.0.0.1:8787",
+            "username": "admin",
+            "password": "unit-test-password",
+            "path": "initial-admin.txt",
+        }
+        with contextlib.redirect_stdout(output):
+            anm_cli._print_initial_credentials(values)
+        text = output.getvalue()
+        self.assertIn("Username: admin", text)
+        self.assertIn("Password: unit-test-password", text)
+        self.assertNotIn("Access:", text)
+        self.assertNotIn("http://127.0.0.1:8787", text)
+
     def test_qbt_bootstrap_preserves_preferences_and_sets_api_key(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

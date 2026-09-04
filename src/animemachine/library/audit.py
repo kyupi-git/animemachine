@@ -27,7 +27,7 @@ EPISODE = re.compile(r"(?i)(?:^|[^a-z0-9])(?:ep?|episode|第)?\s*(\d{1,4})(?:\s*
 def _signature(path: str, length: int, kind: str) -> dict[str, Any]:
     name = Path(path.replace("\\", "/")).stem.casefold()
     episode = EPISODE.search(name)
-    tokens = set(re.findall(r"[a-z]{2,}|\d+|[\u3040-\u30ff\u3400-\u9fff]{2,}", name))
+    tokens = set(re.findall(r"[a-z]{2,}|\d+|[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u052f]{2,}", name))
     return {"path": path, "bytes": max(0, int(length or 0)), "kind": kind,
             "episode": episode.group(1).lstrip("0") if episode else None, "tokens": tokens}
 

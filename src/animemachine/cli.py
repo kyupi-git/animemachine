@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import concurrent.futures
 import hashlib
 import ipaddress
 import json
@@ -26,6 +27,7 @@ from .library import audit as library_audit, external as external_library
 from .integrations import ani_rss
 from .network import transport
 from .config.policy import ConfigStore
+from .config import credentials as credential_store
 from .storage import AVAILABLE, StorageUnavailableError, status_for_path
 from .storage import preflight as storage_preflight
 from . import __version__
@@ -312,7 +314,6 @@ def _print_initial_credentials(values: dict[str, str] | None) -> None:
     if not values:
         return
     print("\n========== AnimeMachine initial login ==========", flush=True)
-    print(f"Access:   {values['address']}", flush=True)
     print(f"Username: {values['username']}", flush=True)
     print(f"Password: {values['password']}", flush=True)
     print(f"Saved:    {values['path']}", flush=True)
@@ -335,8 +336,7 @@ def heartbeat(stop: threading.Event) -> None:
         HEARTBEAT.touch()
 
 
-def init_catalog(force: bool = False, *, sync_after: bool = True,
-                 archive_parsed_callback: object | None = None) -> None:
+def init_catalog(force: bool = False, *, sync_after: bool = True) -> None:
     ensure_runtime_config()
     config = ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read()
     if not DB.exists() or force:
@@ -352,7 +352,6 @@ def init_catalog(force: bool = False, *, sync_after: bool = True,
                 network_config=config.get("metadata", {}).get("network", {}),
                 progress_callback=lambda value: sync_status(
                     str(value.get("phase") or "catalog_bootstrap"), details=value),
-                archive_parsed_callback=archive_parsed_callback,
             )
             catalog.build(args)
         finally:
@@ -392,24 +391,30 @@ def ensure_catalog_shell() -> bool:
     return True
 
 
-def background_bootstrap(shell_created: bool, catalog_ready: threading.Event | None = None,
-                         archive_parsed_callback: object | None = None) -> None:
+def background_bootstrap(shell_created: bool, catalog_ready: threading.Event | None = None) -> None:
     """Build the real catalog first, then start prefetch before slower runtime sync."""
     try:
         with catalog.DATABASE_MAINTENANCE_LOCK:
             if shell_created:
-                init_catalog(force=True, sync_after=False, archive_parsed_callback=archive_parsed_callback)
+                init_catalog(force=True, sync_after=False)
                 if catalog_ready is not None:
                     catalog_ready.set()
-            sync_runtime(scan_pool=True)
-            metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read())
+            sync_runtime(scan_pool=True, sync_ani_rss=False)
+        with catalog.background_task_lease("metadata") as allowed:
+            if allowed:
+                with catalog.DATABASE_MAINTENANCE_LOCK:
+                    metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read())
     except Exception as exc:
         sync_status("deferred", state="error", details={"errorType": type(exc).__name__})
         print(f"[bootstrap] Deferred: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
 
 
-def sync_runtime(*, scan_pool: bool = True) -> dict[str, object]:
-    """Run the same deterministic synchronization used by the Web product."""
+def sync_runtime(*, scan_pool: bool = True, sync_ani_rss: bool = True) -> dict[str, object]:
+    """Run deterministic runtime synchronization.
+
+    The Web product owns automatic Ani-RSS snapshot refresh in one dedicated
+    monitor; explicit CLI syncs may still include it.
+    """
     result: dict[str, object] = {}
     current_config = ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read()
     performance = current_config.get("performance", {})
@@ -481,15 +486,16 @@ def sync_runtime(*, scan_pool: bool = True) -> dict[str, object]:
                     )
                 except StorageUnavailableError:
                     result["libraryStorage"] = {"state": "unavailable", "scan": "skipped"}
-    sync_status("ani_rss")
-    result["aniRss"] = ani_rss.sync(DB, current_config)
+    if sync_ani_rss:
+        sync_status("ani_rss")
+        result["aniRss"] = ani_rss.sync(DB, current_config)
     sync_status("external_library")
     external_sources = list(current_config.get("externalLibraries", []))
     ani_source = ani_rss.media_source(current_config)
     if ani_source.get("path"):
         external_sources = [source for source in external_sources
                             if str(source.get("path")) != str(ani_source["path"])]
-    if ani_source.get("enabled") and ani_source.get("path"):
+    if sync_ani_rss and ani_source.get("enabled") and ani_source.get("path"):
         external_sources.append(ani_source)
     result["externalLibraries"] = external_library.scan(
         DB, external_sources,
@@ -532,8 +538,11 @@ def periodic_sync(stop: threading.Event, bootstrap_finished: threading.Event | N
             continue
         try:
             with catalog.DATABASE_MAINTENANCE_LOCK:
-                sync_runtime(scan_pool=True)
-                metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read())
+                sync_runtime(scan_pool=True, sync_ani_rss=False)
+            with catalog.background_task_lease("metadata", stop_event=stop) as allowed:
+                if allowed:
+                    with catalog.DATABASE_MAINTENANCE_LOCK:
+                        metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read())
             last_run = time.monotonic()
         except Exception as exc:
             sync_status("deferred", state="error", details={"errorType": type(exc).__name__})
@@ -542,28 +551,49 @@ def periodic_sync(stop: threading.Event, bootstrap_finished: threading.Event | N
             last_run = time.monotonic() - max(0, minutes * 60 - 300)
 
 
-def periodic_ani_rss_sync(stop: threading.Event, bootstrap_finished: threading.Event | None = None) -> None:
-    """Lightweight remote/media sync independent of the expensive torrent-pool scan."""
+def periodic_ani_rss_resource_refresh(stop: threading.Event, bootstrap_finished: threading.Event | None = None) -> None:
+    """Refresh Ani-RSS discovery on the Torrent-Pool cadence for the rolling latest 24 months."""
     if bootstrap_finished is not None:
         while not bootstrap_finished.wait(1):
             if stop.is_set():
                 return
-    last_run = 0.0
-    while not stop.wait(20):
+    # Startup cover warmup already performs the first ordered discovery pass.
+    # Delay this maintenance pass until one configured pool interval has elapsed.
+    last_run = time.monotonic()
+    while not stop.wait(30):
         current = ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read()
-        settings = current.get("components", {}).get("aniRss", {})
-        minutes = max(5, int(settings.get("syncMinutes", 30)))
+        minutes = max(5, int(current.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
         if time.monotonic() - last_run < minutes * 60:
             continue
         try:
-            with catalog.DATABASE_MAINTENANCE_LOCK:
-                result = ani_rss.sync(DB, current)
-                source = ani_rss.media_source(current)
-                media = external_library.scan(DB, [source])
-            print(f"[Ani-RSS] Sync: {json.dumps({'aniRss': result, 'aniRssMedia': media}, ensure_ascii=False, sort_keys=True)}", flush=True)
-            last_run = time.monotonic()
+            # Never queue or overlap automatic discovery passes. If startup warmup
+            # (or another scheduled pass) is still active, this due tick is skipped
+            # and retried on the next scheduler check without advancing last_run.
+            with ani_rss.background_resource_scan_lease() as allowed:
+                if not allowed:
+                    continue
+                status = ani_rss.state(DB, current)
+                if status.get("connection_state") != "ready" or status.get("effective_mode") not in {"prefer", "fallback"}:
+                    last_run = time.monotonic()
+                    continue
+                ordered = ani_rss.automatic_search_ids(DB)
+                due = [anime_id for anime_id in ordered if ani_rss.background_search_due(DB, anime_id, current)]
+                if due:
+                    workers = max(1, min(4, int(os.getenv("ANM_ANI_RSS_REFRESH_WORKERS", "2"))))
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anm-ani-refresh") as pool:
+                        futures = {pool.submit(ani_rss.search, DB, anime_id, current): anime_id for anime_id in due}
+                        for future in concurrent.futures.as_completed(futures):
+                            if stop.is_set():
+                                for pending in futures:
+                                    pending.cancel()
+                                return
+                            try:
+                                future.result()
+                            except (OSError, ValueError, RuntimeError, sqlite3.Error, urllib.error.URLError):
+                                pass
+                last_run = time.monotonic()
         except Exception as exc:
-            print(f"[Ani-RSS] Synchronization deferred: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            print(f"[Ani-RSS] Resource refresh deferred: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             last_run = time.monotonic() - max(0, minutes * 60 - 300)
 
 
@@ -619,6 +649,7 @@ def main() -> int:
         return collector.main(self_test=args.self_test, audit_only=args.audit_only, once=args.once, restore_quarantine=args.restore_quarantine)
     migrate_legacy_state()
     ensure_runtime_config()
+    credential_store.load_into_environment(STATE)
     if args.command == "healthcheck":
         return healthcheck()
     if args.command == "validate-config":
@@ -640,50 +671,34 @@ def main() -> int:
             stop = threading.Event()
             bootstrap_finished = threading.Event()
             catalog_ready = threading.Event()
-            access_printed = threading.Event()
             if not shell_created:
                 catalog_ready.set()
-            def print_access_after_archive(instance_seed: str, archive_meta: dict[str, object], record_count: int) -> None:
-                if access_printed.is_set():
-                    return
-                catalog._print_access_info(
-                    args.host, args.port, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read(), DB,
-                    instance_seed=instance_seed, archive_meta=archive_meta, record_count=record_count,
-                )
-                access_printed.set()
             def bootstrap_after_web_ready() -> None:
                 # Let the first HTML/API requests complete before background writers
                 # begin. WAL keeps later reads responsive while synchronization runs.
                 try:
                     if not stop.wait(3):
-                        background_bootstrap(
-                            shell_created, catalog_ready,
-                            print_access_after_archive if shell_created else None,
-                        )
+                        background_bootstrap(shell_created, catalog_ready)
                 finally:
                     bootstrap_finished.set()
 
             def start_background_workers() -> None:
-                def storage_check() -> None:
-                    try:
-                        storage_preflight.print_config_summary(
-                            ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read(), timeout=3.0)
-                    except Exception as exc:
-                        print(f"[storage] Preflight unavailable: {type(exc).__name__}", file=sys.stderr, flush=True)
-                threading.Thread(target=storage_check, daemon=True, name="anm-storage-preflight").start()
                 threading.Thread(target=bootstrap_after_web_ready, daemon=True,
                                  name="anm-bootstrap").start()
                 threading.Thread(target=periodic_sync, args=(stop, bootstrap_finished), daemon=True,
                                  name="anm-periodic-sync").start()
-                threading.Thread(target=periodic_ani_rss_sync, args=(stop, bootstrap_finished), daemon=True,
-                                 name="anm-ani-rss-sync").start()
-            catalog.serve(DB, args.host, args.port, CONFIG,
-                          submission_enabled=os.getenv("ANM_SUBMISSION_ENABLED", "true").casefold() == "true",
-                          plan_dir=PLAN_DIR, ready_callback=start_background_workers,
-                          background_ready=bootstrap_finished, warmup_ready=catalog_ready,
-                          print_access_info=not shell_created)
+                threading.Thread(target=periodic_ani_rss_resource_refresh, args=(stop, bootstrap_finished), daemon=True,
+                                 name="anm-ani-rss-resource-refresh").start()
+            restart_requested = catalog.serve(
+                DB, args.host, args.port, CONFIG,
+                submission_enabled=os.getenv("ANM_SUBMISSION_ENABLED", "true").casefold() == "true",
+                plan_dir=PLAN_DIR, ready_callback=start_background_workers,
+                background_ready=bootstrap_finished, warmup_ready=catalog_ready,
+                print_access_info=True)
         finally:
             instance_lock.release()
+        if restart_requested and os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() == "1":
+            return 75
         return 0
     else:
         start_background_workers = None

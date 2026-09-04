@@ -20,6 +20,7 @@ RUN apt-get update \
 WORKDIR /opt/animemachine
 COPY pyproject.toml VERSION README.md LICENSE THIRD-PARTY.md ./
 COPY src/ ./src/
+COPY packaging/docker/entrypoint.py /opt/animemachine/docker-entrypoint.py
 RUN python -m pip install --no-cache-dir --disable-pip-version-check . \
     && python -m pip uninstall --yes pip setuptools msgpack \
     && mkdir -p /Config /Data/state /Imports /Library /Torrents /External /Media /CollectorState \
@@ -27,10 +28,13 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check . \
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    ANM_INSTALL_ROOT=/opt/animemachine \
+    ANM_INSTALL_MODE=docker \
+    ANM_DOCKER_UPDATE_RUNTIME=1 \
     ANM_STATE_DIR=/Data/state \
     ANM_CONFIG_PATH=/Config/config.json \
     ANM_IMPORTS_DIR=/Imports
 USER anm
 EXPOSE 8787
-ENTRYPOINT ["animemachine"]
+ENTRYPOINT ["python", "/opt/animemachine/docker-entrypoint.py"]
 CMD ["run"]

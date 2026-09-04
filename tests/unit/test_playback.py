@@ -49,6 +49,15 @@ class PlaybackTokenTests(unittest.TestCase):
         selected = playback._default_main_queue(items)
         self.assertEqual(["Group B - 01.mkv", "Group B - 02.mkv"], [item.name for item in selected])
 
+    def test_default_queue_keeps_distinct_episodes_with_identical_file_sizes(self) -> None:
+        root = Path("library")
+        items = [
+            playback.PlaybackItem(playback.MediaLocator.local(root / "Show - 01.mkv", 100), "Ep01", 1.0, 100, "preexisting"),
+            playback.PlaybackItem(playback.MediaLocator.local(root / "Show - 02.mkv", 100), "Ep02", 2.0, 100, "preexisting"),
+        ]
+        selected = playback._default_main_queue(items)
+        self.assertEqual(["Show - 01.mkv", "Show - 02.mkv"], [item.name for item in selected])
+
     def test_bracketed_media_name_finds_language_sidecar_without_glob_expansion(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             media = Path(raw) / "[Group] Show [01].mkv"
@@ -110,6 +119,23 @@ class PlaybackTokenTests(unittest.TestCase):
         self.assertTrue(playback.player_protocol_url("iina", target).startswith("iina://weblink?url="))
         with self.assertRaises(ValueError):
             playback.player_protocol_url("vlc", "file:///private/video.mkv")
+
+    def test_playback_diagnostics_tracks_range_resume_upstream_and_rate(self) -> None:
+        diagnostics = playback.PlaybackDiagnostics(maximum=4)
+        locator = playback.MediaLocator.remote("Show - 01.mkv", "Show - 01.mkv", "mkv", 4096, "ani-rss")
+        with mock.patch.object(playback.time, "time", side_effect=[100.0, 101.0, 102.0, 103.0, 104.0, 105.0]):
+            diagnostics.begin("token-value", locator, "bytes=1024-")
+            diagnostics.upstream("token-value", "HTTP 206")
+            diagnostics.transfer("token-value", 2048)
+            diagnostics.resume("token-value")
+            diagnostics.finish("token-value", "complete")
+        item = diagnostics.snapshot()[0]
+        self.assertEqual("bytes=1024-", item["range"])
+        self.assertEqual(2, item["resumeCount"])
+        self.assertEqual("HTTP 206", item["upstream"])
+        self.assertGreater(item["rateBps"], 0)
+        self.assertEqual("complete", item["state"])
+        self.assertNotIn("token-value", item["token"])
 
 
 if __name__ == "__main__":

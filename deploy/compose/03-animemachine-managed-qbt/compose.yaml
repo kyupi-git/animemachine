@@ -5,7 +5,7 @@ include:
 
 services:
   qbt-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
     user: "${PUID:-1000}:${PGID:-1000}"
     env_file: ${ANM_ENV_FILE:-.env}
     command: ["qbt-bootstrap", "--config-dir", "/QbtConfig"]
@@ -37,7 +37,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
     restart: unless-stopped
     init: true
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -57,6 +57,7 @@ services:
       ANM_MANAGED_ANI_RSS: "false"
       ANM_SUBMISSION_ENABLED: "true"
       ANM_WEB_PORT: "8787"
+      ANM_BIND_ADDRESS: "0.0.0.0"
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,qbittorrent,host.docker.internal}
     volumes:
       - ${ANM_CONFIG_DIR:-./config}:/Config

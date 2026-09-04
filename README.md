@@ -1,5 +1,5 @@
 [中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)  
-[README](README.md) | [部署与使用指南](docs/guide.md) | [架构与数据库](docs/architecture.md)
+[README](README.md) | [部署与使用指南](docs/guide.md) | [架构与数据库](docs/architecture.md) | [更新日志](CHANGELOG.md)
 
 # AnimeMachine · Automated Anime Library
 
@@ -17,7 +17,7 @@ AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据�
 
 ![AnimeMachine 播放器交接](docs/images/playback.png)
 
-*AnimeMachine 的播放器交接：在检测到可用媒体资源后，AnimeMachine 采用一种“生成 m3u 播放列表并交接”的独特方式，推送全集地址至本地播放器，可以实现全集自动跳转播放，并可从中间集数开始播放。该方式兼容多种平台、多种设备，只要安装了 VLC / PotPlayer 等支持 m3u 播放列表的本地播放器。甚至，即便 AnimeMachine 无本地存储，只要通过 API key 连接 Ani-RSS，仍然可以生成 m3u 播放列表并播放。同时，也支持直接控制 Ani-RSS 订阅新作。*
+*AnimeMachine 的播放器交接：在检测到可用媒体资源后，AnimeMachine 采用一种“生成 m3u 播放列表并交接”的独特方式，推送全集地址至本地播放器，可以实现全集自动跳转播放，并可从中间集数开始播放。该方式兼容多种平台、多种设备，只要安装了 VLC / PotPlayer 等支持 m3u 播放列表的本地播放器。甚至，即便 AnimeMachine 未挂载 Ani-RSS 媒体目录，只要通过 API key 连接 Ani-RSS，仍然可以通过 AnimeMachine HTTP 中继生成 m3u 播放列表并播放，并支持 Range 拖动和短暂断线续传。同时，也支持直接控制 Ani-RSS 订阅新作。*
 
 ![AnimeMachine 作品关系图](docs/images/relationship-graph.png)
 
@@ -28,7 +28,7 @@ AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据�
 - 基于 Bangumi Archive 的动画底库。首次启动会在后台构建本地 SQLite Catalog，完整性检查通过后再原子发布。
 - Torrent 池采用增量扫描。已经处理且指纹未变化的文件不会重复解析；即使大型 Torrent 池仍在全量扫描，已经完成的批次也可以先用于查询和资源选择。
 - Docker 自动收藏方案支持启用 Torrent Collector。Collector 结合标题、Torrent manifest 和本地 Catalog 证据执行 `accept / reject / defer` 三态判断：只有 `accept` 写入共享 Torrent 池，证据不足时保持 `defer`，而不是用固定集数跨度猜测完整。每周更新的单集资源可以向 Ani-RSS 发起订阅请求并远程访问。
-- 下载规划支持完整合集、单集/单卷拼接、差分补完，以及同一 infohash 追加文件选择。AnimeMachine 管理的 qBittorrent 任务默认先生成计划，并可以按用户选择保持停止状态提交。
+- 下载规划支持完整合集、单集/单卷拼接、差分补完，以及同一 infohash 追加文件选择。AnimeMachine 管理的 qBittorrent 任务会先生成计划，并始终以停止状态提交；确认内容后再由用户在 qBittorrent 中启动。
 - 收藏库既可以是本地媒体目录，也可以是可读写 UNC/NAS 目录；已有媒体还可以作为外部只读媒体库映射进来，不要求搬迁或重新命名。
 - qBittorrent、Ani-RSS 和 Torrent Collector 都是可选组件。可以只使用其中一部分，也可以在 Compose 中组成完整自动收藏链路。
 - 播放功能生成 M3U 播放列表，再交给系统播放器、VLC 或 PotPlayer；服务器路径与客户端路径不一致时，可以单独配置播放器可访问的映射。
@@ -47,7 +47,7 @@ Windows 用户运行 `scripts/windows/AnimeMachine.cmd`；Linux 用户运行 `sc
 
 `deploy/compose` 提供四种预设方案：(1)AnimeMachine 独立运行；(2)连接外部 qBittorrent；(3)启用 Torrent Collector 和内置 qBittorrent；(4)把 Torrent Collector、qBittorrent 与 Ani-RSS 一并纳入同一 Compose 项目。前三种方案均可按需连接外部 Ani-RSS，未配置时不影响动画底库、目录、Torrent Pool 与本地收藏管理。
 
-预设方案使用公开镜像 `ghcr.io/kyupi-git/animemachine:latest`。生产环境建议固定具体版本标签。
+0.2.0 的预设方案默认固定公开镜像 `ghcr.io/kyupi-git/animemachine:0.2.0`。如自行改为 `latest`，Compose 会跟随后续发布；生产环境建议继续固定具体版本标签。
 
 进入对应目录后，将 `.env.example` 复制为 `.env`，填写宿主机路径和所需密钥，再运行 `docker compose up -d`。四种方案按组件边界区分；具体选择主要取决于现有 qBittorrent、Ani-RSS 和媒体目录是否已经在其它位置运行。完整配置见 [部署与使用指南](docs/guide.md#docker-compose)。
 

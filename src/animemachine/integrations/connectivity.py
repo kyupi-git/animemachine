@@ -6,6 +6,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+import httpx
 from ..network import tls as tls_support
 from .. import __version__
 
@@ -17,6 +19,8 @@ def _get(url: str, headers: dict[str, str] | None = None) -> tuple[int, str]:
             return int(response.status), response.read(4096).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return int(exc.code), exc.read(4096).decode("utf-8", "replace")
+    except httpx.HTTPStatusError as exc:
+        return int(exc.response.status_code), exc.response.content[:4096].decode("utf-8", "replace")
 
 
 def _secret(environment_name: str, file_environment_name: str) -> str:
@@ -27,13 +31,13 @@ def _secret(environment_name: str, file_environment_name: str) -> str:
     return value
 
 
-def probe(kind: str, endpoint: str) -> dict[str, Any]:
-    """Probe only read endpoints. Credentials stay in process environment."""
+def probe(kind: str, endpoint: str, api_key: str | None = None) -> dict[str, Any]:
+    """Probe only read endpoints. A supplied key is used only for this request."""
     base = endpoint.strip().rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise ValueError("endpoint must start with http:// or https://")
     if kind == "qbittorrent":
-        key = _secret("ANM_QBT_API_KEY", "ANM_QBT_API_KEY_FILE")
+        key = str(api_key or "").strip() or _secret("ANM_QBT_API_KEY", "ANM_QBT_API_KEY_FILE")
         headers = {"Authorization": f"Bearer {key}", "X-API-Key": key} if key else {}
         status, body = _get(base + "/api/v2/app/version", headers)
         return {"kind": kind, "reachable": status < 500, "authenticated": status < 400,

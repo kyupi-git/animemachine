@@ -38,6 +38,27 @@ class ArchiveDownloadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"digest"):
                 downloads.download_verified(["https://x/a"],target,expected_size=len(payload),expected_sha256="0"*64)
             self.assertFalse(target.exists())
+            self.assertFalse(target.with_suffix(".zip.part").exists())
+
+    def test_digest_mismatch_discards_complete_partial_for_next_retry(self):
+        payload=b"good-payload"
+        class Response:
+            status_code=200; headers={"content-length":str(len(payload))}; url="https://x/archive"
+            def __enter__(self): return self
+            def __exit__(self,*_args): return False
+            def raise_for_status(self): return None
+            def iter_bytes(self,_size): yield payload
+        with tempfile.TemporaryDirectory() as raw:
+            target=Path(raw)/"archive.zip"
+            target.with_suffix(".zip.part").write_bytes(b"x"*len(payload))
+            with mock.patch.object(downloads.transport,"stream",return_value=Response()):
+                with self.assertRaisesRegex(ValueError,"digest"):
+                    downloads.download("https://x/archive",target,expected_size=len(payload),expected_sha256="0"*64)
+            self.assertFalse(target.with_suffix(".zip.part").exists())
+            with mock.patch.object(downloads.transport,"stream",return_value=Response()):
+                downloads.download("https://x/archive",target,expected_size=len(payload),
+                                   expected_sha256=hashlib.sha256(payload).hexdigest())
+            self.assertEqual(payload,target.read_bytes())
 
     def test_read_error_and_temporary_5xx_are_retried(self):
         payload=b"retry-me" * 1024
@@ -181,6 +202,33 @@ class ArchiveDownloadTests(unittest.TestCase):
         finally:
             client.close()
         self.assertEqual(["bytes=0-15","bytes=4-15","bytes=8-15","bytes=12-15"],ranges)
+
+    def test_failed_range_transfer_falls_back_to_probed_whole_file_source(self):
+        payload=b"whole-file-fallback" * 1024
+        whole_calls=[]
+        def probe(url):
+            return {"url":url,"range":"proxy" in url,"latency":.01,
+                    "throughput":2 if "proxy" in url else 1}
+        def ranged(url,_path,_start,_end,_progress,**_kwargs):
+            if "proxy" in url:
+                raise httpx.ReadError("proxy disconnected",request=httpx.Request("GET",url))
+            raise downloads.RangeProtocolError("official endpoint ignores Range")
+        def whole(url,path,_expected_size,progress):
+            whole_calls.append(url)
+            path.write_bytes(payload); progress(len(payload))
+        urls=["https://proxy.invalid/archive","https://github.com/release/archive"]
+        with tempfile.TemporaryDirectory() as raw, mock.patch.object(downloads,"_probe",side_effect=probe), \
+                mock.patch.object(downloads,"_stream_range",side_effect=ranged), \
+                mock.patch.object(downloads,"_stream_file",side_effect=whole), \
+                mock.patch.object(downloads.time,"sleep"):
+            target=Path(raw)/"archive.zip"
+            result=downloads.download_verified(urls,target,expected_size=len(payload),
+                                               expected_sha256=hashlib.sha256(payload).hexdigest(),
+                                               attempts_per_source=1,retry_backoff=0)
+            self.assertEqual(payload,target.read_bytes())
+            self.assertEqual(["https://github.com/release/archive"],whole_calls)
+            self.assertEqual(["https://github.com/release/archive"],result["urls"])
+            self.assertEqual([],list(Path(raw).glob("archive.zip.part.*")))
 
     def test_probe_failures_do_not_prevent_source_fallback(self):
         payload=b"probe-fallback"

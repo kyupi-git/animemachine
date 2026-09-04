@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+import httpx
 import hashlib
 import http.client
 import json
@@ -33,6 +34,7 @@ from .collector_filter import (
 )
 from .collector_state import CollectorState, namespaced_result_key
 from .metainfo import MAX_TORRENT_BYTES, inspect_bytes, read_torrent_file
+from ..network import tls as network_tls, transport as network_transport
 
 
 def _env_bool(name: str, default: str) -> bool:
@@ -262,7 +264,12 @@ def cookie_header(host):
 
 def store_cookies(host, headers):
     values = COOKIE_JAR.setdefault(host, {})
-    for raw in headers.get_all("Set-Cookie") or []:
+    getter = getattr(headers, "get_all", None)
+    raw_values = getter("Set-Cookie") if callable(getter) else None
+    if raw_values is None:
+        getter = getattr(headers, "get_list", None)
+        raw_values = getter("set-cookie") if callable(getter) else []
+    for raw in raw_values or []:
         first = raw.split(";", 1)[0]
         if "=" in first:
             name, value = first.split("=", 1)
@@ -299,7 +306,7 @@ def _decompress_limited(raw: bytes, encoding: str, max_bytes: int) -> bytes:
     return result
 
 
-def http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOUT, redirects=5, max_bytes=HTML_MAX_BYTES):
+def _native_http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOUT, redirects=5, max_bytes=HTML_MAX_BYTES):
     current = url
     body = data
     method_now = method.upper()
@@ -314,7 +321,7 @@ def http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOU
             cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
         kwargs = {"timeout": timeout}
         if u.scheme == "https":
-            kwargs["context"] = ssl.create_default_context()
+            kwargs["context"] = network_tls.ssl_context()
         conn = cls(u.hostname, port, **kwargs)
         path = urllib.parse.urlunsplit(("", "", u.path or "/", u.query, ""))
         req_headers = {
@@ -351,6 +358,44 @@ def http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOU
             raise HttpStatusError(status, current, raw[:4096])
         return raw, content_type, current
     raise RuntimeError(f"too many redirects: {url}")
+
+
+def _shared_http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOUT, max_bytes=HTML_MAX_BYTES):
+    u = urllib.parse.urlsplit(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise ValueError(f"unsupported URL: {url}")
+    req_headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/json,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7,ja;q=0.6",
+        "Accept-Encoding": "identity",
+    }
+    ck = cookie_header(u.hostname)
+    if ck:
+        req_headers["Cookie"] = ck
+    if headers:
+        req_headers.update(headers)
+    try:
+        response = network_transport.request(
+            method.upper(), url, headers=req_headers, content=data, timeout=timeout, max_bytes=max_bytes)
+    except httpx.HTTPStatusError as exc:
+        raise HttpStatusError(int(exc.response.status_code), str(exc.response.url)) from None
+    store_cookies(urllib.parse.urlsplit(str(response.url)).hostname or u.hostname, response.headers)
+    return response.content, response.headers.get("Content-Type", ""), str(response.url)
+
+
+def http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOUT, redirects=5, max_bytes=HTML_MAX_BYTES):
+    if not PROXY_ENABLED:
+        return _shared_http_request_once(url, method=method, data=data, headers=headers, timeout=timeout, max_bytes=max_bytes)
+    try:
+        return _native_http_request_once(url, method=method, data=data, headers=headers, timeout=timeout,
+                                         redirects=redirects, max_bytes=max_bytes)
+    except HttpStatusError as exc:
+        if exc.status not in {408, 425, 429, 500, 502, 503, 504}:
+            raise
+    except (OSError, ssl.SSLError, http.client.HTTPException, TimeoutError):
+        pass
+    return _shared_http_request_once(url, method=method, data=data, headers=headers, timeout=timeout, max_bytes=max_bytes)
 
 
 def http_request(url, method="GET", data=None, headers=None, timeout=TIMEOUT, redirects=5, max_bytes=HTML_MAX_BYTES):
@@ -1104,7 +1149,7 @@ def main(*, self_test: bool = False, audit_only: bool = False, once: bool = Fals
             return 0
         log("torrent-collector starting")
         log(f"output={OUT}; state={STATE}; search_ruleset={SEARCH_RULESET_ID}; filter_ruleset={FILTER_RULESET_ID}")
-        log(f"search_terms={len(SEARCH_TERMS)}; audit={AUDIT_MODE}; proxy={'SOCKS5h '+PROXY_HOST+':'+str(PROXY_PORT) if PROXY_ENABLED else 'direct'}")
+        log(f"search_terms={len(SEARCH_TERMS)}; audit={AUDIT_MODE}; network={'SOCKS5h '+PROXY_HOST+':'+str(PROXY_PORT)+' -> adaptive fallback' if PROXY_ENABLED else 'adaptive proxy/system/direct'}")
         next_native_incremental_at = 0.0
         while True:
             _cycle_stats = {}

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -46,6 +47,13 @@ CREATE TABLE IF NOT EXISTS external_media_file(
 CREATE INDEX IF NOT EXISTS ix_external_media_anime ON external_media_file(anime_id,match_state);
 """
 MATCH_RULE_VERSION = 2
+_SCAN_LOCKS_GUARD = threading.Lock()
+_SCAN_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _source_scan_lock(source_id: str) -> threading.Lock:
+    with _SCAN_LOCKS_GUARD:
+        return _SCAN_LOCKS.setdefault(source_id, threading.Lock())
 
 
 def utcnow() -> str:
@@ -287,6 +295,41 @@ def _resolve(db: sqlite3.Connection, index: dict[str, set[int]], title: str, yea
 
 def scan(db_path: Path, sources: list[dict[str, Any]],
          progress: Callable[[dict[str, int]], None] | None = None) -> dict[str, int]:
+    """Scan read-only media sources without overlapping the same source.
+
+    A due tick for a source whose previous pass is still running is skipped rather
+    than queued. Independent sources keep scanning normally.
+    """
+    totals = {"sources": 0, "files": 0, "unchanged": 0, "verified": 0, "ambiguous": 0,
+              "unmatched": 0, "unavailable": 0, "deferred": 0, "errors": 0}
+    for source in sources:
+        if not source.get("enabled"):
+            continue
+        source_id = str(source.get("id") or "").strip()
+        lock_key = source_id or f"path:{str(source.get('path') or '').strip()}"
+        source_lock = _source_scan_lock(lock_key)
+        if not source_lock.acquire(blocking=False):
+            totals["deferred"] += 1
+            if progress:
+                progress(dict(totals))
+            continue
+        base = dict(totals)
+        def source_progress(partial: dict[str, int]) -> None:
+            if progress:
+                progress({key: base[key] + int(partial.get(key, 0)) for key in totals})
+        try:
+            partial = _scan_unlocked(db_path, [source], source_progress if progress else None)
+        finally:
+            source_lock.release()
+        for key in totals:
+            totals[key] += int(partial.get(key, 0))
+        if progress:
+            progress(dict(totals))
+    return totals
+
+
+def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
+                   progress: Callable[[dict[str, int]], None] | None = None) -> dict[str, int]:
     stats = {"sources": 0, "files": 0, "unchanged": 0, "verified": 0, "ambiguous": 0,
              "unmatched": 0, "unavailable": 0, "deferred": 0, "errors": 0}
     with contextlib.closing(sqlite3.connect(db_path)) as db:
@@ -427,9 +470,11 @@ def scan(db_path: Path, sources: list[dict[str, Any]],
 
 def status(db: sqlite3.Connection, anime_id: int) -> dict[str, Any] | None:
     try:
-        rows = list(db.execute("""SELECT e.*,s.kind,s.scan_state AS source_scan_state FROM external_media_file e
+        cursor = db.execute("""SELECT e.*,s.kind,s.scan_state AS source_scan_state FROM external_media_file e
             JOIN external_library_source s USING(source_id)
-            WHERE e.anime_id=? AND e.match_state='verified' ORDER BY e.source_id,e.absolute_path""", (anime_id,)))
+            WHERE e.anime_id=? AND e.match_state='verified' ORDER BY e.source_id,e.absolute_path""", (anime_id,))
+        columns = [str(item[0]) for item in cursor.description or ()]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
     except sqlite3.OperationalError:
         return None
     if not rows:

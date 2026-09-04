@@ -45,7 +45,7 @@ MAX_ARCHIVE_RATIO = 200
 
 
 def _normalized(value: str) -> str:
-    return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", value.casefold())
+    return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u052f]+", "", value.casefold())
 
 
 def _episode(value: str) -> int | None:
@@ -142,21 +142,31 @@ def _opensubtitles(provider: dict[str, Any], titles: list[str], year: int | None
     key = os.getenv(str(provider.get("apiKeyEnv") or "OPEN_SUBTITLES_API_KEY"), "").strip()
     if not key:
         return []
-    endpoint = str((provider.get("endpoints") or ["https://api.opensubtitles.com/api/v1"])[0]).rstrip("/")
+    endpoints = list(dict.fromkeys(str(value).rstrip("/") for value in
+                                   (provider.get("endpoints") or ["https://api.opensubtitles.com/api/v1"]) if str(value).strip()))
     query = urllib.parse.urlencode({"query": titles[0], "languages": ",".join(languages), **({"year": year} if year else {})})
-    payload = _json_request(f"{endpoint}/subtitles?{query}", headers={"Api-Key": key})
-    rows = []
-    for item in payload.get("data", []):
-        attr = item.get("attributes") or {}
-        files = attr.get("files") or []
-        release = str(attr.get("release") or attr.get("feature_details", {}).get("title") or "")
-        score = _title_score(release, titles)
-        if score < .78 or not files:
-            continue
-        rows.append({"provider": "opensubtitles", "providerId": str(files[0].get("file_id")),
-                     "title": release, "language": attr.get("language"), "format": files[0].get("file_name", "subtitle.srt").rsplit(".", 1)[-1],
-                     "score": round(score, 3), "downloads": int(attr.get("download_count") or 0)})
-    return rows
+    last: Exception | None = None
+    for endpoint in endpoints:
+        try:
+            payload = _json_request(f"{endpoint}/subtitles?{query}", headers={"Api-Key": key})
+            rows = []
+            for item in payload.get("data", []):
+                attr = item.get("attributes") or {}
+                files = attr.get("files") or []
+                release = str(attr.get("release") or attr.get("feature_details", {}).get("title") or "")
+                score = _title_score(release, titles)
+                if score < .78 or not files:
+                    continue
+                rows.append({"provider": "opensubtitles", "providerId": str(files[0].get("file_id")),
+                             "title": release, "language": attr.get("language"), "format": files[0].get("file_name", "subtitle.srt").rsplit(".", 1)[-1],
+                             "score": round(score, 3), "downloads": int(attr.get("download_count") or 0),
+                             "endpoint": endpoint})
+            return rows
+        except Exception as exc:
+            last = exc
+    if last:
+        raise last
+    return []
 
 
 def _assrt(provider: dict[str, Any], titles: list[str], year: int | None, languages: list[str]) -> list[dict[str, Any]]:
@@ -326,7 +336,7 @@ def _download(candidate: dict[str, Any], config: dict[str, Any], destination: Pa
     if provider == "opensubtitles":
         cfg = providers.get(provider, {})
         key = os.getenv(str(cfg.get("apiKeyEnv") or "OPEN_SUBTITLES_API_KEY"), "").strip()
-        endpoint = str((cfg.get("endpoints") or ["https://api.opensubtitles.com/api/v1"])[0]).rstrip("/")
+        endpoint = str(candidate.get("endpoint") or (cfg.get("endpoints") or ["https://api.opensubtitles.com/api/v1"])[0]).rstrip("/")
         payload = _json_request(f"{endpoint}/download", headers={"Api-Key": key}, data={"file_id": int(candidate["providerId"])})
         url = str(payload["link"])
     elif provider == "assrt":

@@ -156,15 +156,21 @@ class ConfigStore:
 
     def read_persistent(self) -> dict[str, Any]:
         source = self.path if self.path.exists() else self.example
-        data = json.loads(source.read_text(encoding="utf-8"))
+        data = json.loads(source.read_text(encoding="utf-8-sig"))
         self.validate(data)
         return data
 
     def read(self) -> dict[str, Any]:
-        return apply_runtime_overrides(self.read_persistent())
+        effective = apply_runtime_overrides(self.read_persistent())
+        self.validate(effective)
+        return effective
+
+    def validate_for_write(self, data: dict[str, Any]) -> None:
+        self.validate(data)
+        self.validate(apply_runtime_overrides(data))
 
     def write(self, data: dict[str, Any]) -> None:
-        self.validate(data)
+        self.validate_for_write(data)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, raw = tempfile.mkstemp(prefix="config-", suffix=".json", dir=self.path.parent)
         os.close(fd)

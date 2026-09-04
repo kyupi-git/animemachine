@@ -50,6 +50,47 @@ def resource_group_enabled(groups: list[dict[str, Any]] | None, value: Any, allo
     return bool(allow_unlisted)
 
 
+REGION_KEYS = ("china", "japan", "korea", "usa", "europe", "other")
+REGION_COUNTRIES = {
+    "china": {"CN", "HK", "MO", "TW"},
+    "japan": {"JP"},
+    "korea": {"KR", "KP"},
+    "usa": {"US"},
+    # Includes every generally recognized European state plus transcontinental
+    # Russia/Turkey and Cyprus.  Unknown/empty country evidence remains Other.
+    "europe": {
+        "AL", "AD", "AT", "BY", "BE", "BA", "BG", "HR", "CY", "CZ",
+        "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IS", "IE", "IT",
+        "XK", "LV", "LI", "LT", "LU", "MT", "MD", "MC", "ME", "NL",
+        "MK", "NO", "PL", "PT", "RO", "RU", "SM", "RS", "SK", "SI",
+        "ES", "SE", "CH", "TR", "UA", "GB", "VA",
+    },
+}
+
+def region_for_country(code: Any) -> str:
+    normalized = str(code or "").strip().upper()
+    for region, countries in REGION_COUNTRIES.items():
+        if normalized in countries:
+            return region
+    return "other"
+
+def region_policy_enabled(policy: dict[str, Any] | None, country_codes: Any) -> bool:
+    """A co-production is allowed when any of its regions is enabled.
+
+    Missing region settings are treated as all-enabled for old config files.
+    Empty or unrecognized country evidence belongs to ``other``.
+    """
+    raw = (policy or {}).get("regions")
+    states = {key: True for key in REGION_KEYS}
+    if isinstance(raw, dict):
+        for key in REGION_KEYS:
+            if key in raw:
+                states[key] = bool(raw[key])
+    values = [str(value).strip().upper() for value in (country_codes or []) if str(value).strip()]
+    regions = {region_for_country(value) for value in values} or {"other"}
+    return any(states.get(region, True) for region in regions)
+
+
 def load_resource_group_catalog() -> dict[str, Any]:
     for path in RESOURCE_GROUP_CATALOG_CANDIDATES:
         if path.exists():
@@ -159,16 +200,90 @@ def explicitly_disabled_groups(groups: list[dict[str, Any]] | None) -> list[str]
 def _validate(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict) or data.get("schemaVersion") != 2:
         raise ConfigError("config schemaVersion must be 2")
-    required = ("deployment", "components", "metadata", "library", "naming", "relations", "scope", "torrentPolicy", "download", "runtime", "safety")
+    required = (
+        "deployment",
+        "components",
+        "security",
+        "ui",
+        "metadata",
+        "catalog",
+        "library",
+        "naming",
+        "relations",
+        "scope",
+        "torrentPolicy",
+        "download",
+        "differentialPlanning",
+        "storageGuard",
+        "runtime",
+        "safety",
+    )
     missing = [key for key in required if not isinstance(data.get(key), dict)]
+    update = data.get("applicationUpdate", {})
+    if not isinstance(update, dict):
+        raise ConfigError("applicationUpdate must be an object")
+    automatic = update.get("automaticCheck", {})
+    if not isinstance(automatic, dict):
+        raise ConfigError("applicationUpdate.automaticCheck must be an object")
+    if automatic:
+        if not isinstance(automatic.get("enabled", False), bool):
+            raise ConfigError("applicationUpdate.automaticCheck.enabled must be boolean")
+        if str(automatic.get("mode", "notify")) not in {"notify", "install"}:
+            raise ConfigError("applicationUpdate.automaticCheck.mode must be notify or install")
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(automatic.get("time", "04:35"))):
+            raise ConfigError("applicationUpdate.automaticCheck.time must be HH:MM")
     if missing:
         raise ConfigError(f"missing config objects: {', '.join(missing)}")
+    nested_objects = (
+        ("components", "discovery"),
+        ("metadata", "archive"),
+        ("metadata", "onlineRepair"),
+        ("metadata", "network"),
+        ("metadata", "images"),
+        ("subtitles", "languages"),
+        ("ui", "filterDefaults"),
+        ("library", "completeness"),
+        ("library", "completeness", "thresholds"),
+        ("relations", "supplementEpisodeHeuristic"),
+        ("torrentPolicy", "allowUnlisted"),
+        ("torrentPolicy", "incrementalAcquisition"),
+        ("torrentPolicy", "subtitles"),
+    )
+    for path in nested_objects:
+        value: Any = data
+        for key in path:
+            if not isinstance(value, dict) or key not in value:
+                value = None
+                break
+            value = value[key]
+        if value is not None and not isinstance(value, dict):
+            raise ConfigError(f"{'.'.join(path)} must be an object")
     if data["metadata"].get("workUniverse") != "bangumi-archive-only":
         raise ConfigError("metadata.workUniverse must be bangumi-archive-only")
+    deployment = data["deployment"]
+    for key in ("libraryUncRoot", "qbtLibraryRoot", "torrentPoolRoot", "historyDirectoryName"):
+        if not str(deployment.get(key) or "").strip():
+            raise ConfigError(f"deployment.{key} is required")
+    history_name = str(deployment["historyDirectoryName"]).strip()
+    if history_name in {".", ".."} or "/" in history_name or "\\" in history_name:
+        raise ConfigError("deployment.historyDirectoryName must be one safe directory name")
+    download_client = data["components"].get("downloadClient")
+    if not isinstance(download_client, dict):
+        raise ConfigError("components.downloadClient must be an object")
+    endpoint = str(download_client.get("endpoint") or "").strip()
+    if not endpoint.startswith(("http://", "https://")):
+        raise ConfigError("components.downloadClient.endpoint must be an absolute HTTP(S) URL")
+    if not str(download_client.get("category") or "").strip():
+        raise ConfigError("components.downloadClient.category is required")
+    tags = download_client.get("tags")
+    if not isinstance(tags, list) or not all(isinstance(value, str) and value.strip() for value in tags):
+        raise ConfigError("components.downloadClient.tags must be a list of non-empty strings")
     policy = data["torrentPolicy"]
     if policy.get("oneTaskPerInfohash") is not True or policy.get("reuseTaskForAdditionalFiles") is not True:
         raise ConfigError("one infohash/task with reusable file selection is mandatory")
-    methods = policy.get("acquisitionMethods", {})
+    methods = policy.get("acquisitionMethods")
+    if not isinstance(methods, dict):
+        raise ConfigError("torrentPolicy.acquisitionMethods must be an object")
     if methods.get("torrent") is not True or methods.get("magnet") is not True:
         raise ConfigError("torrent and magnet acquisition methods must be supported")
     allowed_orders = {
@@ -195,6 +310,34 @@ def _validate(data: Any) -> dict[str, Any]:
     network = data["metadata"].get("network", {})
     if not network.get("archiveManifestEndpoints") or not network.get("bangumiApiEndpoints"):
         raise ConfigError("metadata network requires Archive manifest and Bangumi API endpoint pools")
+    discovery = data["components"].get("discovery", {})
+    try:
+        poll_minutes = int(discovery.get("pollMinutes", 30))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("components.discovery.pollMinutes must be an integer") from exc
+    if poll_minutes < 5:
+        raise ConfigError("components.discovery.pollMinutes must be at least 5")
+    try:
+        probe_timeout = float(network.get("probeTimeoutSeconds", 12))
+        failure_cooldown = int(network.get("failureCooldownSeconds", 900))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("metadata.network timing values must be numeric") from exc
+    if not math.isfinite(probe_timeout) or probe_timeout < 1:
+        raise ConfigError("metadata.network.probeTimeoutSeconds must be a finite number of at least 1")
+    if failure_cooldown < 0:
+        raise ConfigError("metadata.network.failureCooldownSeconds must be non-negative")
+    try:
+        repair_batch = int(repair.get("batchSize", 50))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("metadata.onlineRepair.batchSize must be an integer") from exc
+    if not 1 <= repair_batch <= 200:
+        raise ConfigError("metadata.onlineRepair.batchSize must be between 1 and 200")
+    try:
+        metadata_delay = float(data["runtime"].get("metadataRequestDelaySeconds", 1.2))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("runtime.metadataRequestDelaySeconds must be numeric") from exc
+    if not math.isfinite(metadata_delay) or metadata_delay < 0:
+        raise ConfigError("runtime.metadataRequestDelaySeconds must be a finite non-negative number")
     storage = data.get("storageGuard", {})
     if not isinstance(storage, dict):
         raise ConfigError("storageGuard must be an object")
@@ -204,9 +347,15 @@ def _validate(data: Any) -> dict[str, Any]:
         raise ConfigError("storageGuard.minimumFreeTiB must be a finite non-negative number") from exc
     if not math.isfinite(minimum_free) or minimum_free < 0:
         raise ConfigError("storageGuard.minimumFreeTiB must be a finite non-negative number")
+    regions = policy.get("regions", {})
+    if regions and (not isinstance(regions, dict) or set(regions) - set(REGION_KEYS)
+                    or any(not isinstance(value, bool) for value in regions.values())):
+        raise ConfigError("torrentPolicy.regions must contain only boolean china/japan/korea/usa/europe/other values")
     if not isinstance(policy.get("resolutions"), dict) or not policy["resolutions"]:
         raise ConfigError("torrentPolicy.resolutions must define known choices")
     subtitle_policy = data.get("subtitles", {})
+    if not isinstance(subtitle_policy, dict):
+        raise ConfigError("subtitles must be an object")
     if subtitle_policy:
         if not isinstance(subtitle_policy.get("providers", []), list):
             raise ConfigError("subtitles.providers must be a list")
@@ -217,6 +366,8 @@ def _validate(data: Any) -> dict[str, Any]:
             if provider.get("enabled", True) and (not endpoints or not all(str(value).startswith("https://") for value in endpoints)):
                 raise ConfigError("subtitle providers require HTTPS endpoints")
     ani_rss = data.get("components", {}).get("aniRss", {})
+    if not isinstance(ani_rss, dict):
+        raise ConfigError("components.aniRss must be an object")
     if ani_rss:
         endpoint = str(ani_rss.get("endpoint") or "")
         if not endpoint.startswith(("http://", "https://")):
@@ -232,7 +383,10 @@ def _validate(data: Any) -> dict[str, Any]:
             raise ConfigError("components.aniRss.syncMinutes must be at least 5")
         if not 1 <= delete_grace <= 10:
             raise ConfigError("components.aniRss.deleteGraceSyncs must be between 1 and 10")
-    for source in data.get("externalLibraries", []):
+    external_libraries = data.get("externalLibraries", [])
+    if not isinstance(external_libraries, list) or not all(isinstance(source, dict) for source in external_libraries):
+        raise ConfigError("externalLibraries must be a list of objects")
+    for source in external_libraries:
         if source.get("readOnly") is not True:
             raise ConfigError("external libraries must be explicitly read-only")
         try:
@@ -242,6 +396,8 @@ def _validate(data: Any) -> dict[str, Any]:
         if scan_minutes < 5:
             raise ConfigError("external library scanMinutes must be at least 5")
     performance = data.get("performance", {})
+    if not isinstance(performance, dict):
+        raise ConfigError("performance must be an object")
     limits = {"initialTorrentBatch": (0, 10000), "poolScanWorkers": (0, 16),
               "poolCommitEvery": (25, 2000), "libraryCommitEvery": (10, 2000),
               "asyncPlanThreshold": (10, 10000)}
@@ -258,11 +414,19 @@ def _validate(data: Any) -> dict[str, Any]:
     if performance.get("catalogReadDuringSync", True) is not True:
         raise ConfigError("performance.catalogReadDuringSync must remain enabled")
     playback = data.get("playback", {})
-    idle = int(playback.get("playlistIdleSeconds", playback.get("playlistTtlSeconds", 43200)))
-    maximum = int(playback.get("playlistMaximumSeconds", 604800))
+    if not isinstance(playback, dict):
+        raise ConfigError("playback must be an object")
+    try:
+        idle = int(playback.get("playlistIdleSeconds", playback.get("playlistTtlSeconds", 43200)))
+        maximum = int(playback.get("playlistMaximumSeconds", 604800))
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("playback session lifetime values must be integers") from exc
     if idle < 900 or idle > 172800 or maximum < idle or maximum > 2592000:
         raise ConfigError("playback session lifetime is invalid")
-    for mapping in playback.get("directPathMappings", []):
+    direct_path_mappings = playback.get("directPathMappings", [])
+    if not isinstance(direct_path_mappings, list) or not all(isinstance(mapping, dict) for mapping in direct_path_mappings):
+        raise ConfigError("playback.directPathMappings must be a list of objects")
+    for mapping in direct_path_mappings:
         if not str(mapping.get("serverPathPrefix") or "").strip() or not str(mapping.get("clientPathPrefix") or "").strip():
             raise ConfigError("playback direct path mappings require serverPathPrefix and clientPathPrefix")
     if not isinstance(policy.get("contentClasses"), dict) or not policy["contentClasses"]:
@@ -270,16 +434,31 @@ def _validate(data: Any) -> dict[str, Any]:
     allow_unlisted = policy.get("allowUnlisted", {})
     if any(not isinstance(allow_unlisted.get(key, True), bool) for key in ("resourceGroup", "sourceClass", "resolution", "subtitle")):
         raise ConfigError("torrentPolicy.allowUnlisted values must be boolean")
-    families = policy.get("sourceFamilies", {})
+    families = policy.get("sourceFamilies")
+    if not isinstance(families, dict):
+        raise ConfigError("torrentPolicy.sourceFamilies must be an object")
     if not all(isinstance(families.get(name), list) and families[name] for name in ("archive", "serial")):
         raise ConfigError("torrentPolicy.sourceFamilies must define archive and serial classes")
-    if policy.get("serialSubtitle", {}).get("language", "auto") not in {"auto", "zh", "en", "ja"}:
+    serial_subtitle = policy.get("serialSubtitle")
+    if not isinstance(serial_subtitle, dict):
+        raise ConfigError("torrentPolicy.serialSubtitle must be an object")
+    if serial_subtitle.get("language", "auto") not in {"auto", "zh", "en", "ja"}:
         raise ConfigError("torrentPolicy.serialSubtitle.language is invalid")
+    strategy_order = policy.get("strategyOrder")
+    strategy_dimensions = {
+        "resourceCompleteness", "releaseStrategy", "seriesCompleteness", "resourceGroup",
+        "collectionOrRevision", "attachmentCompleteness", "sourceClass", "resolution", "subtitle",
+        "bitDepth", "torrentCreationDate", "size",
+    }
+    if (not isinstance(strategy_order, list) or not strategy_order
+            or len(strategy_order) != len(set(strategy_order))
+            or any(value not in strategy_dimensions for value in strategy_order)):
+        raise ConfigError("torrentPolicy.strategyOrder must contain unique supported dimensions")
     group_ids = {str(item.get("id")) for item in policy.get("resourceGroups", [])}
     if not policy.get("archiveGroupIds") or not set(map(str, policy["archiveGroupIds"])).issubset(group_ids):
         raise ConfigError("torrentPolicy.archiveGroupIds must reference configured resource groups")
     download = data["download"]
-    if download.get("defaultStartMode", "stopped") != "stopped":
+    if download.get("defaultStartMode") != "stopped":
         raise ConfigError("download.defaultStartMode must remain stopped")
     differential = data.get("differentialPlanning", {})
     if not isinstance(differential, dict):
@@ -359,7 +538,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG, cache_path: Path | None = DE
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8-sig"))
             if all(cached.get(k) == v for k, v in identity.items()):
-                return _runtime_view(apply_runtime_overrides(_validate(cached["config"]))), {**identity, "sha256": cached["sha256"], "cacheHit": True}
+                return _runtime_view(_validate(apply_runtime_overrides(_validate(cached["config"])))), {**identity, "sha256": cached["sha256"], "cacheHit": True}
         except (OSError, ValueError, KeyError, ConfigError):
             pass
 
@@ -368,7 +547,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG, cache_path: Path | None = DE
     fingerprint = hashlib.sha256(raw).hexdigest()
     if cache_path is not None:
         _atomic_json(cache_path, {**identity, "sha256": fingerprint, "config": data})
-    return _runtime_view(apply_runtime_overrides(data)), {**identity, "sha256": fingerprint, "cacheHit": False}
+    return _runtime_view(_validate(apply_runtime_overrides(data))), {**identity, "sha256": fingerprint, "cacheHit": False}
 
 
 def main() -> None:

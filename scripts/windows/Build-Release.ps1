@@ -71,7 +71,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $root "scripts\unix\$name") -Destination (Join-Path $release $name)
     }
     Copy-Item -LiteralPath (Join-Path $root 'deploy\local\.env.local.example') -Destination (Join-Path $release '.env.local.example')
-    foreach ($name in @('README.md','README.en.md','README.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
+    foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
         Copy-Item -LiteralPath (Join-Path $root $name) -Destination $release
     }
     Get-ChildItem -LiteralPath (Join-Path $root 'docs') -Filter '*.md' -File |

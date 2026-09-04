@@ -38,6 +38,53 @@ class ImageFallbackTests(unittest.TestCase):
                 self.assertEqual("image/webp",mime); self.assertTrue(data)
                 service.get_anime_image(db,1); self.assertEqual(1,binary.call_count)
 
+    def test_refresh_keeps_identical_cached_blob_and_only_advances_validation_time(self):
+        buffer = io.BytesIO(); Image.new("RGB", (20, 30), "red").save(buffer, "PNG")
+        image, mime = service.network_validators.image_bytes(buffer.getvalue(), "image/png")
+        with tempfile.TemporaryDirectory() as raw:
+            db = self.database(raw)
+            with contextlib.closing(sqlite3.connect(db)) as connection:
+                connection.execute(
+                    "INSERT INTO anime_image(anime_id,mime_type,image_blob,source_url,fetched_at,error) VALUES(1,?,?,?,?,NULL)",
+                    (mime, image, "https://old.invalid/a.webp", "2026-08-01T00:00:00+00:00"),
+                )
+                connection.commit()
+            subject = {"images": {"large": "https://lain.bgm.tv/pic/cover/l/a.jpg"}}
+            with mock.patch.object(service.network_sources, "fetch_json", return_value=(subject, "direct")), \
+                    mock.patch.object(service.network_sources, "fetch_binary", return_value=(image, mime, "https://lain.bgm.tv/pic/cover/l/a.jpg")):
+                refreshed = service.get_anime_image(db, 1, refresh=True)
+            self.assertEqual((image, mime), refreshed)
+            with contextlib.closing(sqlite3.connect(db)) as connection:
+                blob, source_url, fetched_at, error = connection.execute(
+                    "SELECT image_blob,source_url,fetched_at,error FROM anime_image WHERE anime_id=1"
+                ).fetchone()
+            self.assertEqual(image, blob)
+            self.assertEqual("https://lain.bgm.tv/pic/cover/l/a.jpg", source_url)
+            self.assertNotEqual("2026-08-01T00:00:00+00:00", fetched_at)
+            self.assertIsNone(error)
+
+    def test_refresh_failure_keeps_healthy_cache_eligible_for_future_checks(self):
+        buffer = io.BytesIO(); Image.new("RGB", (20, 30), "red").save(buffer, "PNG")
+        image, mime = service.network_validators.image_bytes(buffer.getvalue(), "image/png")
+        with tempfile.TemporaryDirectory() as raw:
+            db = self.database(raw)
+            with contextlib.closing(sqlite3.connect(db)) as connection:
+                connection.execute(
+                    "INSERT INTO anime_image(anime_id,mime_type,image_blob,source_url,fetched_at,error) VALUES(1,?,?,?,?,NULL)",
+                    (mime, image, "https://old.invalid/a.webp", "2026-08-01T00:00:00+00:00"),
+                )
+                connection.commit()
+            with mock.patch.object(service.network_sources, "fetch_json", side_effect=RuntimeError("offline")):
+                refreshed = service.get_anime_image(db, 1, refresh=True)
+            self.assertEqual((image, mime), refreshed)
+            with contextlib.closing(sqlite3.connect(db)) as connection:
+                blob, fetched_at, error = connection.execute(
+                    "SELECT image_blob,fetched_at,error FROM anime_image WHERE anime_id=1"
+                ).fetchone()
+            self.assertEqual(image, blob)
+            self.assertNotEqual("2026-08-01T00:00:00+00:00", fetched_at)
+            self.assertIsNone(error)
+
     def test_corrupt_persistent_cache_is_replaced_atomically(self):
         buffer=io.BytesIO(); Image.new("RGB",(20,30),"blue").save(buffer,"PNG")
         with tempfile.TemporaryDirectory() as raw:
@@ -95,9 +142,31 @@ class ImageFallbackTests(unittest.TestCase):
                 error=connection.execute("SELECT error FROM anime_image WHERE anime_id=1").fetchone()[0]
             self.assertIn("offline", error)
 
+    def test_transient_cover_failure_is_immediately_retryable_after_network_recovery(self):
+        with tempfile.TemporaryDirectory() as raw:
+            db = self.database(raw)
+            with mock.patch.object(service.network_sources, "fetch_json", side_effect=RuntimeError("offline")):
+                service.get_anime_image(db, 1)
+            _cached, state = service.get_cached_anime_image(db, 1)
+            self.assertEqual("transient_error", state)
+
+            buffer = io.BytesIO(); Image.new("RGB", (20, 30), "blue").save(buffer, "PNG")
+            image, mime = service.network_validators.image_bytes(buffer.getvalue(), "image/png")
+            subject = {"images": {"large": "https://lain.bgm.tv/pic/cover/l/recovered.jpg"}}
+            with mock.patch.object(service.network_sources, "fetch_json", return_value=(subject, "direct")), \
+                    mock.patch.object(service.network_sources, "fetch_binary", return_value=(image, mime, "https://lain.bgm.tv/pic/cover/l/recovered.jpg")):
+                recovered = service.get_anime_image(db, 1)
+            self.assertIsNotNone(recovered)
+            self.assertNotEqual("image/svg+xml", recovered[1])
+            cached, state = service.get_cached_anime_image(db, 1)
+            self.assertIsNotNone(cached)
+            self.assertEqual("available", state)
+
     def test_placeholder_response_is_explicit_and_well_formed(self):
         class Fetcher:
             def enqueue(self, *_args, **_kwargs): return True
+            def pending(self, *_args, **_kwargs): return False
+            def result(self, *_args, **_kwargs): return None
         with tempfile.TemporaryDirectory() as raw, mock.patch.dict("os.environ", {
                 "ANM_AUTH_ENABLED":"false", "ANM_AUTH_DB":str(Path(raw)/"auth.sqlite3")}):
             db=self.database(raw)
@@ -110,7 +179,7 @@ class ImageFallbackTests(unittest.TestCase):
                     body=response.read()
                     self.assertEqual(200,response.status)
                     self.assertEqual("image/svg+xml",response.headers.get_content_type())
-                    self.assertEqual("queued",response.headers["X-AnimeMachine-Image-Status"])
+                    self.assertEqual("loading",response.headers["X-AnimeMachine-Image-Status"])
                     self.assertEqual("1",response.headers["Retry-After"])
                     self.assertEqual(len(body),int(response.headers["Content-Length"]))
             finally:

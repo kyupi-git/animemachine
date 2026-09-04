@@ -46,23 +46,22 @@ def download(url: str, destination: Path, *, expected_size: int | None = None,
     headers = {"Range": f"bytes={offset}-", "Accept-Encoding": "identity"} if offset else {"Accept-Encoding": "identity"}
     maximum = int(expected_size) if expected_size is not None else 512 * 1024 * 1024
     final_url = url
-    with transport.host_slot(url):
-        with transport.client(url).stream("GET", url, headers=headers, timeout=timeout) as response:
-            response.raise_for_status()
-            final_url = str(response.url)
-            mode = "ab" if offset and response.status_code == 206 else "wb"
-            if mode == "wb":
-                offset = 0
-            declared = response.headers.get("content-length", "")
-            if declared.isdigit() and offset + int(declared) > maximum:
-                raise ValueError("asset exceeds configured limit")
-            received = offset
-            with partial.open(mode) as stream:
-                for chunk in response.iter_bytes(1024 * 1024):
-                    received += len(chunk)
-                    if received > maximum:
-                        raise ValueError("asset exceeds configured limit")
-                    stream.write(chunk)
+    with transport.stream("GET", url, headers=headers, timeout=timeout) as response:
+        response.raise_for_status()
+        final_url = str(response.url)
+        mode = "ab" if offset and response.status_code == 206 else "wb"
+        if mode == "wb":
+            offset = 0
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and offset + int(declared) > maximum:
+            raise ValueError("asset exceeds configured limit")
+        received = offset
+        with partial.open(mode) as output:
+            for chunk in response.iter_bytes(1024 * 1024):
+                received += len(chunk)
+                if received > maximum:
+                    raise ValueError("asset exceeds configured limit")
+                output.write(chunk)
     size = partial.stat().st_size
     if expected_size is not None and size != expected_size:
         raise ValueError("asset size mismatch")
@@ -72,6 +71,7 @@ def download(url: str, destination: Path, *, expected_size: int | None = None,
             digest.update(block)
     sha256 = digest.hexdigest()
     if expected_sha256 and sha256.casefold() != expected_sha256.casefold():
+        partial.unlink(missing_ok=True)
         raise ValueError("asset digest mismatch")
     os.replace(partial, destination)
     return {"size": size, "sha256": sha256, "url": final_url}
@@ -80,7 +80,7 @@ def download(url: str, destination: Path, *, expected_size: int | None = None,
 def _probe(url: str, sample_size: int = 256 * 1024) -> dict:
     started = time.monotonic(); received = 0
     timeout = httpx.Timeout(connect=6, read=8, write=8, pool=6)
-    with transport.client(url).stream("GET", url, headers={"Range": f"bytes=0-{sample_size-1}", "Accept-Encoding":"identity"}, timeout=timeout) as response:
+    with transport.stream("GET", url, headers={"Range": f"bytes=0-{sample_size-1}", "Accept-Encoding":"identity"}, timeout=timeout) as response:
         response.raise_for_status()
         range_supported = False
         if response.status_code == 206:
@@ -106,7 +106,7 @@ def _stream_range(url: str, path: Path, start: int, end: int, progress: Callable
     timeout = httpx.Timeout(connect=8, read=45, write=20, pool=8)
     while existing < segment_size:
         cursor = start + existing
-        with transport.client(url).stream("GET", url, headers={"Range":f"bytes={cursor}-{end}","Accept-Encoding":"identity"}, timeout=timeout) as response:
+        with transport.stream("GET", url, headers={"Range":f"bytes={cursor}-{end}","Accept-Encoding":"identity"}, timeout=timeout) as response:
             response.raise_for_status()
             _returned_start, returned_end = _content_range(response, cursor, end, expected_total)
             expected_response_size = returned_end - cursor + 1
@@ -146,7 +146,7 @@ def _stream_file(url: str, path: Path, expected_size: int,
         headers = {"Accept-Encoding":"identity"}
         if existing:
             headers["Range"] = f"bytes={existing}-{expected_size-1}"
-        with transport.client(url).stream("GET",url,headers=headers,timeout=timeout) as response:
+        with transport.stream("GET", url, headers=headers, timeout=timeout) as response:
             response.raise_for_status()
             if existing and response.status_code == 206:
                 _start, returned_end = _content_range(response, existing, expected_size-1, expected_size)
@@ -215,7 +215,9 @@ def download_verified(urls: Iterable[str], destination: Path, *, expected_size: 
     # nearby proxy answers the probe first but later drops a large transfer:
     # the original GitHub Release URL can still resume the same segment.
     probed_range=[item["url"] for item in probes if item["range"]]
-    range_capable=list(dict.fromkeys(probed_range + values)) if probed_range else []
+    probed_non_range=[item["url"] for item in probes if not item["range"]]
+    range_capable=(list(dict.fromkeys(probed_range + [url for url in values if url not in probed_non_range]))
+                   if probed_range else [])
     if range_capable:
         count=max(1,min(4,segments,expected_size//(8*1024*1024) or 1))
         bounds=[]
@@ -242,13 +244,37 @@ def download_verified(urls: Iterable[str], destination: Path, *, expected_size: 
                             break
                         time.sleep(max(0.0,retry_backoff) * (2**attempt))
             raise RuntimeError("range failed: "+";".join(errors))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=count) as pool:
-            used=[future.result() for future in [pool.submit(segment_job,item) for item in bounds]]
-        with partial.open("wb") as output:
-            for _start,_end,path in bounds:
-                with path.open("rb") as source:
-                    while chunk:=source.read(4*1024*1024): output.write(chunk)
-                path.unlink(missing_ok=True)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=count) as pool:
+                used=[future.result() for future in [pool.submit(segment_job,item) for item in bounds]]
+        except RuntimeError:
+            if not probed_non_range:
+                raise
+            errors=[]; used=[]
+            for url in probed_non_range:
+                for attempt in range(attempts_per_source):
+                    try:
+                        done=partial.stat().st_size if partial.exists() else 0
+                        _stream_file(url,partial,expected_size,report)
+                        used=[url]
+                        break
+                    except RangeProtocolError as exc:
+                        errors.append(f"{url}:{type(exc).__name__}")
+                        break
+                    except Exception as exc:
+                        errors.append(f"{url}:{type(exc).__name__}")
+                        if not _retryable(exc) or attempt+1>=attempts_per_source: break
+                        time.sleep(max(0.0,retry_backoff)*(2**attempt))
+                if partial.exists() and partial.stat().st_size==expected_size:
+                    break
+            else:
+                raise RuntimeError("all download streams failed: "+";".join(errors))
+        else:
+            with partial.open("wb") as output:
+                for _start,_end,path in bounds:
+                    with path.open("rb") as source:
+                        while chunk:=source.read(4*1024*1024): output.write(chunk)
+                    path.unlink(missing_ok=True)
     else:
         errors=[]
         for url in ranked:
@@ -273,6 +299,10 @@ def download_verified(urls: Iterable[str], destination: Path, *, expected_size: 
     with partial.open("rb") as stream:
         while chunk:=stream.read(4*1024*1024): digest.update(chunk)
     actual=digest.hexdigest()
-    if actual.casefold()!=expected_sha256.casefold(): raise ValueError("asset digest mismatch")
+    if actual.casefold()!=expected_sha256.casefold():
+        partial.unlink(missing_ok=True)
+        raise ValueError("asset digest mismatch")
     os.replace(partial,destination)
+    for path in destination.parent.glob(partial.name+".*"):
+        path.unlink(missing_ok=True)
     return {"size":expected_size,"sha256":actual,"urls":list(dict.fromkeys(used))}

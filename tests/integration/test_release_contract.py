@@ -45,7 +45,9 @@ class ReleaseContractTests(unittest.TestCase):
         dockerfile = (ROOT / "packaging" / "docker" / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn('org.opencontainers.image.title="AnimeMachine"', dockerfile)
         self.assertIn('org.opencontainers.image.source="https://github.com/kyupi-git/animemachine"', dockerfile)
-        self.assertIn('ENTRYPOINT ["animemachine"]', dockerfile)
+        self.assertIn('ENTRYPOINT ["python", "/opt/animemachine/docker-entrypoint.py"]', dockerfile)
+        self.assertIn("ANM_DOCKER_UPDATE_RUNTIME=1", dockerfile)
+        self.assertIn("COPY packaging/docker/entrypoint.py", dockerfile)
         self.assertNotIn("COPY scripts/", dockerfile)
         self.assertNotIn("COPY deploy/", dockerfile)
         self.assertIn("COPY pyproject.toml VERSION", dockerfile)
@@ -77,8 +79,11 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("linux/amd64,linux/arm64", workflow)
         self.assertRegex(workflow, r"docker/build-push-action@[0-9a-f]{40} # v6")
         self.assertIn("gh release create", workflow)
+        self.assertIn("animemachine-*-py3-none-any.whl", workflow)
+        self.assertIn("release-app", workflow)
         self.assertIn("type=semver,pattern={{version}}", workflow)
-        self.assertTrue((ROOT / ".github" / "release-notes" / "v0.1.0.md").is_file())
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertTrue((ROOT / ".github" / "release-notes" / f"v{version}.md").is_file())
 
     def test_four_compose_modes_are_config_complete(self):
         directories = sorted(path for path in (ROOT / "deploy" / "compose").iterdir() if path.is_dir())
@@ -89,6 +94,8 @@ class ReleaseContractTests(unittest.TestCase):
             template = (directory / ".env.example").read_text(encoding="utf-8")
             self.assertIn("animemachine:", compose)
             self.assertIn('ANM_WEB_PORT: "8787"', compose)
+            self.assertIn('ANM_BIND_ADDRESS: "0.0.0.0"', compose)
+            self.assertIn('${ANM_BIND_ADDRESS:-0.0.0.0}:${ANM_WEB_PORT:-8787}:8787', compose)
             self.assertNotIn("env_file: .env", compose)
             self.assertIn("env_file: ${ANM_ENV_FILE:-.env}", compose)
             material = compose + (collector if directory.name.startswith(("03-", "04-")) else "")
@@ -190,6 +197,8 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("BUILD-INFO.json", windows)
         self.assertIn("BUILD-INFO.json", unix)
         self.assertIn("pip wheel", windows)
+        self.assertIn("CHANGELOG.md", windows)
+        self.assertIn("CHANGELOG.md", unix)
         self.assertNotIn("GitHub", (ROOT / "scripts" / "windows" / "Build-Release.cmd").read_text(encoding="utf-8"))
 
     def test_windows_release_workflow_uses_packaged_entrypoint(self):
@@ -207,6 +216,10 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn("compose.yaml", script)
             self.assertIn(".env.example", script)
             self.assertIn("torrent-collector.yaml", script)
+
+    def test_local_environment_template_has_shell_safe_assignment_examples(self):
+        template = (ROOT / "deploy" / "local" / ".env.local.example").read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r"^#[ \t]*[A-Z][A-Z0-9_]*=[^\r\n]*[ \t]+#[ \t]+", template, re.MULTILINE))
 
     def test_local_template_covers_external_connections(self):
         template = (ROOT / "deploy" / "local" / ".env.local.example").read_text(encoding="utf-8")
@@ -247,7 +260,7 @@ class ReleaseContractTests(unittest.TestCase):
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('dynamic = ["version"]', project)
         self.assertIn('version = {file = ["VERSION"]}', project)
-        self.assertNotIn('version = "0.1.0"', project)
+        self.assertNotRegex(project, r'(?m)^version\s*=\s*"\d+\.\d+\.\d+"')
         self.assertEqual("3.14", (ROOT / "RELEASE_PYTHON_VERSION").read_text(encoding="utf-8").strip())
 
     def test_three_language_documents_share_operational_contracts(self):

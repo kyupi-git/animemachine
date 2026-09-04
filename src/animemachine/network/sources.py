@@ -43,12 +43,14 @@ def ordered(endpoints: Iterable[str]) -> list[str]:
 
 def fetch_json(endpoints: Iterable[str], *, timeout: float = 12, cooldown: int = 900,
                headers: dict[str, str] | None = None, attempts: int = 1,
-               hedge_delays: tuple[float, ...] = (0, .8, 1.5)) -> tuple[Any, str]:
+               hedge_delays: tuple[float, ...] = (0, .8, 1.5),
+               service: str = "json", capability: str = "json", honor_cooldown: bool = False) -> tuple[Any, str]:
     del cooldown
     payload, _endpoint, final_url = first_valid(
-        _endpoints(endpoints, "json"), capability="json", headers=headers,
+        _endpoints(endpoints, service), capability=capability, headers=headers,
         timeout=timeout, validator=lambda data, _mime: json_bytes(data, limit=4 * 1024 * 1024), health=_health(),
-        attempts_per_endpoint=attempts, hedge_delays=hedge_delays, max_bytes=4 * 1024 * 1024)
+        attempts_per_endpoint=attempts, hedge_delays=hedge_delays, max_bytes=4 * 1024 * 1024,
+        honor_cooldown=honor_cooldown)
     return payload, final_url
 
 
@@ -63,16 +65,18 @@ def fetch_binary(endpoints: Iterable[str], *, timeout: float = 30, cooldown: int
                  limit: int = 8 * 1024 * 1024, headers: dict[str, str] | None = None,
                  validator: Callable[[bytes, str], T] | None = None,
                  attempts: int = 1,
-                 hedge_delays: tuple[float, ...] = (0, .8, 1.5)) -> tuple[T | bytes, str, str]:
+                 hedge_delays: tuple[float, ...] = (0, .8, 1.5),
+                 service: str = "binary", capability: str = "binary",
+                 honor_cooldown: bool = False) -> tuple[T | bytes, str, str]:
     del cooldown
     def validate(data: bytes, mime: str):
         if len(data) > limit: raise ValueError("response exceeds configured limit")
         normalized_mime = mime.split(";", 1)[0].strip()
         return validator(data, normalized_mime) if validator else (data, normalized_mime)
     result, _endpoint, final_url = first_valid(
-        _endpoints(endpoints, "binary"), capability="binary", headers=headers,
+        _endpoints(endpoints, service), capability=capability, headers=headers,
         timeout=timeout, validator=validate, health=_health(), attempts_per_endpoint=attempts,
-        hedge_delays=hedge_delays, max_bytes=limit)
+        hedge_delays=hedge_delays, max_bytes=limit, honor_cooldown=honor_cooldown)
     if validator:
         data, mime = result
     else:

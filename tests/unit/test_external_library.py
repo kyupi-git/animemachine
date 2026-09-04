@@ -78,6 +78,44 @@ class ExternalLibraryTests(unittest.TestCase):
             with contextlib.closing(sqlite3.connect(db_path)) as db:
                 self.assertEqual(2, db.execute("SELECT anime_id FROM external_media_file").fetchone()[0])
 
+    def test_overlapping_external_scan_is_skipped_instead_of_queued(self):
+        source = {"id": "ani-rss", "kind": "ani-rss", "enabled": True,
+                  "path": "/unused", "readOnly": True}
+        lock = external_library._source_scan_lock("ani-rss")
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            result = external_library.scan(Path("/unused/catalog.sqlite3"), [source])
+        finally:
+            lock.release()
+        self.assertEqual(0, result["sources"])
+        self.assertEqual(1, result["deferred"])
+
+    def test_busy_source_does_not_block_independent_external_source(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_path = root / "catalog.sqlite3"
+            media = root / "other" / "作品名"
+            media.mkdir(parents=True)
+            (media / "作品名 - EP01.mkv").write_bytes(b"media")
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                db.executescript("""CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,start_month TEXT,media_code TEXT);
+                    CREATE TABLE anime_title(anime_id INTEGER,title TEXT);""")
+                db.execute("INSERT INTO anime_work VALUES(1,'作品名',NULL,NULL,'2026-01','tv')")
+                db.execute("INSERT INTO anime_title VALUES(1,'作品名')")
+                db.commit()
+            busy = external_library._source_scan_lock("ani-rss-media")
+            self.assertTrue(busy.acquire(blocking=False))
+            try:
+                result = external_library.scan(db_path, [{
+                    "id": "other", "kind": "generic", "enabled": True,
+                    "path": str(root / "other"), "readOnly": True,
+                }])
+            finally:
+                busy.release()
+            self.assertEqual(1, result["sources"])
+            self.assertEqual(0, result["deferred"])
+            self.assertEqual(1, result["verified"])
+
     def test_writable_external_source_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

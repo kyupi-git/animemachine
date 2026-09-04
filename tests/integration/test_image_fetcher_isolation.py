@@ -134,6 +134,65 @@ class ImageFetcherIsolationTests(unittest.TestCase):
                 fetcher.close()
         source.shutdown(); source.server_close(); source_thread.join(2)
 
+    def test_bulk_image_refresh_counts_offline_queue_rejections_as_failures(self):
+        class RejectingFetcher:
+            def enqueue(self, _anime_id, _network, **_kwargs): return False
+            def pending(self, _anime_id): return False
+            def result(self, _anime_id): return None
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw, mock.patch.dict(os.environ, {
+                "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw) / "auth.sqlite3")}, clear=False):
+            db_path = self.database(raw)
+            store = ConfigStore(Path(raw) / "config.json", service.EXAMPLE_CONFIG)
+            handler = service.make_handler(db_path, store, submission_enabled=False,
+                                           image_fetcher=RejectingFetcher(), start_warmup=False)
+            handler.log_message = lambda *_args: None
+            web = DaemonServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=web.serve_forever, daemon=True); thread.start()
+            base = f"http://127.0.0.1:{web.server_port}"
+            try:
+                request = urllib.request.Request(
+                    base + "/api/images/refresh", method="POST", data=b'{"priorityAnimeIds":[1,2]}',
+                    headers={"Content-Type":"application/json"})
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    self.assertEqual(202, response.status)
+                    started = json.loads(response.read())
+                self.assertTrue(started["started"])
+                deadline = time.monotonic() + 3
+                state = {}
+                while time.monotonic() < deadline:
+                    with urllib.request.urlopen(base + "/api/maintenance/status", timeout=3) as response:
+                        state = json.loads(response.read())["images"]
+                    if state.get("state") == "complete": break
+                    time.sleep(.02)
+                self.assertEqual("complete", state.get("state"))
+                self.assertEqual(50, state.get("total"))
+                self.assertEqual(50, state.get("done"))
+                self.assertEqual(50, state.get("failed"))
+                self.assertEqual(2, state.get("priorityDone"))
+            finally:
+                web.shutdown(); web.server_close(); thread.join(2)
+
+    def test_single_worker_still_services_background_prefetch(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            db_path = self.database(raw)
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute(
+                    "INSERT INTO anime_image(anime_id,mime_type,image_blob,fetched_at) VALUES(1,'image/png',?,datetime('now'))",
+                    (PNG,),
+                )
+            fetcher = ImageFetcher(db_path, workers=1, host_limit=1)
+            try:
+                self.assertTrue(fetcher.enqueue(1, {}, priority="prefetch"))
+                deadline = time.monotonic() + 5
+                while fetcher.pending(1) and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertFalse(fetcher.pending(1))
+                self.assertEqual("available", fetcher.result(1))
+                self.assertEqual(1, fetcher.snapshot()["budget"]["effectiveConcurrency"])
+            finally:
+                fetcher.close()
+
 
 if __name__ == "__main__":
     unittest.main()

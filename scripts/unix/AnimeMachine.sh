@@ -13,6 +13,9 @@ else
   exit 1
 fi
 
+export ANM_INSTALL_ROOT="$root"
+if [ "$release" -eq 1 ]; then export ANM_INSTALL_MODE=portable; else export ANM_INSTALL_MODE=source; fi
+
 if [ "$release" -eq 1 ]; then
   env_example="$root/.env.local.example"
   env_file="$root/.env.local"

@@ -2,7 +2,7 @@ name: animemachine
 
 services:
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
     restart: unless-stopped
     init: true
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -19,6 +19,7 @@ services:
       ANM_MANAGED_ANI_RSS: "false"
       ANM_SUBMISSION_ENABLED: "true"
       ANM_WEB_PORT: "8787"
+      ANM_BIND_ADDRESS: "0.0.0.0"
     volumes:
       - ${ANM_CONFIG_DIR:-./config}:/Config
       - ${ANM_DATA_DIR:-./data}:/Data

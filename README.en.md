@@ -1,5 +1,5 @@
 [中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)  
-[README](README.en.md) | [Deployment and Usage Guide](docs/guide.en.md) | [Architecture and Database](docs/architecture.en.md)
+[README](README.en.md) | [Deployment and Usage Guide](docs/guide.en.md) | [Architecture and Database](docs/architecture.en.md) | [Changelog](CHANGELOG.md)
 
 # AnimeMachine · Automated Anime Library
 
@@ -17,7 +17,7 @@ If the path from “resource discovery” to “stored in the library” is brok
 
 ![AnimeMachine player handoff](docs/images/playback.png)
 
-*Player handoff: AnimeMachine generates an M3U playlist for the complete work and passes it to a local player. Playback can start from a selected episode while keeping the full episode sequence, on any platform with a compatible player such as VLC or PotPlayer. An Ani-RSS API connection can also supply a playlist without local AnimeMachine storage and can receive new-series subscriptions.*
+*Player handoff: AnimeMachine generates an M3U playlist for the complete work and passes it to a local player. Playback can start from a selected episode while keeping the full episode sequence, on any platform with a compatible player such as VLC or PotPlayer. An Ani-RSS API connection can also supply an HTTP-proxied playlist without a mounted Ani-RSS media directory, including byte-range seeking and short-interruption resume, and can receive new-series subscriptions.*
 
 ![AnimeMachine relationship graph](docs/images/relationship-graph.png)
 
@@ -28,7 +28,7 @@ If the path from “resource discovery” to “stored in the library” is brok
 - The anime base catalog is built from Bangumi Archive. On first startup, AnimeMachine builds a local SQLite Catalog in the background and publishes it atomically after integrity checks succeed.
 - The Torrent pool is scanned incrementally. Files whose fingerprints have not changed are not parsed again; even during a large full scan, completed batches can already be queried and used for resource selection.
 - Automated Docker layouts can enable Torrent Collector. It combines title, Torrent-manifest, and local-Catalog evidence into `accept / reject / defer`: only `accept` is written to the shared Torrent pool, while insufficient evidence remains `defer` instead of guessing completeness from a fixed episode span. Weekly episode releases can be subscribed through Ani-RSS and accessed remotely.
-- Download planning supports complete collections, episode/volume combinations, differential completion, and adding file selections to an existing task with the same infohash. AnimeMachine-managed qBittorrent jobs are planned first and can be submitted in a stopped state according to the user's choice.
+- Download planning supports complete collections, episode/volume combinations, differential completion, and adding file selections to an existing task with the same infohash. AnimeMachine-managed qBittorrent jobs are planned first and are always submitted stopped; the user starts them in qBittorrent after confirming the plan.
 - The managed library can be a local media directory or a writable UNC/NAS directory. Existing media can also be mapped as an external read-only library without requiring migration or renaming.
 - qBittorrent, Ani-RSS, and Torrent Collector are all optional. They can be used independently or combined into a complete automated collection chain under Compose.
 - Playback generates M3U playlists for the system player, VLC, or PotPlayer. If server and client paths differ, a separate player-accessible path mapping can be configured.
@@ -47,7 +47,7 @@ See the [Deployment and Usage Guide](docs/guide.en.md#local-deployment) for deta
 
 `deploy/compose` provides four predefined layouts: (1) standalone AnimeMachine; (2) AnimeMachine with external qBittorrent; (3) Torrent Collector with bundled qBittorrent; and (4) a full stack in which Torrent Collector, qBittorrent, and Ani-RSS are managed by one Compose project. The first three layouts may connect to external Ani-RSS, while catalog, directory, Torrent Pool, and local-library management remain available without it.
 
-The presets use the public image `ghcr.io/kyupi-git/animemachine:latest`. Production deployments should pin a specific version tag.
+The 0.2.0 presets pin the public image `ghcr.io/kyupi-git/animemachine:0.2.0` by default. Changing it to `latest` makes Compose follow later releases; production deployments should keep a specific version tag pinned.
 
 Enter the selected directory, copy `.env.example` to `.env`, fill in host paths and required secrets, then run `docker compose up -d`. The four layouts define different component boundaries; the appropriate choice mainly depends on whether qBittorrent, Ani-RSS, and the media directories already run elsewhere. See the [Deployment and Usage Guide](docs/guide.en.md#docker-compose) for the complete configuration.
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os.path
@@ -410,7 +411,7 @@ def main() -> int:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--anime-id", type=int, help="also export one normalized graph as JSON")
     args = parser.parse_args()
-    with sqlite3.connect(args.db) as db:
+    with contextlib.closing(sqlite3.connect(args.db)) as db, db:
         db.row_factory = sqlite3.Row
         result: dict[str, Any] = dict(rebuild(db, force=args.force))
         if args.anime_id is not None:

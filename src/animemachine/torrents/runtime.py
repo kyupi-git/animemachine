@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from ..config.loader import (archive_group_enabled, canonical_resolution, option_enabled, resource_group_enabled,
-                        serial_group_matches, serial_profile_language,
+                        region_policy_enabled, serial_group_matches, serial_profile_language,
                         serial_rule_enabled, source_family)
 from . import differential as differential_plan
 from ..library import external as external_library
@@ -566,12 +566,55 @@ def physical_anime_id(db: sqlite3.Connection, anime_id: int) -> int:
     return current
 
 
-def library_status(db: sqlite3.Connection, anime_id: int) -> dict[str, Any]:
+def _ani_rss_external_status(db: sqlite3.Connection, anime_id: int) -> dict[str, Any] | None:
+    """Build read-only library targets from the last successful Ani-RSS media snapshot."""
+    try:
+        rows = list(db.execute("""SELECT ars.remote_id,ars.title,COUNT(*) AS file_count,
+            SUM(CASE WHEN arm.episode IS NOT NULL THEN 1 ELSE 0 END) AS episode_count
+            FROM ani_rss_subscription ars JOIN ani_rss_media arm ON arm.remote_id=ars.remote_id
+            WHERE ars.anime_id=? AND ars.deleted_at IS NULL
+            GROUP BY ars.remote_id,ars.title ORDER BY ars.enabled DESC,ars.title,ars.remote_id""", (anime_id,)))
+    except sqlite3.OperationalError:
+        return None
+    if not rows:
+        return None
+    targets = [{
+        "path": f"ani-rss:{row[0]}", "seriesPath": None, "state": "external",
+        "origin": "ani-rss_api", "inspectionMode": "external_readonly",
+        "fileCount": int(row[2] or 0), "observedFiles": int(row[2] or 0),
+        "observedEpisodes": int(row[3] or 0), "title": str(row[1] or row[0]),
+        "subtitleApplicable": False,
+    } for row in rows]
+    return {"state": "external", "managed": False, "preferredOrigin": "external",
+            "inspectionMode": "external_readonly", "targets": targets}
+
+
+def collection_state(db: sqlite3.Connection, anime_id: int, *, include_ani_rss: bool = True) -> str:
+    """Return the exclusive four-way user-facing library classification."""
+    anime_id = physical_anime_id(db, anime_id)
+    states = {str(row[0]) for row in db.execute(
+        "SELECT library_state FROM runtime_work WHERE anime_id=?", (anime_id,))}
+    if "existing" in states:
+        return "local"
+    if external_library.status(db, anime_id) or (include_ani_rss and _ani_rss_external_status(db, anime_id)):
+        return "external"
+    if states & {"queued", "downloading"}:
+        return "submitted"
+    return "not_in_library"
+
+
+def library_status(db: sqlite3.Connection, anime_id: int, *, include_ani_rss: bool = True) -> dict[str, Any]:
     anime_id = physical_anime_id(db, anime_id)
     works = [dict(row) for row in db.execute("SELECT * FROM runtime_work WHERE anime_id=? ORDER BY target_unc", (anime_id,))]
     external = external_library.status(db, anime_id)
+    ani_external = _ani_rss_external_status(db, anime_id) if include_ani_rss else None
     if not works:
-        return external or {"state": "not_in_library_catalog", "managed": False, "inspectionMode": "none", "targets": []}
+        if external and ani_external:
+            targets = [*external["targets"], *ani_external["targets"]]
+            return {"state": "external", "managed": False, "preferredOrigin": "external",
+                    "coexistingExternal": True, "externalComplete": False,
+                    "inspectionMode": "external_readonly", "targets": targets}
+        return external or ani_external or {"state": "not_in_library_catalog", "managed": False, "inspectionMode": "none", "targets": []}
     targets = []
     managed_any = False
     complete_managed_bdrip = False
@@ -617,6 +660,8 @@ def library_status(db: sqlite3.Connection, anime_id: int) -> dict[str, Any]:
         targets.append(item)
     if external:
         targets.extend(external["targets"])
+    if ani_external:
+        targets.extend(ani_external["targets"])
     state_order = {"existing": 9, "downloading": 8, "queued": 7, "external": 6, "placeholder": 5, "occupied_review": 4, "absent": 1}
     state = max((item["state"] for item in targets), key=lambda value: state_order.get(value, 0))
     preferred_origin = "native"
@@ -628,7 +673,7 @@ def library_status(db: sqlite3.Connection, anime_id: int) -> dict[str, Any]:
         # managed BDRip is still an episode/volume increment. Both stay visible.
         state = "external"; preferred_origin = "external"
     return {"state": state, "managed": managed_any, "preferredOrigin": preferred_origin,
-            "coexistingExternal": bool(external and managed_any), "externalComplete": external_complete,
+            "coexistingExternal": bool((external or ani_external) and managed_any), "externalComplete": external_complete,
             "inspectionMode": "mixed" if len({x["inspectionMode"] for x in targets}) > 1 else targets[0]["inspectionMode"], "targets": targets}
 
 
@@ -641,6 +686,10 @@ def acquisition_fingerprint(item: dict[str, Any]) -> tuple[Any, ...]:
 
 def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, Any]) -> list[dict[str, Any]]:
     anime_id = physical_anime_id(db, anime_id)
+    country_codes = [row[0] for row in db.execute(
+        "SELECT country_code FROM anime_country WHERE anime_id=?", (anime_id,)
+    )] if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_country'").fetchone() else []
+    region_enabled = region_policy_enabled(config.get("torrentPolicy", {}), country_codes)
     classes = {str(key).casefold(): bool(value) for key, value in config["torrentPolicy"]["contentClasses"].items()}
     groups = config["torrentPolicy"].get("resourceGroups", [])
     resolutions = config["torrentPolicy"].get("resolutions", {})
@@ -685,8 +734,10 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
         exact_partition = link_count == 1 or int(row["map_count"] or 0) == manifest_count
         long_running_blocked = bool(config.get("scope", {}).get("excludeLongRunningContinuous", False)) and row["scope_state"] == "excluded_long_running"
         scope_ok = row["scope_state"] != "excluded" and not long_running_blocked
-        eligible = bool(enabled and group_enabled and resolution_enabled and subtitle_enabled and scope_ok and row["scan_state"] != "reject" and row["metadata_state"] == "available" and manifest_count and exact_partition)
-        if not enabled:
+        eligible = bool(region_enabled and enabled and group_enabled and resolution_enabled and subtitle_enabled and scope_ok and row["scan_state"] != "reject" and row["metadata_state"] == "available" and manifest_count and exact_partition)
+        if not region_enabled:
+            reason = "region_disabled"
+        elif not enabled:
             reason = "source_class_disabled"
         elif not group_enabled:
             reason = "resource_group_disabled"

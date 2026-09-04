@@ -6,6 +6,7 @@ partial releases and ambiguous aliases remain in the operational review queue.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import re
@@ -258,7 +259,7 @@ def remap_hashes(metadata_db: Path, runtime_db: Path, config: dict[str, Any],
         return {"examined": 0, "mapped": 0, "review": 0, "partial": 0}
     placeholders = ",".join("?" for _ in hashes)
     values = tuple(sorted(hashes))
-    with sqlite3.connect(runtime_db) as runtime:
+    with contextlib.closing(sqlite3.connect(runtime_db)) as runtime, runtime:
         old_work_ids = [int(row[0]) for row in runtime.execute(
             f"SELECT DISTINCT work_id FROM torrent_work WHERE info_hash IN ({placeholders})", values)]
         runtime.execute(f"DELETE FROM torrent_work WHERE info_hash IN ({placeholders})", values)
@@ -381,13 +382,13 @@ def remap_one_work(metadata_db: Path, runtime_db: Path, config: dict[str, Any], 
     substring into verified identity: the same unique exact-title rules used
     by the batch mapper still make the final decision.
     """
-    with sqlite3.connect(metadata_db) as meta:
+    with contextlib.closing(sqlite3.connect(metadata_db)) as meta:
         aliases = [str(row[0]) for row in meta.execute(
             "SELECT title FROM anime_title WHERE anime_id=?", (int(anime_id),))]
     wanted = {norm(value) for value in aliases if len(norm(value)) >= 3}
     hashes: set[str] = set()
     examined = 0
-    with sqlite3.connect(runtime_db) as runtime:
+    with contextlib.closing(sqlite3.connect(runtime_db)) as runtime:
         runtime.row_factory = sqlite3.Row
         for row in runtime.execute("""SELECT info_hash,info_name,torrent_path FROM torrent
                 WHERE scan_state!='reject' AND COALESCE(metadata_state,'available')='available'

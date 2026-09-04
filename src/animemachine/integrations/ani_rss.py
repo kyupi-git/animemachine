@@ -8,6 +8,7 @@ an orthogonal runtime overlay; it does not overwrite the local library state.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import contextlib
 import datetime as dt
 import hashlib
@@ -15,6 +16,8 @@ import json
 import os
 import re
 import sqlite3
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,11 +29,12 @@ from typing import Any, Iterable
 import httpx
 from ..network import tls as tls_support
 from ..network import transport as network_transport
+from ..network import validators as network_validators
 from ..torrents import runtime as runtime_catalog
 from .. import __version__
 
 from ..config.loader import (archive_group_enabled, canonical_resolution, option_enabled,
-                        resource_group_enabled, serial_group_matches, serial_profile_language,
+                        region_policy_enabled, resource_group_enabled, serial_group_matches, serial_profile_language,
                         serial_rule_enabled, source_family, torrent_policy_eligible)
 
 
@@ -40,11 +44,29 @@ EPISODE = re.compile(r"(?i)(?:\b(?:ep(?:isode)?|e)[ ._-]*(\d{1,4})\b|第\s*(\d{1
 RESOLUTION = re.compile(r"(?i)(2160|1080|720|576|540|480)[pi]")
 SOURCE_CLASS = re.compile(r"(?i)\b(BD(?:Rip)?|DVD(?:Rip)?|WEB[ ._-]?(?:DL|Rip)|HDTV[ ._-]?Rip|TV[ ._-]?Rip)\b")
 
+_BACKGROUND_RESOURCE_SCAN_LOCK = threading.Lock()
+_COVER_FAILURE_LOCK = threading.Lock()
+_COVER_FAILURES: dict[str, tuple[int, float]] = {}
+_COVER_FAILURE_COOLDOWN_SECONDS = 30.0
+
+
+@contextlib.contextmanager
+def background_resource_scan_lease():
+    """Allow only one automatic Ani-RSS resource-discovery pass at a time."""
+    acquired = _BACKGROUND_RESOURCE_SCAN_LOCK.acquire(blocking=False)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            _BACKGROUND_RESOURCE_SCAN_LOCK.release()
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ani_rss_state(
   singleton INTEGER PRIMARY KEY CHECK(singleton=1),endpoint TEXT NOT NULL,version TEXT,
   connection_state TEXT NOT NULL,configured_mode TEXT NOT NULL,effective_mode TEXT NOT NULL,
-  last_attempt_at TEXT,last_success_at TEXT,last_error TEXT,successful_generation INTEGER NOT NULL DEFAULT 0
+  last_attempt_at TEXT,last_success_at TEXT,last_error TEXT,successful_generation INTEGER NOT NULL DEFAULT 0,
+  credential_fingerprint TEXT
 );
 CREATE TABLE IF NOT EXISTS ani_rss_subscription(
   remote_id TEXT PRIMARY KEY,anime_id INTEGER,title TEXT NOT NULL,bgm_id INTEGER,
@@ -53,6 +75,12 @@ CREATE TABLE IF NOT EXISTS ani_rss_subscription(
   missed_successful_syncs INTEGER NOT NULL DEFAULT 0,deleted_at TEXT,evidence_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_ani_rss_subscription_anime ON ani_rss_subscription(anime_id,remote_state);
+CREATE TABLE IF NOT EXISTS ani_rss_media(
+  remote_id TEXT NOT NULL,anime_id INTEGER NOT NULL,filename TEXT NOT NULL,episode REAL,title TEXT NOT NULL,
+  name TEXT NOT NULL,size INTEGER NOT NULL,extension TEXT NOT NULL,last_seen_at TEXT NOT NULL,
+  PRIMARY KEY(remote_id,filename)
+);
+CREATE INDEX IF NOT EXISTS ix_ani_rss_media_anime ON ani_rss_media(anime_id,remote_id,episode);
 CREATE TABLE IF NOT EXISTS ani_rss_resource(
   resource_id TEXT PRIMARY KEY,anime_id INTEGER NOT NULL,provider TEXT NOT NULL,resource_kind TEXT NOT NULL,
   title TEXT NOT NULL,resource_group TEXT,source_class TEXT,resolution INTEGER,subtitle TEXT,
@@ -61,6 +89,9 @@ CREATE TABLE IF NOT EXISTS ani_rss_resource(
   discovered_at TEXT NOT NULL,expires_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_ani_rss_resource_anime ON ani_rss_resource(anime_id,eligible,rank_key);
+CREATE TABLE IF NOT EXISTS ani_rss_search_state(
+  anime_id INTEGER PRIMARY KEY,last_attempt_at TEXT NOT NULL,last_success_at TEXT,result_count INTEGER NOT NULL DEFAULT 0,error_text TEXT
+);
 CREATE TABLE IF NOT EXISTS ani_rss_action(
   action_id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,anime_id INTEGER NOT NULL,
   resource_id TEXT NOT NULL,remote_id TEXT,action_kind TEXT NOT NULL,state TEXT NOT NULL,
@@ -75,6 +106,19 @@ def utcnow() -> str:
 
 def migrate(db: sqlite3.Connection) -> None:
     db.executescript(SCHEMA)
+    columns = {str(row[1]) for row in db.execute("PRAGMA table_info(ani_rss_state)")}
+    if "credential_fingerprint" not in columns:
+        db.execute("ALTER TABLE ani_rss_state ADD COLUMN credential_fingerprint TEXT")
+
+
+def _credential_fingerprint(key: str, endpoint: str) -> str:
+    """Return a non-secret generation marker for the active Ani-RSS credential."""
+    return hashlib.sha256(f"{endpoint}\0{key}".encode("utf-8")).hexdigest()
+
+
+def state_available(value: dict[str, Any]) -> bool:
+    """Use one health gate for every user-visible Ani-RSS overlay."""
+    return value.get("connection_state") == "ready" and bool(value.get("credentialConfigured"))
 
 
 def _settings(config: dict[str, Any]) -> dict[str, Any]:
@@ -86,6 +130,118 @@ def _settings(config: dict[str, Any]) -> dict[str, Any]:
     raw["syncMinutes"] = max(5, int(raw.get("syncMinutes", 30)))
     raw["deleteGraceSyncs"] = max(1, int(raw.get("deleteGraceSyncs", 2)))
     return raw
+
+
+def _month_index(value: str) -> int | None:
+    match = re.fullmatch(r"(\d{4})-(\d{2})", str(value or ""))
+    if not match:
+        return None
+    year, month = int(match.group(1)), int(match.group(2))
+    return year * 12 + month - 1 if 1 <= month <= 12 else None
+
+
+def automatic_search_eligible(start_month: str, *, today: dt.date | None = None) -> bool:
+    """Background Ani-RSS discovery is limited to the rolling latest 24 aired months."""
+    index = _month_index(start_month)
+    current = today or dt.date.today()
+    current_index = current.year * 12 + current.month - 1
+    return index is not None and current_index - 23 <= index <= current_index
+
+
+def _work_region_enabled(db: sqlite3.Connection, anime_id: int, config: dict[str, Any]) -> bool:
+    table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_country'").fetchone()
+    codes = [row[0] for row in db.execute("SELECT country_code FROM anime_country WHERE anime_id=?", (anime_id,))] if table else []
+    return region_policy_enabled(config.get("torrentPolicy", {}), codes)
+
+
+def background_search_due(db_path: Path, anime_id: int, config: dict[str, Any], *, now: dt.datetime | None = None) -> bool:
+    """Return whether one work should be re-queried by the automatic rolling scanner."""
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db:
+        db.row_factory = sqlite3.Row
+        migrate(db)
+        work = db.execute("SELECT start_month FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+        if not work or not automatic_search_eligible(str(work["start_month"] or ""), today=current.date()):
+            return False
+        if not _work_region_enabled(db, anime_id, config):
+            return False
+        row = db.execute("SELECT last_attempt_at FROM ani_rss_search_state WHERE anime_id=?", (anime_id,)).fetchone()
+    if not row or not row[0]:
+        return True
+    try:
+        last = dt.datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=dt.timezone.utc)
+    except ValueError:
+        return True
+    poll = max(5, int(config.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
+    return current - last >= dt.timedelta(minutes=poll)
+
+
+def automatic_search_ids(db_path: Path, *, today: dt.date | None = None) -> list[int]:
+    """Return IDs in recent-6-month-first, then month-7..24 order."""
+    current = today or dt.date.today()
+    current_index = current.year * 12 + current.month - 1
+    cutoff_index = current_index - 23
+    current_month = f"{current_index // 12:04d}-{current_index % 12 + 1:02d}"
+    recent_start_index = current_index - 5
+    recent_start = f"{recent_start_index // 12:04d}-{recent_start_index % 12 + 1:02d}"
+    cutoff = f"{cutoff_index // 12:04d}-{cutoff_index % 12 + 1:02d}"
+    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        recent = [int(row[0]) for row in db.execute(
+            "SELECT id FROM anime_work WHERE start_month>=? AND start_month<=? ORDER BY id",
+            (recent_start, current_month),
+        )]
+        older = [int(row[0]) for row in db.execute(
+            "SELECT id FROM anime_work WHERE start_month>=? AND start_month<? ORDER BY start_month DESC,id",
+            (cutoff, recent_start),
+        )]
+    return recent + older
+
+
+def refresh_background_resources(db_path: Path, config: dict[str, Any], *,
+                                 stop_event: threading.Event | None = None,
+                                 abort_event: threading.Event | None = None) -> dict[str, Any]:
+    """Refresh due rolling Ani-RSS resources once, without overlapping another pass.
+
+    This pass is intentionally independent from image warm-up so a first-run
+    connection that becomes ready a few seconds after startup is not missed.
+    Per-work due timestamps remain authoritative; an overlapping pass is skipped.
+    """
+    current_state = state(db_path, config)
+    if (not state_available(current_state)
+            or str(current_state.get("effective_mode") or "manual") not in {"prefer", "fallback"}):
+        return {"started": False, "reason": "unavailable", "checked": 0, "refreshed": 0, "failed": 0}
+    with background_resource_scan_lease() as acquired:
+        if not acquired:
+            return {"started": False, "reason": "busy", "checked": 0, "refreshed": 0, "failed": 0}
+        checked = refreshed = failed = 0
+        for anime_id in automatic_search_ids(db_path):
+            if ((stop_event is not None and stop_event.is_set())
+                    or (abort_event is not None and abort_event.is_set())):
+                break
+            checked += 1
+            # Re-check health between works. A dead optional endpoint stops this
+            # pass immediately instead of cascading one timeout across the queue.
+            live_state = state(db_path, config)
+            if (not state_available(live_state)
+                    or str(live_state.get("effective_mode") or "manual") not in {"prefer", "fallback"}):
+                break
+            if not background_search_due(db_path, anime_id, config):
+                continue
+            try:
+                search(db_path, anime_id, config)
+                refreshed += 1
+            except (OSError, RuntimeError, urllib.error.URLError, httpx.RequestError):
+                failed += 1
+                break
+            except (ValueError, sqlite3.Error):
+                failed += 1
+                continue
+        return {"started": True, "reason": "complete", "checked": checked,
+                "refreshed": refreshed, "failed": failed}
 
 
 def _secret() -> str:
@@ -138,7 +294,8 @@ class Client:
                 "capabilities": {"list": True, "search": True, "subscribe": True,
                                  "collection": True, "delete": True}}
 
-    def subscriptions(self) -> list[dict[str, Any]]:
+    def subscription_snapshot(self) -> tuple[list[dict[str, Any]], int | None]:
+        """Return the de-duplicated listAni rows and its advertised total, when present."""
         data = self.call("listAni") or {}
         result: list[dict[str, Any]] = []
         for week in data.get("weekList") or []:
@@ -148,14 +305,23 @@ class Client:
             remote_id = str(item.get("id") or "").strip()
             if remote_id:
                 unique[remote_id] = item
-        return list(unique.values())
+        advertised_total: int | None = None
+        if isinstance(data, dict) and data.get("total") is not None:
+            try:
+                advertised_total = max(0, int(data.get("total")))
+            except (TypeError, ValueError):
+                advertised_total = None
+        return list(unique.values()), advertised_total
+
+    def subscriptions(self) -> list[dict[str, Any]]:
+        return self.subscription_snapshot()[0]
 
 
-    def play_list(self, subscription_url: str) -> list[dict[str, Any]]:
+    def play_list(self, subscription_url: str, *, timeout: int = 20) -> list[dict[str, Any]]:
         value = str(subscription_url or "").strip()
         if not value:
             raise ValueError("Ani-RSS subscription URL is unavailable")
-        data = self.call("playList", body={"url": value}, timeout=60) or []
+        data = self.call("playList", body={"url": value}, timeout=max(2, int(timeout))) or []
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         if isinstance(data, dict):
@@ -165,11 +331,27 @@ class Client:
                     return [item for item in items if isinstance(item, dict)]
         raise RuntimeError("Ani-RSS playList returned an unsupported payload")
 
+    def file_bytes(self, filename: str, *, limit: int = 12 * 1024 * 1024,
+                   retries: int = 3) -> tuple[bytes, str]:
+        """Read one Ani-RSS local file through its authenticated file API."""
+        with self.stream_file(filename, retries=retries) as response:
+            content_type = str(response.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0]
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > limit:
+                    raise ValueError("Ani-RSS file exceeds configured limit")
+                chunks.append(chunk)
+            return b"".join(chunks), content_type
+
     @contextlib.contextmanager
-    def stream_file(self, filename: str, range_header: str = ""):
+    def stream_file(self, filename: str, range_header: str = "", *, retries: int = 3):
         candidates = _file_parameter_candidates(filename)
+        retries = max(1, min(3, int(retries)))
         last_status = 502
         failed_statuses: list[int] = []
+        retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
         for index, candidate in enumerate(candidates):
             query = urllib.parse.urlencode({"filename": candidate})
             url = f"{self.endpoint}/api/file?{query}"
@@ -181,23 +363,35 @@ class Client:
             }
             if range_header:
                 headers["Range"] = range_header
-            manager = network_transport.client(url).stream("GET", url, headers=headers, timeout=self.timeout, follow_redirects=False)
-            try:
-                response = manager.__enter__()
-            except Exception as exc:
-                raise RemoteFileError(502) from exc
-            last_status = int(response.status_code)
-            if last_status not in {200, 206}:
+            for attempt in range(retries):
+                manager = network_transport.stream(
+                    "GET", url, headers=headers, timeout=self.timeout, allow_credentials=True, follow_redirects=False)
+                try:
+                    response = manager.__enter__()
+                except (httpx.RequestError, OSError, TimeoutError) as exc:
+                    if attempt + 1 < retries:
+                        time.sleep((0.08, 0.2)[min(attempt, 1)])
+                        continue
+                    raise RemoteFileError(502) from exc
+                last_status = int(response.status_code)
+                if last_status in {200, 206}:
+                    try:
+                        yield response
+                    except BaseException as exc:
+                        manager.__exit__(type(exc), exc, exc.__traceback__)
+                        raise
+                    else:
+                        manager.__exit__(None, None, None)
+                    return
                 failed_statuses.append(last_status)
                 manager.__exit__(None, None, None)
-                if last_status in {400, 404, 422} and index + 1 < len(candidates):
+                if last_status in retryable_statuses and attempt + 1 < retries:
+                    time.sleep((0.08, 0.2)[min(attempt, 1)])
                     continue
-                raise RemoteFileError(404 if 404 in failed_statuses else last_status)
-            try:
-                yield response
-            finally:
-                manager.__exit__(None, None, None)
-            return
+                break
+            if last_status in {400, 404, 422} and index + 1 < len(candidates):
+                continue
+            raise RemoteFileError(404 if 404 in failed_statuses else last_status)
         raise RemoteFileError(404 if 404 in failed_statuses else last_status)
 
 
@@ -303,14 +497,23 @@ def _file_parameter_candidates(filename: str) -> list[str]:
 
 
 def playback_items(db_path: Path, anime_id: int, config: dict[str, Any], remote_id: str) -> list[RemotePlaybackItem]:
+    current_state = state(db_path, config)
+    if not state_available(current_state):
+        raise ValueError("Ani-RSS playback source is unavailable")
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_subscription'").fetchone():
             raise ValueError("Ani-RSS playback source is unavailable")
         row = db.execute("""SELECT remote_id,title,evidence_json FROM ani_rss_subscription
             WHERE remote_id=? AND anime_id=? AND deleted_at IS NULL""", (remote_id, anime_id)).fetchone()
+        has_media = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_media'").fetchone()
+        cached = db.execute("""SELECT episode,title,name,size,filename,extension FROM ani_rss_media
+            WHERE remote_id=? AND anime_id=? ORDER BY episode IS NULL,episode,name""", (remote_id, anime_id)).fetchall() if has_media else []
     if not row:
         raise ValueError("Ani-RSS playback source is unavailable")
+    if cached:
+        return [RemotePlaybackItem(item["episode"], item["title"], item["name"], int(item["size"] or 0),
+                                   item["filename"], item["extension"]) for item in cached]
     evidence = json.loads(str(row["evidence_json"] or "{}"))
     subscription_url = str(evidence.get("url") or "").strip()
     client = _client(config)
@@ -332,6 +535,146 @@ def _client(config: dict[str, Any]) -> Client:
     if not key:
         raise ValueError("Ani-RSS API key is not configured")
     return Client(_settings(config)["endpoint"], key)
+
+
+def sync_due(db_path: Path, config: dict[str, Any], *, now: dt.datetime | None = None) -> bool:
+    """Return whether the unified Ani-RSS snapshot is due for refresh.
+
+    A complete snapshot follows ``syncMinutes``. Connection failures and partial
+    media refreshes retry on a short bounded cadence so one transient failure
+    cannot leave playable episodes stale for another full interval.
+    """
+    key = _secret()
+    if not key:
+        return False
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    try:
+        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+            table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone()
+            row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone() if table else None
+            columns = [str(item[1]) for item in db.execute("PRAGMA table_info(ani_rss_state)")] if table else []
+    except sqlite3.Error:
+        return True
+    settings = _settings(config)
+    if not row:
+        return True
+    values = dict(zip(columns, row))
+    expected_fingerprint = _credential_fingerprint(key, settings["endpoint"])
+    if (str(values.get("endpoint")) != settings["endpoint"]
+            or str(values.get("configured_mode")) != settings["mode"]
+            or str(values.get("credential_fingerprint") or "") != expected_fingerprint
+            or not values.get("last_attempt_at")):
+        return True
+
+    def parsed(value: Any) -> dt.datetime | None:
+        try:
+            result = dt.datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+            if result.tzinfo is None:
+                result = result.replace(tzinfo=dt.timezone.utc)
+            return result
+        except ValueError:
+            return None
+
+    last_attempt = parsed(values.get("last_attempt_at"))
+    last_success = parsed(values.get("last_success_at"))
+    if last_attempt is None:
+        return True
+    # Wall-clock corrections must not suppress Ani-RSS indefinitely. A stored
+    # timestamp materially in the future is treated as stale and refreshed now.
+    future_tolerance = dt.timedelta(minutes=1)
+    if last_attempt > current + future_tolerance or (last_success and last_success > current + future_tolerance):
+        return True
+    retry_minutes = min(settings["syncMinutes"], 5)
+    if str(values.get("connection_state")) != "ready" or values.get("last_error") or last_success is None:
+        return current - last_attempt >= dt.timedelta(minutes=retry_minutes)
+    return current - last_success >= dt.timedelta(minutes=settings["syncMinutes"])
+
+
+def _cover_endpoint_available(endpoint: str) -> bool:
+    revision = network_transport.proxy_revision()
+    now = time.monotonic()
+    with _COVER_FAILURE_LOCK:
+        failure = _COVER_FAILURES.get(endpoint)
+        if failure is None:
+            return True
+        failed_revision, retry_at = failure
+        if failed_revision != revision or retry_at <= now:
+            _COVER_FAILURES.pop(endpoint, None)
+            return True
+        return False
+
+
+def _cover_endpoint_result(endpoint: str, *, healthy: bool) -> None:
+    revision = network_transport.proxy_revision()
+    with _COVER_FAILURE_LOCK:
+        if healthy:
+            _COVER_FAILURES.pop(endpoint, None)
+        else:
+            _COVER_FAILURES[endpoint] = (revision, time.monotonic() + _COVER_FAILURE_COOLDOWN_SECONDS)
+
+
+def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = None, *,
+                 api_key: str | None = None) -> tuple[bytes, str, str] | None:
+    """Copy a mapped Ani-RSS cached cover without replacing an existing AnimeMachine cache implicitly."""
+    key = str(api_key or "").strip() or _secret()
+    if not key:
+        return None
+    try:
+        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+            db.row_factory = sqlite3.Row
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone():
+                return None
+            state_row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone()
+            if not state_row or state_row["connection_state"] != "ready":
+                return None
+            if ("credential_fingerprint" not in state_row.keys()
+                    or str(state_row["credential_fingerprint"] or "")
+                    != _credential_fingerprint(key, str(state_row["endpoint"]))):
+                return None
+            if config is not None:
+                current_settings = _settings(config)
+                if (str(state_row["endpoint"]) != current_settings["endpoint"]
+                        or str(state_row["configured_mode"]) != current_settings["mode"]):
+                    return None
+            rows = db.execute("""SELECT remote_id,evidence_json FROM ani_rss_subscription
+                WHERE anime_id=? AND deleted_at IS NULL ORDER BY enabled DESC,last_seen_at DESC""", (anime_id,)).fetchall()
+        endpoint = _settings(config or {})["endpoint"] if config is not None else str(state_row["endpoint"])
+        # The file endpoint is an optional fast path. After a transport/server
+        # failure, briefly bypass it for the remaining image queue. A live proxy
+        # configuration change invalidates the cooldown immediately.
+        if not _cover_endpoint_available(endpoint):
+            return None
+        client = Client(endpoint, key, timeout=4)
+        for row in rows:
+            evidence = json.loads(str(row["evidence_json"] or "{}"))
+            cover = str(evidence.get("cover") or "").strip()
+            if not cover:
+                continue
+            try:
+                # Cover reuse is only an optimization. One failed attempt is
+                # enough to fall back immediately to AnimeMachine image sources.
+                data, mime = client.file_bytes(cover, retries=1)
+                _cover_endpoint_result(endpoint, healthy=True)
+                data, mime = network_validators.cached_image_bytes(data, mime)
+                return data, mime, f"ani-rss://{row['remote_id']}/cover"
+            except RemoteFileError as exc:
+                # 404/400/422 are file-specific evidence and must not disable
+                # other covers. Transport/retryable/server failures are endpoint
+                # evidence and should make subsequent images fall back at once.
+                if exc.status not in {400, 404, 422}:
+                    _cover_endpoint_result(endpoint, healthy=False)
+                    return None
+                continue
+            except (OSError, RuntimeError, httpx.RequestError):
+                _cover_endpoint_result(endpoint, healthy=False)
+                return None
+            except ValueError:
+                continue
+    except (sqlite3.Error, OSError, ValueError, json.JSONDecodeError):
+        return None
+    return None
 
 
 def _bgm_id(value: Any) -> int | None:
@@ -370,14 +713,15 @@ def _resolve_anime(db: sqlite3.Connection, item: dict[str, Any]) -> tuple[int | 
     return None, {"mode": "unmatched" if not candidates else "ambiguous", "candidateIds": sorted(candidates)}
 
 
-def probe(config: dict[str, Any]) -> dict[str, Any]:
+def probe(config: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
     settings = _settings(config)
-    if not _secret():
+    key = str(api_key or "").strip() or _secret()
+    if not key:
         return {"kind": "ani-rss", "reachable": False, "authenticated": False,
                 "configuredMode": settings["mode"], "effectiveMode": "manual",
                 "message": "credentials_required"}
     try:
-        result = _client(config).probe()
+        result = Client(settings["endpoint"], key).probe()
         return {"kind": "ani-rss", "reachable": True, "authenticated": True,
                 "configuredMode": settings["mode"], "effectiveMode": settings["mode"],
                 "message": "ok", **result}
@@ -387,23 +731,33 @@ def probe(config: dict[str, Any]) -> dict[str, Any]:
                 "message": "connection_failed", "errorType": type(exc).__name__}
 
 
-def sync(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
+def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event | None = None) -> dict[str, Any]:
     settings = _settings(config); stamp = utcnow()
+    key = _secret()
+    fingerprint = _credential_fingerprint(key, settings["endpoint"]) if key else None
     try:
-        client = _client(config)
-        capability = client.probe()
-        subscriptions = client.subscriptions()
+        if not key:
+            raise ValueError("Ani-RSS API key is not configured")
+        client = Client(settings["endpoint"], key, timeout=8)
+        about = client.call("about") or {}
+        subscriptions, advertised_total = client.subscription_snapshot()
+        listing_complete = advertised_total is None or advertised_total == len(subscriptions)
+        capability = {"version": str(about.get("version") or "")}
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as exc:
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
             migrate(db)
-            db.execute("""INSERT INTO ani_rss_state VALUES(1,?,?,?,?,'manual',?,?,?,0)
+            db.execute("""INSERT INTO ani_rss_state
+                (singleton,endpoint,version,connection_state,configured_mode,effective_mode,last_attempt_at,
+                 last_success_at,last_error,successful_generation,credential_fingerprint)
+                VALUES(1,?,?,?,?,'manual',?,?,?,0,?)
                 ON CONFLICT(singleton) DO UPDATE SET endpoint=excluded.endpoint,connection_state='error',
                 configured_mode=excluded.configured_mode,effective_mode='manual',last_attempt_at=excluded.last_attempt_at,
-                last_error=excluded.last_error""",
+                last_error=excluded.last_error,credential_fingerprint=excluded.credential_fingerprint""",
                 (settings["endpoint"], None, "error", settings["mode"], stamp, None,
-                 f"{type(exc).__name__}: {exc}"))
+                 f"{type(exc).__name__}: {exc}", fingerprint))
         return {"state": "error", "effectiveMode": "manual", "errorType": type(exc).__name__}
 
+    mapped_subscriptions: list[tuple[str, int, str]] = []
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
         db.row_factory = sqlite3.Row; db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000")
         migrate(db)
@@ -415,60 +769,241 @@ def sync(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
             if not remote_id:
                 continue
             seen.add(remote_id)
+            previous = db.execute("""SELECT anime_id,bgm_id,title,enabled,current_episode,total_episode,
+                remote_media_path,evidence_json FROM ani_rss_subscription
+                WHERE remote_id=? AND deleted_at IS NULL""", (remote_id,)).fetchone()
+            previous_evidence: dict[str, Any] = {}
+            if previous:
+                with contextlib.suppress(ValueError, TypeError, json.JSONDecodeError):
+                    parsed = json.loads(str(previous["evidence_json"] or "{}"))
+                    if isinstance(parsed, dict):
+                        previous_evidence = parsed
+
             anime_id, identity = _resolve_anime(db, item)
+            # listAni can transiently omit optional identity fields. A stable
+            # remote id from the previous successful generation is stronger
+            # evidence than dropping a known mapping for one partial payload.
+            if anime_id is None and previous and previous["anime_id"] is not None:
+                anime_id = int(previous["anime_id"])
+                identity = {"mode": "stable_remote_id", "previous": previous_evidence.get("identity")}
             if anime_id is not None:
                 mapped += 1
-            bgm_id = _bgm_id(item.get("bgmUrl") or item.get("url"))
+
+            def evidence_value(name: str) -> Any:
+                value = item.get(name)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    return previous_evidence.get(name)
+                return value
+
+            subscription_url = str(evidence_value("url") or "").strip()
+            bgm_id = _bgm_id(evidence_value("bgmUrl") or subscription_url)
+            if bgm_id is None and previous and previous["bgm_id"] is not None:
+                bgm_id = int(previous["bgm_id"])
+
+            def integer_value(name: str, previous_value: Any) -> int:
+                value = item.get(name)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    return int(previous_value or 0)
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return int(previous_value or 0)
+
+            enabled = bool(item.get("enable")) if "enable" in item else bool(previous["enabled"] if previous else False)
+            current_episode = integer_value("currentEpisodeNumber", previous["current_episode"] if previous else 0)
+            total_episode = integer_value("totalEpisodeNumber", previous["total_episode"] if previous else 0)
+            remote_media_path = str(evidence_value("downloadPath") or (previous["remote_media_path"] if previous else "") or "").strip() or None
             evidence = {"identity": identity, "generation": generation,
-                        "url": item.get("url"), "bgmUrl": item.get("bgmUrl"),
-                        "subgroup": item.get("subgroup"), "season": item.get("season")}
+                        "url": subscription_url or None, "bgmUrl": evidence_value("bgmUrl"),
+                        "subgroup": evidence_value("subgroup"), "season": evidence_value("season"),
+                        "cover": evidence_value("cover"), "image": evidence_value("image"),
+                        "mikanTitle": evidence_value("mikanTitle"), "jpTitle": evidence_value("jpTitle"),
+                        "type": evidence_value("type"), "downloadPath": remote_media_path,
+                        "score": evidence_value("score"), "completed": evidence_value("completed")}
+            title = str(item.get("title") or item.get("jpTitle") or (previous["title"] if previous else "") or remote_id)
             db.execute("""INSERT INTO ani_rss_subscription VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(remote_id) DO UPDATE SET anime_id=excluded.anime_id,title=excluded.title,
                 bgm_id=excluded.bgm_id,enabled=excluded.enabled,subscription_kind=excluded.subscription_kind,
                 current_episode=excluded.current_episode,total_episode=excluded.total_episode,
-                remote_state=excluded.remote_state,last_seen_at=excluded.last_seen_at,
+                remote_media_path=excluded.remote_media_path,remote_state=excluded.remote_state,last_seen_at=excluded.last_seen_at,
                 missed_successful_syncs=0,deleted_at=NULL,evidence_json=excluded.evidence_json""",
-                (remote_id, anime_id, str(item.get("title") or item.get("jpTitle") or remote_id), bgm_id,
-                 1 if item.get("enable") else 0, "follow", int(item.get("currentEpisodeNumber") or 0),
-                 int(item.get("totalEpisodeNumber") or 0), None,
-                 "enabled" if item.get("enable") else "disabled", stamp, stamp, 0, None,
+                (remote_id, anime_id, title, bgm_id, enabled, "follow", current_episode,
+                 total_episode, remote_media_path, "enabled" if enabled else "disabled", stamp, stamp, 0, None,
                  json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))))
+            # playList reflects downloaded media, not subscription scheduling.
+            # Keep disabled subscriptions refreshable because their existing files
+            # remain valid external read-only media and may still change remotely.
+            # A prior URL is retained when listAni temporarily omits it, so one
+            # incomplete payload cannot freeze an otherwise healthy media snapshot.
+            if anime_id is not None and subscription_url:
+                mapped_subscriptions.append((remote_id, anime_id, subscription_url))
         missing = list(db.execute("SELECT remote_id,missed_successful_syncs FROM ani_rss_subscription WHERE deleted_at IS NULL"))
         deleted = 0
-        for row in missing:
-            if str(row[0]) in seen:
-                continue
-            misses = int(row[1]) + 1
-            if misses >= settings["deleteGraceSyncs"]:
-                db.execute("UPDATE ani_rss_subscription SET remote_state='deleted',missed_successful_syncs=?,deleted_at=? WHERE remote_id=?",
-                           (misses, stamp, row[0])); deleted += 1
-            else:
-                db.execute("UPDATE ani_rss_subscription SET remote_state='missing_unconfirmed',missed_successful_syncs=? WHERE remote_id=?",
-                           (misses, row[0]))
-        db.execute("""INSERT INTO ani_rss_state VALUES(1,?,?,?,?,?,?,?,?,?)
+        # A truncated/paginated listAni response must never age unseen rows toward
+        # deletion. The advertised total gives a cheap completeness proof while
+        # still allowing older Ani-RSS versions without a total field to sync.
+        if listing_complete:
+            for row in missing:
+                if str(row[0]) in seen:
+                    continue
+                misses = int(row[1]) + 1
+                if misses >= settings["deleteGraceSyncs"]:
+                    db.execute("UPDATE ani_rss_subscription SET remote_state='deleted',missed_successful_syncs=?,deleted_at=? WHERE remote_id=?",
+                               (misses, stamp, row[0])); deleted += 1
+                else:
+                    db.execute("UPDATE ani_rss_subscription SET remote_state='missing_unconfirmed',missed_successful_syncs=? WHERE remote_id=?",
+                               (misses, row[0]))
+        # Subscription mapping is committed first, but ``last_success_at`` is
+        # advanced only after the media phase also completes. This keeps the
+        # configured cadence tied to one coherent subscription/media snapshot.
+        db.execute("""INSERT INTO ani_rss_state
+            (singleton,endpoint,version,connection_state,configured_mode,effective_mode,last_attempt_at,
+             last_success_at,last_error,successful_generation,credential_fingerprint)
+            VALUES(1,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(singleton) DO UPDATE SET endpoint=excluded.endpoint,version=excluded.version,
             connection_state='ready',configured_mode=excluded.configured_mode,effective_mode=excluded.effective_mode,
-            last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,last_error=NULL,
-            successful_generation=excluded.successful_generation""",
+            last_attempt_at=excluded.last_attempt_at,last_error=NULL,successful_generation=excluded.successful_generation,
+            credential_fingerprint=excluded.credential_fingerprint""",
             (settings["endpoint"], capability.get("version"), "ready", settings["mode"], settings["mode"],
-             stamp, stamp, None, generation))
-        return {"state": "ready", "version": capability.get("version"), "effectiveMode": settings["mode"],
-                "subscriptions": len(seen), "mapped": mapped, "deleted": deleted, "generation": generation}
+             stamp, None, None, generation, fingerprint))
+
+    # Media availability is part of the same snapshot, but one bad subscription
+    # must not invalidate listAni or erase the previous known-good playlist.
+    media_results: dict[str, list[RemotePlaybackItem]] = {}
+    media_failures = 0
+    media_deferred = 0
+    if mapped_subscriptions:
+        # A bounded media phase must also be fair. If a few remote playlists hang,
+        # rotate the starting point on each successful subscription generation so
+        # later subscriptions cannot starve forever behind the same slow entries.
+        workers = min(6, len(mapped_subscriptions))
+        shift = ((generation - 1) * workers) % len(mapped_subscriptions)
+        media_queue = mapped_subscriptions[shift:] + mapped_subscriptions[:shift]
+
+        def fetch_media(entry: tuple[str, int, str]) -> tuple[str, list[RemotePlaybackItem] | None]:
+            remote_id, _anime_id, url = entry
+            try:
+                return remote_id, _normalize_play_list(client.play_list(url, timeout=8))
+            except (OSError, ValueError, RuntimeError, urllib.error.URLError, httpx.RequestError):
+                return remote_id, None
+
+        if abort_event is not None and abort_event.is_set():
+            media_deferred = len(media_queue)
+        else:
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anm-ani-media")
+            futures = {pool.submit(fetch_media, entry): entry[0] for entry in media_queue}
+            pending: set[concurrent.futures.Future[tuple[str, list[RemotePlaybackItem] | None]]] = set(futures)
+            # Healthy local/LAN Ani-RSS instances commonly have many subscriptions.
+            # Give the background phase enough time to cover all of them within
+            # one configured interval, while still bounding a degraded endpoint.
+            deadline = time.monotonic() + max(20.0, min(120.0, 10.0 + len(media_queue) * 2.0))
+            aborted = False
+            while pending:
+                if abort_event is not None and abort_event.is_set():
+                    aborted = True
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                done_now, pending = concurrent.futures.wait(
+                    pending, timeout=min(.2, remaining), return_when=concurrent.futures.FIRST_COMPLETED)
+                for future in done_now:
+                    try:
+                        remote_id, items = future.result()
+                    except Exception:
+                        media_failures += 1
+                        continue
+                    if items is None:
+                        media_failures += 1
+                    else:
+                        media_results[remote_id] = items
+            if pending:
+                if aborted:
+                    media_deferred += len(pending)
+                else:
+                    media_failures += len(pending)
+                for future in pending:
+                    future.cancel()
+            # Running requests keep their own short timeout, but queued work is
+            # cancelled immediately. This lets a newly queued user operation take
+            # the foreground lock without waiting for the full background budget.
+            pool.shutdown(wait=False, cancel_futures=True)
+
+    if media_results:
+        anime_by_remote = {remote_id: anime_id for remote_id, anime_id, _url in mapped_subscriptions}
+        with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
+            migrate(db)
+            for remote_id, items in media_results.items():
+                anime_id = anime_by_remote[remote_id]
+                db.execute("DELETE FROM ani_rss_media WHERE remote_id=?", (remote_id,))
+                db.executemany("""INSERT INTO ani_rss_media
+                    (remote_id,anime_id,filename,episode,title,name,size,extension,last_seen_at)
+                    VALUES(?,?,?,?,?,?,?,?,?)""", [
+                    (remote_id, anime_id, item.filename, item.episode, item.title, item.name,
+                     item.size, item.extension, stamp) for item in items
+                ])
+                playable = [float(item.episode) for item in items if item.episode is not None]
+                if playable:
+                    db.execute("""UPDATE ani_rss_subscription
+                        SET current_episode=MAX(COALESCE(current_episode,0),?) WHERE remote_id=?""",
+                               (int(max(playable)), remote_id))
+    # Remote deletion cleanup must not depend on any remaining subscription
+    # returning a non-empty media result in this particular generation.
+    with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
+        migrate(db)
+        db.execute("""DELETE FROM ani_rss_media WHERE remote_id IN (
+            SELECT remote_id FROM ani_rss_subscription WHERE deleted_at IS NOT NULL)""")
+
+    media_complete = media_failures == 0 and media_deferred == 0
+    snapshot_complete = media_complete and listing_complete
+    with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
+        migrate(db)
+        if snapshot_complete:
+            db.execute("UPDATE ani_rss_state SET last_success_at=?,last_error=NULL WHERE singleton=1", (stamp,))
+        else:
+            reason = (
+                f"SubscriptionSnapshotIncomplete: advertised={advertised_total},received={len(subscriptions)}"
+                if not listing_complete else
+                f"MediaSnapshotIncomplete: failures={media_failures},deferred={media_deferred}"
+            )
+            db.execute("UPDATE ani_rss_state SET last_error=? WHERE singleton=1", (reason,))
+    return {"state": "ready", "version": capability.get("version"), "effectiveMode": settings["mode"],
+            "subscriptions": len(seen), "mapped": mapped, "deleted": deleted, "generation": generation,
+            "mediaSubscriptions": len(media_results), "mediaFailures": media_failures,
+            "mediaDeferred": media_deferred, "listingComplete": listing_complete,
+            "snapshotComplete": snapshot_complete,
+            "mediaItems": sum(len(items) for items in media_results.values())}
 
 
 def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
     settings = _settings(config)
+    key = _secret()
+    credential_configured = bool(key)
+    expected_fingerprint = _credential_fingerprint(key, settings["endpoint"]) if key else None
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone()
         row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone() if table else None
-        if not row:
-            return {"connectionState": "unconfigured" if not _secret() else "unknown",
-                    "configuredMode": settings["mode"], "effectiveMode": "manual",
-                    "credentialConfigured": bool(_secret())}
-        result = {k: row[k] for k in row.keys() if k != "last_error"}
-        return {**result, "credentialConfigured": bool(_secret()),
-                "error": row["last_error"] and row["last_error"].split(":", 1)[0]}
+    if not row:
+        return {"endpoint": settings["endpoint"],
+                "connection_state": "unconfigured" if not credential_configured else "unknown",
+                "configured_mode": settings["mode"], "effective_mode": "manual",
+                "credentialConfigured": credential_configured, "error": None}
+    result = {k: row[k] for k in row.keys() if k not in {"last_error", "credential_fingerprint"}}
+    result["credentialConfigured"] = credential_configured
+    result["error"] = row["last_error"] and row["last_error"].split(":", 1)[0]
+    # A previously healthy endpoint must not keep Ani-RSS logically enabled
+    # after its credential is removed or the configured endpoint/mode changes.
+    if not credential_configured:
+        result.update(connection_state="unconfigured", configured_mode=settings["mode"],
+                      effective_mode="manual", endpoint=settings["endpoint"])
+    elif (str(row["endpoint"]) != settings["endpoint"]
+          or str(row["configured_mode"]) != settings["mode"]
+          or "credential_fingerprint" not in row.keys()
+          or str(row["credential_fingerprint"] or "") != expected_fingerprint):
+        result.update(connection_state="unknown", configured_mode=settings["mode"],
+                      effective_mode="manual", endpoint=settings["endpoint"], error=None)
+    return result
 
 
 def _season(start_month: str) -> dict[str, Any]:
@@ -539,12 +1074,15 @@ def _resource_fields(title: str) -> tuple[str, int | None, int | None]:
 
 def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any]:
     client = _client(config); stamp = utcnow()
-    expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=24)).replace(microsecond=0).isoformat()
-    with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
+    poll_minutes = max(5, int(config.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
+    expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=max(24, poll_minutes / 30))).replace(microsecond=0).isoformat()
+    with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
         db.row_factory = sqlite3.Row; migrate(db)
         work = db.execute("SELECT id,bgm_id,title_ja,title_zh_hans,title_en,start_month FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if not work:
             raise ValueError("anime work not found")
+        db.execute("""INSERT INTO ani_rss_search_state(anime_id,last_attempt_at,last_success_at,result_count,error_text) VALUES(?,?,NULL,0,NULL)
+            ON CONFLICT(anime_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,error_text=NULL""", (anime_id, stamp))
         names = [str(work[key] or "").strip() for key in ("title_zh_hans", "title_ja", "title_en")]
         names = list(dict.fromkeys(name for name in names if name))
     found: dict[str, dict[str, Any]] = {}
@@ -605,25 +1143,32 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                         item["source"], item["resolution"], None, item["first"], item["last"], item["count"],
                         item["bytes"], 1 if item["eligible"] else 0, f"{index:08d}",
                         json.dumps(item["payload"], ensure_ascii=False, separators=(",", ":")), stamp, expires))
+        db.execute("UPDATE ani_rss_search_state SET last_success_at=?,result_count=?,error_text=NULL WHERE anime_id=?",
+                   (stamp, len(resources), anime_id))
     return {"animeId": anime_id, "found": len(resources), "eligible": sum(1 for item in resources if item["eligible"])}
 
 
 def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if config is not None and not state_available(state(db_path, config)):
+        return []
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_resource'").fetchone():
             return []
         rows = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id=? AND expires_at>=? ORDER BY rank_key,resource_id",
                           (anime_id, utcnow())).fetchall()
+        region_enabled = _work_region_enabled(db, anime_id, config) if config is not None else True
         result = []
         for index, row in enumerate(rows, 1):
-            eligible = bool(row["eligible"])
+            eligible = bool(row["eligible"]) and region_enabled
             reason, family = ("eligible", "other")
             if config is not None:
                 reason, family = _policy_eligibility_reason(
                     str(row["title"] or ""), str(row["resource_group"] or ""),
                     str(row["source_class"] or "unknown"), row["resolution"], config)
-            if eligible:
+            if not region_enabled:
+                reason = "region_disabled"
+            elif eligible:
                 reason = "eligible"
             elif reason == "eligible":
                 reason = "policy_excluded"
@@ -645,9 +1190,20 @@ def subscriptions_for_anime(db_path: Path, anime_id: int) -> list[dict[str, Any]
         rows = db.execute("""SELECT remote_id,title,enabled,subscription_kind,current_episode,total_episode,
             remote_state,last_seen_at FROM ani_rss_subscription WHERE anime_id=? AND deleted_at IS NULL
             ORDER BY enabled DESC,title""", (anime_id,)).fetchall()
+        media_counts: dict[str, int] = {}
+        media_episodes: dict[str, list[float]] = {}
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_media'").fetchone():
+            media_counts = {str(remote_id): int(count) for remote_id, count in db.execute(
+                "SELECT remote_id,COUNT(*) FROM ani_rss_media WHERE anime_id=? GROUP BY remote_id", (anime_id,))}
+            for remote_id, episode in db.execute(
+                    "SELECT remote_id,episode FROM ani_rss_media WHERE anime_id=? AND episode IS NOT NULL ORDER BY remote_id,episode,filename",
+                    (anime_id,)):
+                media_episodes.setdefault(str(remote_id), []).append(float(episode))
         return [{"remoteId": row["remote_id"], "title": row["title"], "enabled": bool(row["enabled"]),
                  "kind": row["subscription_kind"], "currentEpisode": row["current_episode"],
                  "totalEpisode": row["total_episode"], "state": row["remote_state"],
+                 "playableCount": media_counts.get(str(row["remote_id"]), 0),
+                 "playableEpisodes": media_episodes.get(str(row["remote_id"]), []),
                  "lastSeenAt": row["last_seen_at"]} for row in rows]
 
 
@@ -754,15 +1310,17 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
     if routing_mode not in {"default", "ani-rss", "torrent"}:
         raise ValueError("routingMode must be default, ani-rss, or torrent")
     current_state = state(db_path, config)
+    remote_available = state_available(current_state)
     mode = str(current_state.get("effective_mode") or current_state.get("effectiveMode") or "manual")
     local_ids: list[int] = []; remote_jobs: list[dict[str, Any]] = []; skipped_works: list[dict[str, Any]] = []
     for requested_id in requested:
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
             db.row_factory = sqlite3.Row; migrate(db)
             owner = runtime_catalog.physical_anime_id(db, requested_id)
+            region_enabled = _work_region_enabled(db, owner, config)
             remote_token = explicit_resource.get(requested_id) or explicit_resource.get(owner)
             local_token = explicit_local.get(requested_id) or explicit_local.get(owner)
-            if remote_token and routing_mode != "torrent":
+            if remote_token and routing_mode != "torrent" and region_enabled and remote_available:
                 remote = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND anime_id IN (?,?) AND eligible=1 AND expires_at>=?",
                                     (remote_token, requested_id, owner, utcnow())).fetchone()
                 if not remote and routing_mode == "default":
@@ -782,8 +1340,8 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
             if local_token and routing_mode == "default":
                 local_ids.append(requested_id); continue
             has_local_collection = any(item.get("collection") for item in local)
-            choose_remote = routing_mode == "ani-rss" or ((mode == "prefer" and not has_local_collection)
-                                                           or (mode == "fallback" and not local))
+            choose_remote = remote_available and region_enabled and (routing_mode == "ani-rss" or ((mode == "prefer" and not has_local_collection)
+                                                           or (mode == "fallback" and not local)))
             remote: sqlite3.Row | None = None
             if choose_remote:
                 remote = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id IN (?,?) AND eligible=1 AND expires_at>=? ORDER BY rank_key,resource_id LIMIT 1",

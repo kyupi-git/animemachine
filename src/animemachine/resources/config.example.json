@@ -120,9 +120,15 @@
         "tv",
         "movie"
       ],
-      "country": "JP",
       "availability": [
-        "available"
+        "torrent",
+        "ani-rss"
+      ],
+      "libraryStates": [
+        "local",
+        "external",
+        "submitted",
+        "not_in_library"
       ]
     }
   },
@@ -266,6 +272,14 @@
       "remux": false,
       "bdmv": false,
       "iso": false
+    },
+    "regions": {
+      "china": true,
+      "japan": true,
+      "korea": true,
+      "usa": true,
+      "europe": true,
+      "other": true
     },
     "allowUnlisted": {
       "resourceGroup": false,
@@ -664,5 +678,12 @@
     "stageVerifiedRevisions": true,
     "keepOperationHistory": true,
     "crossSeriesCollectionsRequireReview": true
+  },
+  "applicationUpdate": {
+    "automaticCheck": {
+      "enabled": false,
+      "mode": "notify",
+      "time": "04:35"
+    }
   }
 }

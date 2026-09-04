@@ -2,6 +2,7 @@
 """Read qBittorrent managed-task state into the product runtime overlay."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -48,7 +49,7 @@ def refresh(db_path: Path, endpoint: str, category: str) -> dict[str, Any]:
     stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     counts = {"queued": 0, "downloading": 0, "existing": 0, "missing": 0}
     completed_anime_ids: set[int] = set()
-    with sqlite3.connect(db_path, timeout=30) as db:
+    with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db:
         db.row_factory = sqlite3.Row
         submissions = list(db.execute("SELECT info_hash FROM runtime_submission"))
         with db:

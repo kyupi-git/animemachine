@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -187,7 +188,7 @@ def main() -> int:
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
-    with sqlite3.connect(args.db) as db:
+    with contextlib.closing(sqlite3.connect(args.db)) as db, db:
         report = migrate(db)
     encoded = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.report:

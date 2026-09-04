@@ -12,5 +12,6 @@
     {"id":"bangumi-image-anibt","service":"bangumi_image","baseUrl":"https://bgmimg.anibt.net","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true},
     {"id":"bangumi-image-pro","service":"bangumi_image","baseUrl":"https://lain.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true}
   ],
-  "archiveAssetProxies": ["https://gh-proxy.com/{url}", "https://ghfast.top/{url}"]
+  "archiveAssetProxies": ["https://gh-proxy.com/{url}", "https://ghfast.top/{url}"],
+  "applicationUpdateProxies": ["https://gh-proxy.com/{url}", "https://ghfast.top/{url}"]
 }

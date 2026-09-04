@@ -10,39 +10,35 @@
   </head>
   <body>
     <header class="hero">
-      <div>
-        <p class="eyebrow">Automated Anime Library</p>
+      <div class="hero-brand">
         <h1 data-i18n="catalog">AnimeMachine</h1>
+        <p class="eyebrow">Automated Anime Library</p>
       </div>
       <div class="hero-tools">
         <div class="toolbar">
-          <div id="scanProgress" class="scan-progress" role="status" aria-live="polite">
-            <span id="scanProgressText" data-i18n="scanIdle">资源池待命</span>
-            <progress id="scanProgressBar" max="100" value="100"></progress>
-          </div>
           <button id="themeToggle" class="tool theme-toggle" type="button" aria-label="Theme" title="Theme">◐</button>
           <select id="language" aria-label="Language">
             <option value="zh-Hans">中文</option>
             <option value="en">English</option>
             <option value="ja">日本語</option>
           </select>
-          <button id="cardsView" class="tool active" data-i18n="cards">
-            磁贴
-          </button>
-          <button id="tableView" class="tool" data-i18n="table">表格</button>
-          <button id="settingsButton" class="tool" data-i18n="settings" hidden>
-            设置
-          </button>
+          <button id="viewToggle" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格">表格</button>
+          <button id="settingsButton" class="tool" data-i18n="settings" hidden>设置</button>
           <button id="authButton" class="tool" data-i18n="logout" hidden>退出</button>
         </div>
-        <div
-          class="build boot-copy"
-          id="buildInfo"
-          data-i18n="loadingWorks"
-        >
-          <span lang="zh-Hans">作品加载中，请稍等...</span>
-          <span lang="en">Loading works, please wait...</span>
-          <span lang="ja">作品を読み込んでいます。しばらくお待ちください...</span>
+      </div>
+      <div class="status-row">
+        <div id="scanProgress" class="scan-progress" role="status" aria-live="polite">
+          <span class="scan-progress-line">
+            <span id="catalogReadyBadge" class="catalog-ready-badge" data-i18n="catalogPreparing">Catalog 准备中</span>
+            <span id="scanProgressText" data-i18n="scanIdle">后台图片状态加载中</span>
+            <span class="build boot-copy" id="buildInfo" data-i18n="loadingWorks">
+              <span lang="zh-Hans">作品加载中，请稍等...</span>
+              <span lang="en">Loading works, please wait...</span>
+              <span lang="ja">作品を読み込んでいます。しばらくお待ちください...</span>
+            </span>
+          </span>
+          <progress id="scanProgressBar" max="100" value="100"></progress>
         </div>
       </div>
     </header>
@@ -64,15 +60,19 @@
         </div>
         <div class="grid2">
           <label
-            ><span data-i18n="era">年代</span
+            ><span data-i18n="era">年</span
             ><select id="era">
               <option value="" data-i18n="custom">自定义</option>
             </select></label
           >
           <label
-            ><span data-i18n="country">地区</span
-            ><select id="country">
+            ><span data-i18n="season">季</span
+            ><select id="season" disabled>
               <option value="" data-i18n="all">全部</option>
+              <option value="winter" data-i18n="seasonWinter">冬（1月前后）</option>
+              <option value="spring" data-i18n="seasonSpring">春（4月前后）</option>
+              <option value="summer" data-i18n="seasonSummer">夏（7月前后）</option>
+              <option value="autumn" data-i18n="seasonAutumn">秋（10月前后）</option>
             </select></label
           >
           <label
@@ -138,9 +138,14 @@
           <legend data-i18n="availability">可用来源</legend>
           <div id="availability" class="status-checks">
             <label class="check"
-              ><input type="checkbox" value="available" checked /><span
-                data-i18n="available"
-                >有可用来源</span
+              ><input type="checkbox" value="torrent" checked /><span
+                data-i18n="torrentSource"
+                >Torrent 来源</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="ani-rss" checked /><span
+                data-i18n="aniRssSource"
+                >Ani-RSS 来源</span
               ></label
             ><label class="check"
               ><input type="checkbox" value="unavailable" /><span
@@ -154,34 +159,24 @@
           <legend data-i18n="libraryState">收藏库状态</legend>
           <div id="library_state" class="status-checks">
             <label class="check"
-              ><input type="checkbox" value="existing" checked /><span
-                data-i18n="existing"
-                >已存在·已下载</span
-              ></label
-            ><label class="check"
-              ><input type="checkbox" value="placeholder" checked /><span
-                data-i18n="placeholder"
-                >无媒体·仅占位</span
-              ></label
-            ><label class="check"
-              ><input type="checkbox" value="queued" checked /><span
-                data-i18n="queued"
-                >已提交·待开始</span
-              ></label
-            ><label class="check"
-              ><input type="checkbox" value="downloading" checked /><span
-                data-i18n="downloading"
-                >已提交·下载中</span
-              ></label
-            ><label class="check"
-              ><input type="checkbox" value="absent" checked /><span
-                data-i18n="absent"
-                >未建目录</span
+              ><input type="checkbox" value="local" checked /><span
+                data-i18n="localLibrary"
+                >本地入库</span
               ></label
             ><label class="check"
               ><input type="checkbox" value="external" checked /><span
-                data-i18n="externalLibrary"
-                >外部媒体来源</span
+                data-i18n="externalReadOnly"
+                >外部只读</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="submitted" checked /><span
+                data-i18n="submittedDownload"
+                >提交下载</span
+              ></label
+            ><label class="check"
+              ><input type="checkbox" value="not_in_library" checked /><span
+                data-i18n="notInLibrary"
+                >暂未入库</span
               ></label
             >
           </div>
@@ -195,6 +190,13 @@
             ><span class="muted" data-i18n="works"> 部作品</span>
           </div>
           <div class="catalog-controls">
+            <button
+              id="reshuffle"
+              class="text-button reshuffle"
+              data-i18n="reshuffle"
+            >
+              重新随机
+            </button>
             <label class="inline"
               ><span data-i18n="sortBy">排序</span
               ><select id="sort">
@@ -205,13 +207,6 @@
                 <option value="type" data-i18n="sortType">类型</option>
               </select></label
             >
-            <button
-              id="reshuffle"
-              class="text-button reshuffle"
-              data-i18n="reshuffle"
-            >
-              重新随机
-            </button>
             <button
               id="sortDirection"
               class="text-button"
@@ -318,6 +313,13 @@
           ><button
             type="button"
             class="tab"
+            data-tab="diagnostics"
+            data-i18n="diagnosticsTab"
+          >
+            诊断
+          </button><button
+            type="button"
+            class="tab"
             data-tab="subscriptions"
             data-i18n="subscriptionsTab"
           >
@@ -347,6 +349,13 @@
           </button><button
             type="button"
             class="tab"
+            data-tab="updates"
+            data-i18n="updateTab"
+          >
+            检查更新
+          </button><button
+            type="button"
+            class="tab"
             data-tab="about"
             data-i18n="aboutTitle"
           >
@@ -361,6 +370,12 @@
           <p class="muted" data-i18n="settingsHint">
             这里修改运行配置；凭据不会写入此文件。
           </p>
+          <fieldset class="system-health" data-admin-only>
+            <legend data-i18n="systemHealth">系统健康</legend>
+            <div id="systemHealthSummary" class="system-health-summary muted" data-i18n="healthLoading">正在汇总运行状态…</div>
+            <div id="systemHealthItems" class="system-health-items"></div>
+            <p class="explain" data-i18n="systemHealthHint">这里只汇总关键状态；网络、预加载和播放链路的详细信息仍在“诊断”页。</p>
+          </fieldset>
           <fieldset>
             <legend data-i18n="catalogData">目录数据</legend>
             <div class="maintenance-grid">
@@ -397,6 +412,8 @@
             <div id="contentClasses" class="checks"></div>
             <h4 data-i18n="resolutionPriority">分辨率</h4>
             <div id="allowedResolutions" class="checks"></div>
+            <h4 data-i18n="regionPriority">地区</h4>
+            <div id="allowedRegions" class="checks"></div>
           </fieldset>
           <div class="checks submission-checks"><label class="check"
             ><input id="submissionAllowed" type="checkbox" checked /><span
@@ -440,9 +457,9 @@
               ><span data-i18n="endpoint">服务地址</span
               ><input id="qbtEndpoint" type="url" /></label
             ><label
-              ><span data-i18n="qbtApiKey">API Key（仅当前进程）</span
+              ><span data-i18n="qbtApiKey">API Key</span
               ><input id="qbtApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label
-            ><small id="qbtCredentialState" class="muted" data-i18n="qbtApiKeyHint">推荐通过 .env 环境变量持久配置；在此输入的密钥仅保存在当前进程内，重启后失效。</small
+            ><small id="qbtCredentialState" class="muted" data-i18n="qbtApiKeyHint">保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。</small
             ><label
               ><span data-i18n="libraryPath">动画收藏库路径</span
               ><input id="libraryPath" type="text" /></label
@@ -470,8 +487,8 @@
               <option value="manual" data-i18n="aniRssManual">手动调用 Ani-RSS</option>
             </select></label>
             <label><span data-i18n="endpoint">服务地址</span><input id="aniRssEndpoint" type="url" /></label>
-            <label><span data-i18n="aniRssApiKey">API Key（仅当前进程）</span><input id="aniRssApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label>
-            <small id="aniRssCredentialState" class="muted" data-i18n="aniRssApiKeyHint">推荐通过 .env 环境变量持久配置；页面输入的密钥不会写入配置文件。</small>
+            <label><span data-i18n="aniRssApiKey">API Key</span><input id="aniRssApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label>
+            <small id="aniRssCredentialState" class="muted" data-i18n="aniRssApiKeyHint">保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。</small>
             <label><span data-i18n="aniRssMediaPath">Ani-RSS 媒体路径</span><input id="aniRssMediaPath" type="text" /></label>
             <label><span data-i18n="aniRssSyncMinutes">状态同步间隔（分钟）</span><input id="aniRssSyncMinutes" type="number" min="5" /></label>
             <p class="explain" data-i18n="aniRssHint">连接无效时自动按“手动调用”运行；连接恢复后使用所选模式。媒体目录始终只读。</p>
@@ -500,9 +517,9 @@
             <legend data-i18n="subtitleSources">字幕源</legend>
             <label class="check"><input id="subtitlesEnabled" type="checkbox" /><span data-i18n="subtitlesEnabled">启用归档资源字幕匹配</span></label>
             <label><span data-i18n="assrtEndpoints">ASSRT API 端点（每行一个）</span><textarea id="assrtEndpoints" rows="2"></textarea></label>
-            <label><span data-i18n="assrtToken">ASSRT Token（仅当前进程）</span><input id="assrtToken" type="password" autocomplete="new-password" /></label>
+            <label><span data-i18n="assrtToken">ASSRT Token</span><input id="assrtToken" type="password" autocomplete="new-password" /></label>
             <label><span data-i18n="openSubtitlesEndpoint">OpenSubtitles API 端点</span><input id="openSubtitlesEndpoint" type="url" /></label>
-            <label><span data-i18n="openSubtitlesKey">OpenSubtitles API Key（仅当前进程）</span><input id="openSubtitlesKey" type="password" autocomplete="new-password" /></label>
+            <label><span data-i18n="openSubtitlesKey">OpenSubtitles API Key</span><input id="openSubtitlesKey" type="password" autocomplete="new-password" /></label>
             <p class="explain" data-i18n="subtitleSourcesHint">只使用已配置的正式 API；按当前界面语言排序，低置信度结果必须由用户选择。</p>
           </fieldset>
           <fieldset>
@@ -523,20 +540,62 @@
             <p class="explain" data-i18n="metadataNetworkHint">按健康与延迟自动选择，失败后冷却并切换；支持系统代理。Archive 文件无论来自何处都必须通过官方 SHA-256。</p>
           </fieldset>
         </section>
+        <section class="tab-panel diagnostics-panel" data-panel="diagnostics">
+          <p class="muted" data-i18n="diagnosticsHint">只显示当前运行状态和近期结果；不会显示密钥、媒体内容或完整文件路径。</p>
+          <fieldset>
+            <legend data-i18n="startupStatus">启动与后台准备</legend>
+            <div id="startupDiagnostics" class="diagnostic-summary muted">—</div>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="systemHealth">系统健康</legend>
+            <div id="systemHealthDiagnostics" class="system-health-items system-health-diagnostics"></div>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="networkDiagnostics">网络诊断</legend>
+            <div class="diagnostic-toolbar"><span id="networkRouteSummary" class="muted">—</span><button id="recheckNetwork" type="button" class="tool dark-tool" data-i18n="recheckNetwork">重新检测</button></div>
+            <div id="networkDiagnostics" class="diagnostic-list"></div>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="imagePreload">图片预加载</legend>
+            <div id="imagePreloadStages" class="preload-stages"></div>
+            <div id="imagePreloadMeta" class="preload-meta muted"></div>
+            <div class="preload-controls">
+              <button id="toggleImagePreload" type="button" class="tool dark-tool" data-i18n="pausePreload">暂停</button>
+              <label><span data-i18n="backgroundConcurrency">后台并发</span><input id="imagePreloadConcurrency" type="number" min="1" max="32" /></label>
+              <label><span data-i18n="backgroundBandwidth">后台带宽 KiB/s（0 = 不限）</span><input id="imagePreloadBandwidth" type="number" min="0" step="64" /></label>
+              <button id="applyImagePreloadLimits" type="button" class="tool dark-tool" data-i18n="applyLimits">应用限制</button>
+            </div>
+            <p id="imagePreloadStatus" class="muted"></p>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="playbackDiagnostics">远程播放会话</legend>
+            <div id="playbackDiagnostics" class="diagnostic-list"></div>
+          </fieldset>
+        </section>
         <section class="tab-panel" data-panel="subscriptions">
           <p class="muted" data-i18n="subscriptionsHint">已完成的单集或单卷任务会按精确资源指纹监视后续发布；发现更新后只生成待确认项。</p>
           <button id="refreshWatches" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
           <div id="watchList" class="log-list"></div>
         </section>
-        <section class="tab-panel" data-panel="users" data-admin-only>
+        <section class="tab-panel users-panel" data-panel="users" data-admin-only>
           <p class="muted" data-i18n="usersHint">普通用户可浏览和提交下载，但不能修改设置。</p>
-          <div class="user-create-row">
-            <input id="newUsername" data-i18n-placeholder="username" autocomplete="off" />
-            <input id="newUserPassword" type="password" data-i18n-placeholder="password" autocomplete="new-password" />
-            <select id="newUserRole"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select>
-            <button id="createUser" type="button" class="tool dark-tool" data-i18n="createUser">创建用户</button>
+          <div class="user-management-card">
+            <div class="user-section-heading">
+              <strong data-i18n="createUser">创建用户</strong>
+              <span class="muted" data-i18n="userCreateHint">用户名为 3–64 个字母、数字、点、下划线或连字符；密码至少 10 位。</span>
+            </div>
+            <div class="user-create-row">
+              <label><span data-i18n="username">用户名</span><input id="newUsername" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required data-i18n-placeholder="username" autocomplete="off" /></label>
+              <label><span data-i18n="password">密码</span><input id="newUserPassword" type="password" minlength="10" required data-i18n-placeholder="password" autocomplete="new-password" /></label>
+              <label><span data-i18n="userRole">角色</span><select id="newUserRole"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select></label>
+              <button id="createUser" type="button" class="primary user-create-button" data-i18n="createUser">创建用户</button>
+            </div>
+            <p id="userManagementStatus" class="muted user-management-status" aria-live="polite"></p>
           </div>
-          <div id="userList" class="log-list"></div>
+          <div class="user-management-card user-list-card">
+            <div class="user-section-heading"><strong data-i18n="existingUsers">现有用户</strong></div>
+            <div id="userList" class="user-list"></div>
+          </div>
         </section>
         <section class="tab-panel" data-panel="logs">
           <p class="muted" data-i18n="logsHint">
@@ -557,13 +616,41 @@
           <button id="refreshHistory" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
           <div id="historyList" class="log-list"></div>
         </section>
+        <section class="tab-panel update-panel" data-panel="updates">
+          <p class="muted" data-i18n="updateDetailsHint">检查 GitHub Release 与可用代理线路，并显示下载与校验状态。不可用线路会进入健康冷却，后续检查优先使用已验证的快速线路。</p>
+          <div class="update-detail-grid">
+            <div><small data-i18n="currentVersionLabel">当前版本</small><strong id="updateCurrentVersion">—</strong></div>
+            <div><small data-i18n="latestVersionLabel">最新版本</small><strong id="updateLatestVersion">—</strong></div>
+            <div><small data-i18n="downloadSourceLabel">下载源</small><strong id="updateDownloadSource">—</strong></div>
+            <div><small data-i18n="sha256StatusLabel">SHA-256 校验</small><strong id="updateSha256Status">—</strong></div>
+            <div><small data-i18n="upgradeResultLabel">升级结果</small><strong id="updateUpgradeResult">—</strong></div>
+            <div><small data-i18n="lastCheckLabel">最近检查</small><strong id="updateLastChecked">—</strong></div>
+          </div>
+          <div class="update-toolbar">
+            <button id="checkApplicationUpdateDetail" type="button" class="tool dark-tool" data-i18n="checkUpdate">检测更新</button>
+            <button id="applyApplicationUpdateDetail" type="button" class="primary" data-i18n="updateNow" hidden>更新</button>
+            <span id="updateDetailStatus" class="muted" aria-live="polite"></span>
+          </div>
+          <fieldset>
+            <legend data-i18n="automaticUpdateCheck">定时自动检查更新</legend>
+            <label class="check"><input id="automaticUpdateEnabled" type="checkbox" /><span data-i18n="automaticUpdateEnabled">启用定时检查</span></label>
+            <div class="setting-row update-schedule-row">
+              <label><span data-i18n="automaticUpdateMode">发现新版后</span><select id="automaticUpdateMode"><option value="notify" data-i18n="updateNotifyOnly">仅通知</option><option value="install" data-i18n="updateAutoInstall">自动安装并重启</option></select></label>
+              <label><span data-i18n="updateCheckTime">每日检查时间</span><input id="automaticUpdateTime" type="time" value="04:35" /></label>
+            </div>
+            <p class="explain" data-i18n="automaticUpdateHint">默认关闭。启用后按运行设备的本地时间每天检查一次；自动安装仍要求 Release 包和 SHA-256 校验均可用。</p>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="updateNetworkSources">更新线路</legend>
+            <div id="updateSourceDiagnostics" class="diagnostic-list"></div>
+          </fieldset>
+        </section>
         <section class="tab-panel about-product" data-panel="about">
           <div class="about-copy">
             <p data-i18n="aboutLead">AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据、Torrent 池、媒体目录和外部只读媒体库整理到同一套本地 Catalog 与状态体系。</p>
             <p data-i18n="aboutDetail">程序连续完成资源筛选、下载投料、多级目录规划、系列关系整理、收藏核验、Web 浏览与长期贮存；qBittorrent、Ani-RSS 与 Torrent Collector 均为可选组件。</p>
             <p data-i18n="aboutRelations">作品关系图根据 Bangumi Archive 及辅助证据组织前作、续作、总集篇、番外、衍生、不同演绎和跨系列关联，并在可接受的计算时间内优化节点布局与关系线轨道。</p>
             <p data-i18n="aboutComponents">AnimeMachine 本身不提供动画检索或下载，也不内置 Torrent、磁力链接或媒体内容。外部媒体目录按只读来源处理；实际下载与订阅由用户连接的外部组件完成。</p>
-            <p><span data-i18n="versionLabel">版本</span> <strong id="appVersion">—</strong></p>
             <p><a href="https://github.com/kyupi-git/animemachine" target="_blank" rel="noreferrer">github.com/kyupi-git/animemachine</a></p>
             <ul class="about-sources">
               <li><a href="https://github.com/bangumi/Archive" target="_blank" rel="noreferrer">Bangumi Archive</a><span data-i18n="aboutArchiveSource">提供本地动画元数据底包与作品关系基础。</span></li>

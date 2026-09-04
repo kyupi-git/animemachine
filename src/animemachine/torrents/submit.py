@@ -18,29 +18,22 @@ from pathlib import Path, PurePosixPath
 
 HASH_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 from ..config.loader import load_config
-from ..config.runtime import apply_runtime_overrides
 from ..network import transport
 from .metainfo import read_torrent_file
 
 PROJECT_ROOT=Path(__file__).resolve().parents[3]
 PRODUCT_CONFIG = os.environ.get("ANM_CONFIG_PATH")
-if PRODUCT_CONFIG:
-    CONFIG=apply_runtime_overrides(json.loads(Path(PRODUCT_CONFIG).read_text(encoding="utf-8-sig")))
-    QBT_ROOT=CONFIG["deployment"]["qbtLibraryRoot"]
-    CATEGORY=CONFIG["components"]["downloadClient"]["category"]
-    BASE_TAGS=set(CONFIG["components"]["downloadClient"]["tags"])
-else:
-    configured_state = os.getenv("ANM_STATE_DIR", "").strip()
-    state_dir = Path(configured_state) if configured_state else None
-    config_path = PROJECT_ROOT / "config.json"
-    if not config_path.is_file():
-        config_path = Path(__file__).resolve().parents[1] / "resources" / "config.example.json"
-    cache_path = state_dir / "config-cache.json" if state_dir is not None else None
-    CONFIG,_=load_config(config_path=config_path, cache_path=cache_path)
-    client = CONFIG["components"]["downloadClient"]
-    QBT_ROOT=CONFIG["deployment"]["qbtLibraryRoot"]
-    CATEGORY=client["category"]
-    BASE_TAGS=set(client["tags"])
+configured_state = os.getenv("ANM_STATE_DIR", "").strip()
+state_dir = Path(configured_state) if configured_state else None
+config_path = Path(PRODUCT_CONFIG) if PRODUCT_CONFIG else PROJECT_ROOT / "config.json"
+if not config_path.is_file() and not PRODUCT_CONFIG:
+    config_path = Path(__file__).resolve().parents[1] / "resources" / "config.example.json"
+cache_path = state_dir / "config-cache.json" if state_dir is not None else None
+CONFIG,_=load_config(config_path=config_path, cache_path=cache_path)
+client = CONFIG["components"]["downloadClient"]
+QBT_ROOT=CONFIG["deployment"]["qbtLibraryRoot"]
+CATEGORY=client["category"]
+BASE_TAGS=set(client["tags"])
 
 
 def safe_relative(value: str) -> bool:

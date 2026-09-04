@@ -75,6 +75,74 @@ class PlaybackItem:
         return self.locator.name
 
 
+class PlaybackDiagnostics:
+    """Small in-memory view of active/recent HTTP playback transfers."""
+
+    def __init__(self, maximum: int = 24) -> None:
+        self.maximum = max(4, int(maximum))
+        self._lock = threading.RLock()
+        self._items: dict[str, dict[str, Any]] = {}
+        self._order: list[str] = []
+
+    def begin(self, token: str, locator: MediaLocator, requested_range: str) -> None:
+        now = time.time()
+        with self._lock:
+            item = self._items.get(token)
+            if item is None:
+                item = {
+                    "token": token[:8], "name": locator.name, "source": locator.source_type,
+                    "range": requested_range or "full", "resumeCount": 0, "upstream": "local" if locator.source_type == "local" else "connecting",
+                    "bytes": 0, "rateBps": 0.0, "startedAt": now, "updatedAt": now, "state": "active",
+                }
+                self._items[token] = item
+                self._order.insert(0, token)
+            else:
+                item.update(range=requested_range or "full", updatedAt=now, state="active", startedAt=now, bytes=0, rateBps=0.0)
+            if requested_range:
+                item["resumeCount"] = int(item.get("resumeCount", 0)) + 1
+            self._trim_locked()
+
+    def resume(self, token: str) -> None:
+        with self._lock:
+            item = self._items.get(token)
+            if item is not None:
+                item["resumeCount"] = int(item.get("resumeCount", 0)) + 1
+                item["updatedAt"] = time.time()
+
+    def upstream(self, token: str, value: str) -> None:
+        with self._lock:
+            item = self._items.get(token)
+            if item is not None:
+                item["upstream"] = str(value)
+                item["updatedAt"] = time.time()
+
+    def transfer(self, token: str, byte_count: int) -> None:
+        with self._lock:
+            item = self._items.get(token)
+            if item is None:
+                return
+            item["bytes"] = int(item.get("bytes", 0)) + max(0, int(byte_count))
+            elapsed = max(.001, time.time() - float(item.get("startedAt") or time.time()))
+            item["rateBps"] = float(item["bytes"]) / elapsed
+            item["updatedAt"] = time.time()
+
+    def finish(self, token: str, state: str = "complete") -> None:
+        with self._lock:
+            item = self._items.get(token)
+            if item is not None:
+                item["state"] = state
+                item["updatedAt"] = time.time()
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(self._items[token]) for token in self._order if token in self._items]
+
+    def _trim_locked(self) -> None:
+        while len(self._order) > self.maximum:
+            token = self._order.pop()
+            self._items.pop(token, None)
+
+
 class MediaTokenRegistry:
     """Opaque sliding-idle sessions; one active episode renews the whole queue."""
 
@@ -193,24 +261,15 @@ def _is_main_video(path: Path, file_kind: str | None = None) -> bool:
 
 
 def _default_main_queue(items: list[PlaybackItem]) -> list[PlaybackItem]:
-    """Choose one default file per episode and suppress byte-identical copies."""
-    unique: list[PlaybackItem] = []
-    sizes: set[int] = set()
-    for item in items:
-        if item.bytes > 0 and item.bytes in sizes:
-            continue
-        if item.bytes > 0:
-            sizes.add(item.bytes)
-        unique.append(item)
-
+    """Choose one default file per episode without conflating equal-sized media."""
     origin_rank = {"managed": 3, "external": 2, "ani-rss": 2, "preexisting": 1}
     numbered: dict[float, list[PlaybackItem]] = {}
     unnumbered: list[PlaybackItem] = []
-    for item in unique:
+    for item in items:
         (numbered.setdefault(item.episode, []) if item.episode is not None else unnumbered).append(item)
 
     selected = [max(candidates, key=lambda item: (
-        origin_rank.get(item.origin, 0), item.bytes, -len(item.name), item.name.casefold()
+        origin_rank.get(item.origin, 0), item.bytes
     )) for candidates in numbered.values()]
     selected.extend(unnumbered)
     return selected

@@ -67,6 +67,29 @@ jobs:
             dist/AnimeMachine-*-release-*.tar.gz.sha256
           if-no-files-found: error
 
+  release-app:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: 'RELEASE_PYTHON_VERSION'
+      - name: Build Docker online-update layer
+        run: |
+          python -m pip install "setuptools>=75" wheel
+          python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+          wheel=$(find dist -maxdepth 1 -type f -name 'animemachine-*-py3-none-any.whl' -print -quit)
+          test -n "$wheel"
+          sha256sum "$wheel" > "$wheel.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-app
+          path: |
+            dist/animemachine-*-py3-none-any.whl
+            dist/animemachine-*-py3-none-any.whl.sha256
+          if-no-files-found: error
+
   container:
     needs: validate
     runs-on: ubuntu-latest
@@ -110,7 +133,7 @@ jobs:
           sbom: true
 
   publish-release:
-    needs: [release-windows, release-unix, container]
+    needs: [release-windows, release-unix, release-app, container]
     runs-on: ubuntu-latest
     permissions:
       contents: write

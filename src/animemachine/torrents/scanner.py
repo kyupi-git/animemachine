@@ -16,6 +16,9 @@ from . import metainfo
 def indexer():
     return metainfo
 
+def _source_identity(value: str) -> str:
+    return os.path.normcase(os.path.normpath(value))
+
 def _iter_torrents_complete(root: Path):
     pending = [root]
     while pending:
@@ -87,6 +90,20 @@ def schema(db):
     if "review_reason_text" not in resolution_columns: db.execute("ALTER TABLE torrent_resolution ADD COLUMN review_reason_text TEXT NOT NULL DEFAULT ''")
     db.execute("UPDATE torrent SET title_state='unmapped' WHERE title_state IS NULL"); db.commit()
 
+def _repair_primary_source_paths(db, stamp):
+    """Point available torrents at a source copy that still exists."""
+    db.execute(
+        """UPDATE torrent AS t SET torrent_path=(
+               SELECT s.source_path FROM torrent_source s
+                WHERE s.info_hash=t.info_hash AND s.presence_state='present'
+                ORDER BY s.source_path COLLATE NOCASE,s.source_path LIMIT 1
+           ),indexed_at=?
+           WHERE COALESCE(t.asset_kind,'torrent')='torrent' AND t.metadata_state='available'
+             AND NOT EXISTS(SELECT 1 FROM torrent_source s WHERE s.info_hash=t.info_hash AND s.presence_state='present' AND s.source_path=t.torrent_path)
+             AND EXISTS(SELECT 1 FROM torrent_source s WHERE s.info_hash=t.info_hash AND s.presence_state='present')""",
+        (stamp,),
+    )
+
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("root",type=Path); ap.add_argument("--db",required=True)
     ap.add_argument("--config",type=Path,default=Path(__file__).resolve().parents[3]/"config.json")
@@ -137,7 +154,7 @@ def main():
                 if a.limit and stats["discovered"]>=a.limit: break
                 stats["discovered"]+=1
                 source=str(path.absolute())
-                seen.add(source.casefold())
+                seen.add(_source_identity(source))
                 st=path.stat()
                 prior=db.execute("SELECT size,mtime_ns,presence_state FROM torrent_source WHERE source_path=?",(source,)).fetchone()
                 if prior and not force_policy_reclassify and prior["size"]==st.st_size and prior["mtime_ns"]==st.st_mtime_ns and prior["presence_state"]=="present":
@@ -204,7 +221,7 @@ def main():
     publish_progress(a.progress_file,"pool_reconcile",stats)
     if scan_complete and not a.limit and not targeted:
         for r in db.execute("SELECT source_path FROM torrent_source WHERE presence_state!='missing'"):
-            if r["source_path"].casefold() not in seen:
+            if _source_identity(r["source_path"]) not in seen:
                 db.execute("UPDATE torrent_source SET presence_state='missing',last_seen_at=? WHERE source_path=?",(stamp,r["source_path"])); stats["missing"]+=1
         # A hash remains usable while any indexed copy is present.  Mark only
         # fully vanished torrent assets unavailable and touch indexed_at only
@@ -216,6 +233,7 @@ def main():
         db.execute("""UPDATE torrent SET metadata_state='available',indexed_at=?
             WHERE COALESCE(asset_kind,'torrent')='torrent' AND metadata_state!='available'
               AND EXISTS(SELECT 1 FROM torrent_source s WHERE s.info_hash=torrent.info_hash AND s.presence_state='present')""", (stamp,))
+        _repair_primary_source_paths(db, stamp)
     db.execute(
         """INSERT OR IGNORE INTO torrent_resolution(info_hash,disposition,review_reason_text,manual_action,user_note,proposal_evidence_json,updated_at)
            SELECT info_hash,'hard_reject',COALESCE(scan_reason,''),'pending','',?,? FROM torrent WHERE scan_state='reject'""",

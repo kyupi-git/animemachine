@@ -46,7 +46,9 @@ let config = {},
   coverBatch,
   searchController,
   timer,
-  catalogStats = {};
+  catalogStats = {},
+  startupState = null;
+const performanceReported = new Set();
 let authSession = null,
   csrfToken = "";
 let seed = "";
@@ -56,11 +58,93 @@ const selected = new Set(),
   playbackSources = new Map(),
   planState = { id: null },
   relationHiddenCodes = new Set();
+const modalStack = [];
+function topModalDialog() {
+  for (let index = modalStack.length - 1; index >= 0; index -= 1) {
+    if (modalStack[index]?.open) return modalStack[index];
+  }
+  return null;
+}
+function showModalDialog(dialog) {
+  if (!dialog || dialog.open) return;
+  dialog.showModal();
+  modalStack.push(dialog);
+}
+function canScrollVertically(element, deltaY) {
+  if (!(element instanceof Element) || Math.abs(deltaY) < 0.01) return false;
+  const overflow = getComputedStyle(element).overflowY;
+  if (!/(auto|scroll|overlay)/.test(overflow) || element.scrollHeight <= element.clientHeight + 1) return false;
+  return deltaY < 0
+    ? element.scrollTop > 0
+    : element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+}
+function modalWheelHasTarget(event, dialog) {
+  if (!dialog.contains(event.target)) return false;
+  let element = event.target instanceof Element ? event.target : event.target?.parentElement;
+  while (element && dialog.contains(element)) {
+    if (canScrollVertically(element, event.deltaY)) return true;
+    if (element === dialog) break;
+    element = element.parentElement;
+  }
+  return false;
+}
+function scrollModalFallback(event, dialog) {
+  if (!dialog.contains(event.target) || dialog.id !== "settingsDialog") return false;
+  const panel = dialog.querySelector(".tab-panel.active");
+  if (!canScrollVertically(panel, event.deltaY)) return false;
+  const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(1, panel.clientHeight) : 1;
+  panel.scrollTop += event.deltaY * scale;
+  return true;
+}
 const i18n = {
   "zh-Hans": {
     catalog: "AnimeMachine",
     aboutTitle: "关于 AnimeMachine",
-    versionLabel: "版本",
+    checkUpdate: "检测更新",
+    updateNow: "更新",
+    updateChecking: "正在检测更新…",
+    updateAvailable: "检测到新版{version}可用！",
+    updateLatest: "当前已是最新版本。",
+    updatePreparing: "正在下载并校验更新…",
+    updateRestarting: "更新已就绪，AnimeMachine 正在自动重启…",
+    updateFailed: "更新失败：{message}",
+    updateCheckFailed: "检测更新失败：{message}",
+    updateDockerRequired: "当前 Docker 镜像尚不包含 Web 在线升级运行时；请先通过 Docker Compose 更新一次镜像，之后即可直接在线升级。",
+    updateDockerStateUnavailable: "Docker 状态目录不可写，无法安全保存在线升级数据。",
+    updatePortableRequired: "在线升级仅对官方便携 Release 启用；源码部署仍可检测新版本。",
+    updateUnavailable: "当前平台缺少可用的在线升级包。",
+    updateTab: "检查更新",
+    updateDetailsHint: "检查 GitHub Release 与可用代理线路，并显示下载与校验状态。不可用线路会进入健康冷却，后续检查优先使用已验证的快速线路。",
+    currentVersionLabel: "当前版本",
+    latestVersionLabel: "最新版本",
+    downloadSourceLabel: "下载源",
+    sha256StatusLabel: "SHA-256 校验",
+    upgradeResultLabel: "升级结果",
+    lastCheckLabel: "最近检查",
+    automaticUpdateCheck: "定时自动检查更新",
+    automaticUpdateEnabled: "启用定时检查",
+    automaticUpdateMode: "发现新版后",
+    updateNotifyOnly: "仅通知",
+    updateAutoInstall: "自动安装并重启",
+    updateCheckTime: "每日检查时间",
+    automaticUpdateHint: "默认关闭。启用后按运行设备的本地时间每天检查一次；自动安装仍要求 Release 包和 SHA-256 校验均可用。",
+    updateNetworkSources: "更新线路",
+    shaPending: "等待下载校验",
+    shaVerified: "已通过",
+    shaFailed: "校验失败",
+    shaUnavailable: "不可用",
+    shaNotRequired: "无需校验",
+    upgradeIdle: "尚未升级",
+    upgradeDownloading: "正在下载",
+    upgradeRestarting: "已安装，正在重启",
+    upgradeInstalled: "升级成功",
+    upgradeFailedState: "升级失败",
+    upgradeStatusAvailable: "发现新版本",
+    upgradeStatusLatest: "当前已是最新版本",
+    upgradeStatusUnavailable: "发现新版，但当前环境不能在线安装",
+    upgradeStatusInstalling: "正在自动安装",
+    updateSourceDirect: "直连",
+    updateSourceProxy: "代理",
     aboutLead: "AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据、Torrent 池、媒体目录和外部只读媒体库整理到同一套本地 Catalog 与状态体系。",
     aboutDetail: "程序连续完成资源筛选、下载投料、多级目录规划、系列关系整理、收藏核验、Web 浏览与长期贮存；qBittorrent、Ani-RSS 与 Torrent Collector 均为可选组件。",
     aboutRelations: "作品关系图根据 Bangumi Archive 及辅助证据组织前作、续作、总集篇、番外、衍生、不同演绎和跨系列关联，并在可接受的计算时间内优化节点布局与关系线轨道。",
@@ -70,7 +154,7 @@ const i18n = {
     aboutMalSource: "在本地证据不足时作为作品身份和前后作关系的辅助来源。",
     aboutAniRssSource: "提供可选的新番订阅、状态同步与远程播放能力；AnimeMachine 通过其 HTTP API 连接。",
     aboutSubtitleSources: "是用户可选的外部字幕 API；字幕版权及使用条件由对应服务说明。",
-    cards: "磁贴",
+    cards: "卡片",
     table: "表格",
     settings: "设置",
     loginTitle: "登录 AnimeMachine",
@@ -80,6 +164,15 @@ const i18n = {
     password: "密码",
     usersTab: "用户",
     usersHint: "普通用户可浏览和提交下载，但不能修改设置。",
+    userCreateHint: "用户名为 3–64 个字母、数字、点、下划线或连字符；密码至少 10 位。",
+    userRole: "角色",
+    existingUsers: "现有用户",
+    initialAdmin: "初始管理员",
+    currentUser: "当前用户",
+    disabledUser: "已停用",
+    noUsers: "暂无用户。",
+    userCreated: "用户已创建。",
+    userUpdated: "用户状态已更新。",
     normalUser: "普通用户",
     administrator: "管理员",
     createUser: "创建用户",
@@ -94,7 +187,9 @@ const i18n = {
     custom: "自定义",
     titleAlias: "标题 / 别名",
     searchPlaceholder: "中文、英文、日语或简称",
-    era: "年代",
+    era: "年",
+    season: "季",
+    seasonSpring: "春（4月前后）", seasonSummer: "夏（7月前后）", seasonAutumn: "秋（10月前后）", seasonWinter: "冬（1月前后）",
     mediaFormat: "媒介形式",
     seriesWork: "系列作品",
     yes: "是",
@@ -166,21 +261,24 @@ const i18n = {
     stagedReplacement: "旧文件会保留；新版完成下载和校验前只进入暂存区。",
     sizeConflict: "同一路径的既有文件大小不同，且候选资源没有充分的修订证据。",
     summary: "简介",
-    settingsHint: "配置会持久保存；认证凭据只从运行环境读取，不写入配置文件。",
+    settingsHint: "配置会持久保存；页面录入的服务凭据保存在受限凭据文件中，不写入配置文件，也不会通过接口回显。",
     acceptedContent: "允许的资源类别",
-    startMode: "提交后的默认状态",
     stopped: "停止",
-    start: "自动开始（需逐批确认）",
-    allowAutoStart: "允许在计划确认时选择自动开始",
     save: "保存",
     saved: "已保存",
     availability: "可用来源",
     available: "有可用来源",
     unavailable: "无可用来源",
+    torrentSource: "Torrent 来源",
+    aniRssSource: "Ani-RSS 来源",
     downloadSources: "个可下载源",
     externalMediaAvailable: "外部媒体已映射",
     noAvailableSource: "无可用来源",
     libraryState: "收藏库状态",
+    localLibrary: "本地入库",
+    externalReadOnly: "外部只读",
+    submittedDownload: "提交下载",
+    notInLibrary: "暂未入库",
     existing: "已存在·已下载",
     localExisting: "本地已有",
     managedComplete: "下载完成",
@@ -205,15 +303,15 @@ const i18n = {
     excludedPolicy: "策略不符",
     searchPoolNow: "重新搜索本地资源",
     searchAniRss: "通过 Ani-RSS 查询资源",
-    aniRssManaged: "Ani-RSS 管理",
-    aniRssResources: "Ani-RSS 资源",
+    aniRssManaged: "Ani-RSS 媒体已存在",
+    aniRssResources: "Ani-RSS 资源可用",
     aniRssMode: "调用模式",
     aniRssPrefer: "优先调用 Ani-RSS",
     aniRssFallback: "备选调用 Ani-RSS",
     aniRssManual: "手动调用 Ani-RSS",
-    aniRssApiKey: "API Key（仅当前进程）",
-    aniRssApiKeyHint: "推荐通过 .env 环境变量持久配置；页面输入的密钥不会写入配置文件。",
-    aniRssCredentialConfigured: "API Key 已载入当前进程。",
+    aniRssApiKey: "API Key",
+    aniRssApiKeyHint: "保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。",
+    aniRssCredentialConfigured: "API Key 已保存到受限凭据存储。",
     aniRssMediaPath: "Ani-RSS 媒体路径",
     aniRssSyncMinutes: "状态同步间隔（分钟）",
     aniRssHint: "连接无效时自动按“手动调用”运行；连接恢复后使用所选模式。媒体目录始终只读。",
@@ -222,7 +320,7 @@ const i18n = {
     searchPoolNone: "检索完成，仍未找到可安全关联的资源",
     verifyWork: "立即核验",
     verifyRunning: "正在核验…",
-    scanIdle: "资源池待命",
+    scanIdle: "后台图片状态加载中",
     library: "收藏库",
     playback: "播放",
     noPlayableMedia: "尚无可播放的正片",
@@ -234,6 +332,10 @@ const i18n = {
     openPotPlayer: "使用 PotPlayer 打开",
     openIina: "使用 IINA 打开",
     reloadImage: "重新加载",
+    imageLoading: "图片加载中",
+    imageRetrying: "图片重试中",
+    imageNoImage: "暂无图片",
+    imageError: "图片加载失败",
     aniRssDelete: "删除",
     aniRssDeleteConfirm: "确认删除此 Ani-RSS 订阅及其已下载文件？",
     aniRssDeleteFailed: "Ani-RSS 删除未确认",
@@ -242,12 +344,8 @@ const i18n = {
     themeLight: "浅色模式",
     remotePlaybackSource: "Ani-RSS 远程播放",
     playbackStartFile: "起始媒体文件",
-    aniRssPathUnconfigured: "当前 Ani-RSS 媒体路径未配置，请使用播放器载入播放列表以观看。",
-    aniRssPathUnavailable: "当前 Ani-RSS 媒体路径不能访问，可以使用播放器载入播放列表以观看。",
-    aniRssPathAvailable: "当前 Ani-RSS 媒体路径可访问。",
     managed: "AnimeMachine 管理",
     preexisting: "本地既有",
-    notInLibrary: "未登记",
     collection: "合集",
     files: "文件",
     complete: "已收集完成",
@@ -317,6 +415,112 @@ const i18n = {
     japaneseSerialGroups: "日文连载资源",
     otherResourceGroups: "其它（未识别或不符合上述规则）",
     connectionsTab: "连接",
+    diagnosticsTab: "诊断",
+    diagnosticsHint: "只显示当前运行状态和近期结果；不会显示密钥、媒体内容或完整文件路径。",
+    systemHealth: "系统健康",
+    systemHealthHint: "这里只汇总关键状态；各组件的详细信息仍在“诊断”页。",
+    healthLoading: "正在汇总运行状态…",
+    healthOverallNormal: "系统主要链路正常",
+    healthOverallWarning: "存在需要关注的运行状态",
+    healthNormal: "正常",
+    healthWarning: "警告",
+    healthNetwork: "网络",
+    healthAniRss: "Ani-RSS",
+    healthQbittorrent: "qBittorrent",
+    healthStorage: "存储",
+    healthImagePreload: "图片预加载",
+    healthPlayback: "播放链路",
+    healthReady: "就绪",
+    healthUnknown: "尚无近期结果",
+    healthDegraded: "近期异常",
+    healthUnavailable: "不可用",
+    healthDisabled: "已关闭",
+    healthManual: "手动模式",
+    healthWarming: "后台准备中",
+    healthWarm: "准备完成",
+    healthFailed: "失败",
+    healthSamples: "近期样本",
+    healthWarnings: "异常项",
+    healthSessions: "会话",
+    healthMode: "模式",
+    healthState: "状态",
+    healthChecked: "检查项",
+    startupStatus: "启动与后台准备",
+    networkDiagnostics: "网络诊断",
+    recheckNetwork: "重新检测",
+    currentRoute: "当前请求路径",
+    networkProfile: "当前网络环境",
+    performanceBaseline: "性能基线",
+    perfCatalogReady: "Catalog Ready",
+    perfFirstScreen: "首屏可用",
+    perfFirstCover: "首张封面",
+    perfWarmComplete: "Warm 完成",
+    previousRun: "上次运行",
+    routeDirect: "直连",
+    routeEnvironment: "环境代理",
+    routeWindows: "Windows 系统代理",
+    routeSystem: "系统代理",
+    imageSourceTrend: "图片源短期健康趋势",
+    trend12h: "近 12 小时",
+    noTrendData: "暂无趋势数据",
+    sourceSelected: "当前优选",
+    sourceConfidence: "样本置信度",
+    sourceScore: "综合评分",
+    selectionIncumbentBest: "当前源仍为最优",
+    selectionBestQuality: "综合评分最高",
+    selectionHysteresisHold: "切源保持期内，暂不切换",
+    selectionHysteresisMargin: "候选优势不足，保持当前源",
+    selectionIncumbentCooldown: "当前源进入冷却，切换到候选源",
+    selectionCandidateCooldown: "候选源仍在冷却，保持当前源",
+    selectionMeaningfullyBetter: "候选源优势已超过切换阈值",
+    catalogAvailable: "Catalog 已可用",
+    catalogPreparing: "Catalog 准备中",
+    backgroundImagesPreparing: "后台图片准备中",
+    backgroundImagesPaused: "后台图片准备已暂停",
+    backgroundImagesWaiting: "后台图片等待网络恢复",
+    backgroundImagesComplete: "后台图片准备完成",
+    imagesPreparedThrough: "由后向前已获取至 {month} 的图片",
+    imagesPreparingBackward: "正在由后向前准备图片",
+    archiveBuildSummary: "使用 Bangumi Archive {version} · 共 {count} 部作品。",
+    estimatedRemaining: "预计剩余",
+    estimatedTime: "预计剩余时间",
+    preloadRate: "近期处理速率",
+    adaptiveConcurrency: "自适应后台并发",
+    budgetIdle: "资源空闲",
+    budgetForeground: "前台活跃",
+    budgetForegroundLatency: "前台响应变慢",
+    budgetCpu: "CPU 负载较高",
+    budgetIo: "图片 I/O 变慢",
+    budgetNetwork: "网络失败率升高",
+    currentItem: "当前对象",
+    successRate: "近期成功率",
+    latency: "延迟",
+    throughput: "吞吐",
+    lastFailure: "最近失败",
+    noRecentFailure: "无近期失败",
+    imagePreload: "图片预加载",
+    recentSixMonths: "最近 6 个月",
+    historyCatalog: "历史库",
+    failedRetry: "失败重试",
+    pausePreload: "暂停",
+    resumePreload: "恢复",
+    backgroundConcurrency: "后台并发",
+    backgroundBandwidth: "后台带宽 KiB/s（0 = 不限）",
+    applyLimits: "应用限制",
+    preloadPaused: "后台预加载已暂停；前台图片请求不受影响。",
+    preloadWaitingNetwork: "已进入本地模式；网络恢复后将自动继续后台预加载。",
+    preloadWarm: "后台图片准备完成。",
+    preloadRunning: "后台图片准备中",
+    playbackDiagnostics: "远程播放会话",
+    noPlaybackSessions: "暂无近期播放会话。",
+    rangeHeader: "Range",
+    resumeCount: "续传",
+    upstreamState: "Ani-RSS 上游",
+    transferRate: "传输速率",
+    startupStarting: "Starting · 核心初始化中",
+    startupReady: "Ready · Web 已可使用",
+    startupWarming: "Warming · Web 已可使用，后台准备中",
+    startupWarm: "Warm · 后台准备完成",
     subscriptionsTab: "订阅",
     logsTab: "日志",
     historyTab: "历史记录",
@@ -341,12 +545,12 @@ const i18n = {
     metadataNetworkHint: "按健康与延迟自动选择，失败后冷却并切换；支持系统代理。Archive 文件无论来自何处都必须通过官方 SHA-256。",
     metadataEndpointsRequired: "Archive 清单和 Bangumi API 至少各保留一个端点。",
     connectionHint:
-      "Compose 部署会以服务名覆盖回环地址；持久凭据从 .env 环境变量读取。",
+      "Compose 部署会以服务名覆盖回环地址；页面保存的凭据写入受限状态文件，部署环境变量或 Secret 仍具有更高优先级。",
     endpoint: "服务地址",
-    qbtApiKey: "API Key（仅当前进程）",
-    qbtApiKeyPlaceholder: "留空则使用 .env 环境变量",
-    qbtApiKeyHint: "推荐通过 .env 环境变量持久配置；在此输入的密钥仅保存在当前进程内，重启后失效。",
-    qbtCredentialConfigured: "API Key 已在当前进程配置",
+    qbtApiKey: "API Key",
+    qbtApiKeyPlaceholder: "留空则沿用已保存或部署凭据",
+    qbtApiKeyHint: "保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。",
+    qbtCredentialConfigured: "API Key 已保存到受限凭据存储",
     torrentPoolPath: "Torrent 池路径",
     torrentPoolHint: "AnimeMachine 只监视此目录中的种子文件；种子由用户或外部工具自行放入。",
     libraryPath: "动画收藏库路径",
@@ -375,9 +579,9 @@ const i18n = {
     subtitleSources: "字幕源",
     subtitlesEnabled: "启用归档资源字幕匹配",
     assrtEndpoints: "ASSRT API 端点（每行一个）",
-    assrtToken: "ASSRT Token（仅当前进程）",
+    assrtToken: "ASSRT Token",
     openSubtitlesEndpoint: "OpenSubtitles API 端点",
-    openSubtitlesKey: "OpenSubtitles API Key（仅当前进程）",
+    openSubtitlesKey: "OpenSubtitles API Key",
     subtitleSourcesHint: "只使用已配置的正式 API；按当前界面语言排序，低置信度结果必须由用户选择。",
     searchSubtitles: "检索字幕", useSubtitle: "使用该字幕", subtitlePresent: "字幕已存在",
     subtitleEmbedded: "媒体已内嵌字幕", subtitleNotFound: "未找到可靠字幕", subtitleApplied: "字幕已安装",
@@ -396,6 +600,8 @@ const i18n = {
     automation: "自动化与容量",
     pollMinutes: "资源池扫描间隔（分钟）",
     minimumFree: "最低保留空间（TiB）",
+    regionPriority: "地区",
+    regionChina: "中国", regionJapan: "日本", regionKorea: "韩国", regionUsa: "美国", regionEurope: "欧洲", regionOther: "其它",
     onDemandHash: "精确核验文件（默认快速核验，开启后会在存在比较基准时校验文件哈希值）",
     otherWarning:
       "取消“其它”可能导致无法匹配未识别或新出现的资源。仍要取消吗？",
@@ -430,7 +636,51 @@ const i18n = {
   en: {
     catalog: "AnimeMachine",
     aboutTitle: "About AnimeMachine",
-    versionLabel: "Version",
+    checkUpdate: "Check for updates",
+    updateNow: "Update",
+    updateChecking: "Checking for updates…",
+    updateAvailable: "New version {version} is available!",
+    updateLatest: "You are running the latest version.",
+    updatePreparing: "Downloading and verifying the update…",
+    updateRestarting: "The update is ready. AnimeMachine is restarting automatically…",
+    updateFailed: "Update failed: {message}",
+    updateCheckFailed: "Update check failed: {message}",
+    updateDockerRequired: "This Docker image does not yet include the Web update runtime. Update the image once with Docker Compose; later releases can be installed online.",
+    updateDockerStateUnavailable: "The Docker state directory is not writable, so the online update cannot be staged safely.",
+    updatePortableRequired: "Online update is enabled only for official portable Releases; source installs can still check for new versions.",
+    updateUnavailable: "No compatible online-update package is available for this platform.",
+    updateTab: "Updates",
+    updateDetailsHint: "Checks GitHub Releases and available proxy routes, with download and verification state. Unhealthy routes enter cooldown so later checks prefer proven fast routes.",
+    currentVersionLabel: "Current version",
+    latestVersionLabel: "Latest version",
+    downloadSourceLabel: "Download source",
+    sha256StatusLabel: "SHA-256 verification",
+    upgradeResultLabel: "Upgrade result",
+    lastCheckLabel: "Last check",
+    automaticUpdateCheck: "Scheduled update checks",
+    automaticUpdateEnabled: "Enable scheduled checks",
+    automaticUpdateMode: "When a new version is found",
+    updateNotifyOnly: "Notify only",
+    updateAutoInstall: "Install automatically and restart",
+    updateCheckTime: "Daily check time",
+    automaticUpdateHint: "Off by default. When enabled, checks once a day using the host's local time. Automatic installation still requires a valid Release asset and SHA-256 verification.",
+    updateNetworkSources: "Update routes",
+    shaPending: "Awaiting download verification",
+    shaVerified: "Verified",
+    shaFailed: "Verification failed",
+    shaUnavailable: "Unavailable",
+    shaNotRequired: "Not required",
+    upgradeIdle: "No upgrade attempted",
+    upgradeDownloading: "Downloading",
+    upgradeRestarting: "Installed; restarting",
+    upgradeInstalled: "Upgrade successful",
+    upgradeFailedState: "Upgrade failed",
+    upgradeStatusAvailable: "New version found",
+    upgradeStatusLatest: "Already up to date",
+    upgradeStatusUnavailable: "New version found, but online installation is unavailable",
+    upgradeStatusInstalling: "Installing automatically",
+    updateSourceDirect: "Direct",
+    updateSourceProxy: "Proxy",
     aboutLead: "AnimeMachine is an automated anime-library system that organizes anime metadata, torrent pools, media directories and external read-only libraries under one local Catalog and state model.",
     aboutDetail: "It handles resource screening, download handoff, multi-level directory planning, series relationships, collection verification, Web browsing and long-term storage. qBittorrent, Ani-RSS and Torrent Collector are optional components.",
     aboutRelations: "The relationship graph uses Bangumi Archive and supporting evidence to organize prequels, sequels, recaps, side stories, derivatives, alternate adaptations and cross-series links, while optimizing node placement and edge tracks within practical runtime limits.",
@@ -450,6 +700,15 @@ const i18n = {
     password: "Password",
     usersTab: "Users",
     usersHint: "Users may browse and submit downloads, but cannot change settings.",
+    userCreateHint: "Usernames use 3–64 letters, digits, dots, underscores or hyphens; passwords require at least 10 characters.",
+    userRole: "Role",
+    existingUsers: "Existing users",
+    initialAdmin: "Initial admin",
+    currentUser: "Current user",
+    disabledUser: "Disabled",
+    noUsers: "No users.",
+    userCreated: "User created.",
+    userUpdated: "User status updated.",
     normalUser: "User",
     administrator: "Administrator",
     createUser: "Create user",
@@ -464,7 +723,9 @@ const i18n = {
     custom: "Custom",
     titleAlias: "Title / alias",
     searchPlaceholder: "English, Japanese, Chinese or abbreviation",
-    era: "Era",
+    era: "Year",
+    season: "Season",
+    seasonSpring: "Spring (around Apr)", seasonSummer: "Summer (around Jul)", seasonAutumn: "Autumn (around Oct)", seasonWinter: "Winter (around Jan)",
     mediaFormat: "Format",
     seriesWork: "Series work",
     yes: "Yes",
@@ -541,21 +802,24 @@ const i18n = {
       "A file at the same target has a different size and the candidate lacks sufficient revision evidence.",
     summary: "Summary",
     settingsHint:
-      "Settings persist; credentials are read from the runtime environment and never written here.",
+      "Settings persist; service credentials entered here are stored in restricted credential files, never in configuration or API responses.",
     acceptedContent: "Allowed release classes",
-    startMode: "Default state after submission",
     stopped: "Stopped",
-    start: "Auto start (confirm each batch)",
-    allowAutoStart: "Allow auto-start after explicit plan confirmation",
     save: "Save",
     saved: "Saved",
     availability: "Available sources",
     available: "Has an available source",
     unavailable: "No available source",
+    torrentSource: "Torrent source",
+    aniRssSource: "Ani-RSS source",
     downloadSources: " download sources",
     externalMediaAvailable: "External media mapped",
     noAvailableSource: "No available source",
-    libraryState: "Library",
+    libraryState: "Library status",
+    localLibrary: "Local library",
+    externalReadOnly: "External read-only",
+    submittedDownload: "Submitted download",
+    notInLibrary: "Not yet in library",
     existing: "Existing · downloaded",
     localExisting: "Local media",
     managedComplete: "Download complete",
@@ -580,15 +844,15 @@ const i18n = {
     excludedPolicy: "Policy mismatch",
     searchPoolNow: "Search local resources again",
     searchAniRss: "Search via Ani-RSS",
-    aniRssManaged: "Managed by Ani-RSS",
-    aniRssResources: "Ani-RSS resources",
+    aniRssManaged: "Ani-RSS media available",
+    aniRssResources: "Ani-RSS resources available",
     aniRssMode: "Invocation mode",
     aniRssPrefer: "Prefer Ani-RSS",
     aniRssFallback: "Use Ani-RSS as fallback",
     aniRssManual: "Use Ani-RSS manually",
-    aniRssApiKey: "API key (current process only)",
-    aniRssApiKeyHint: "Use the .env environment variable for persistence; a key entered here is never written to configuration.",
-    aniRssCredentialConfigured: "API key loaded for the current process.",
+    aniRssApiKey: "API key",
+    aniRssApiKeyHint: "Saved keys survive restart without being written to config.json, browser storage, or API responses. Deployment environment/Secret credentials retain precedence.",
+    aniRssCredentialConfigured: "API key saved to restricted credential storage.",
     aniRssMediaPath: "Ani-RSS media path",
     aniRssSyncMinutes: "State sync interval (minutes)",
     aniRssHint: "An unavailable connection falls back to manual mode; the chosen mode resumes after recovery. Media access is always read-only.",
@@ -597,7 +861,7 @@ const i18n = {
     searchPoolNone: "Search complete; no safely linkable source found",
     verifyWork: "Verify now",
     verifyRunning: "Verifying…",
-    scanIdle: "Torrent pool idle",
+    scanIdle: "Loading background image status",
     library: "Library",
     playback: "Playback",
     noPlayableMedia: "No playable main feature",
@@ -609,6 +873,10 @@ const i18n = {
     openPotPlayer: "Open in PotPlayer",
     openIina: "Open in IINA",
     reloadImage: "Reload",
+    imageLoading: "Loading image",
+    imageRetrying: "Retrying image",
+    imageNoImage: "No image",
+    imageError: "Image failed",
     aniRssDelete: "Delete",
     aniRssDeleteConfirm: "Delete this Ani-RSS subscription and its downloaded files?",
     aniRssDeleteFailed: "Ani-RSS deletion was not confirmed",
@@ -617,12 +885,8 @@ const i18n = {
     themeLight: "Light mode",
     remotePlaybackSource: "Ani-RSS remote playback",
     playbackStartFile: "Starting media file",
-    aniRssPathUnconfigured: "The Ani-RSS media path is not configured. Load the playlist in your player to watch.",
-    aniRssPathUnavailable: "The Ani-RSS media path is not accessible. Load the playlist in your player to watch.",
-    aniRssPathAvailable: "The Ani-RSS media path is accessible.",
     managed: "Managed by AnimeMachine",
     preexisting: "Pre-existing",
-    notInLibrary: "Not registered",
     collection: "Collection",
     files: "Files",
     complete: "Complete",
@@ -692,6 +956,112 @@ const i18n = {
     japaneseSerialGroups: "Japanese serial releases",
     otherResourceGroups: "Other (unrecognized or unmatched)",
     connectionsTab: "Connections",
+    diagnosticsTab: "Diagnostics",
+    diagnosticsHint: "Shows current runtime state and recent results only; secrets, media content, and full file paths are not exposed.",
+    systemHealth: "System health",
+    systemHealthHint: "Only key states are summarized here; component details remain on Diagnostics.",
+    healthLoading: "Summarizing runtime status…",
+    healthOverallNormal: "Core system paths are healthy",
+    healthOverallWarning: "Some runtime states need attention",
+    healthNormal: "Normal",
+    healthWarning: "Warning",
+    healthNetwork: "Network",
+    healthAniRss: "Ani-RSS",
+    healthQbittorrent: "qBittorrent",
+    healthStorage: "Storage",
+    healthImagePreload: "Image preload",
+    healthPlayback: "Playback path",
+    healthReady: "Ready",
+    healthUnknown: "No recent result",
+    healthDegraded: "Recently degraded",
+    healthUnavailable: "Unavailable",
+    healthDisabled: "Disabled",
+    healthManual: "Manual mode",
+    healthWarming: "Warming",
+    healthWarm: "Warm",
+    healthFailed: "Failed",
+    healthSamples: "Recent samples",
+    healthWarnings: "Warnings",
+    healthSessions: "Sessions",
+    healthMode: "Mode",
+    healthState: "State",
+    healthChecked: "Checks",
+    startupStatus: "Startup & background preparation",
+    networkDiagnostics: "Network diagnostics",
+    recheckNetwork: "Recheck now",
+    currentRoute: "Current request route",
+    networkProfile: "Current network profile",
+    performanceBaseline: "Performance baseline",
+    perfCatalogReady: "Catalog Ready",
+    perfFirstScreen: "First screen usable",
+    perfFirstCover: "First cover",
+    perfWarmComplete: "Warm complete",
+    previousRun: "Previous run",
+    routeDirect: "Direct",
+    routeEnvironment: "Environment proxy",
+    routeWindows: "Windows system proxy",
+    routeSystem: "System proxy",
+    imageSourceTrend: "Short-term image source health",
+    trend12h: "Last 12 hours",
+    noTrendData: "No trend data",
+    sourceSelected: "Selected source",
+    sourceConfidence: "Sample confidence",
+    sourceScore: "Composite score",
+    selectionIncumbentBest: "Current source remains best",
+    selectionBestQuality: "Highest composite score",
+    selectionHysteresisHold: "Holding current source during switch hysteresis",
+    selectionHysteresisMargin: "Candidate advantage is below the switch margin",
+    selectionIncumbentCooldown: "Current source is cooling down; switched candidate",
+    selectionCandidateCooldown: "Candidate is cooling down; kept current source",
+    selectionMeaningfullyBetter: "Candidate advantage exceeded the switch threshold",
+    catalogAvailable: "Catalog available",
+    catalogPreparing: "Catalog preparing",
+    backgroundImagesPreparing: "Preparing images in background",
+    backgroundImagesPaused: "Background image preparation paused",
+    backgroundImagesWaiting: "Background images waiting for network recovery",
+    backgroundImagesComplete: "Background image preparation complete",
+    imagesPreparedThrough: "Prepared backward through works from {month}",
+    imagesPreparingBackward: "Preparing works backward from newest to oldest",
+    archiveBuildSummary: "Bangumi base package {version} · {count} works.",
+    estimatedRemaining: "Estimated remaining",
+    estimatedTime: "Estimated time remaining",
+    preloadRate: "Recent processing rate",
+    adaptiveConcurrency: "Adaptive background concurrency",
+    budgetIdle: "Resources idle",
+    budgetForeground: "Foreground active",
+    budgetForegroundLatency: "Foreground response slowed",
+    budgetCpu: "CPU load elevated",
+    budgetIo: "Image I/O slowed",
+    budgetNetwork: "Network failure rate elevated",
+    currentItem: "Current item",
+    successRate: "Recent success",
+    latency: "Latency",
+    throughput: "Throughput",
+    lastFailure: "Last failure",
+    noRecentFailure: "No recent failure",
+    imagePreload: "Image preload",
+    recentSixMonths: "Recent 6 months",
+    historyCatalog: "Historical catalog",
+    failedRetry: "Failed retry",
+    pausePreload: "Pause",
+    resumePreload: "Resume",
+    backgroundConcurrency: "Background concurrency",
+    backgroundBandwidth: "Background bandwidth KiB/s (0 = unlimited)",
+    applyLimits: "Apply limits",
+    preloadPaused: "Background preload is paused; foreground image requests are unaffected.",
+    preloadWaitingNetwork: "Local mode is active; background preload will resume automatically after network recovery.",
+    preloadWarm: "Background image preparation is complete.",
+    preloadRunning: "Preparing images in background",
+    playbackDiagnostics: "Remote playback sessions",
+    noPlaybackSessions: "No recent playback sessions.",
+    rangeHeader: "Range",
+    resumeCount: "Resumes",
+    upstreamState: "Ani-RSS upstream",
+    transferRate: "Transfer rate",
+    startupStarting: "Starting · Core initialization in progress",
+    startupReady: "Ready · Web is available",
+    startupWarming: "Warming · Web is available; background preparation continues",
+    startupWarm: "Warm · Background preparation complete",
     subscriptionsTab: "Subscriptions",
     logsTab: "Logs",
     historyTab: "History",
@@ -716,12 +1086,12 @@ const i18n = {
     metadataNetworkHint: "Chooses by health and latency, cools down failures, and honors the system proxy. Every Archive asset must pass the official SHA-256.",
     metadataEndpointsRequired: "Keep at least one Archive manifest and one Bangumi API endpoint.",
     connectionHint:
-      "Compose overrides loopback addresses with service names; persistent credentials come from .env environment variables.",
+      "Compose overrides loopback addresses with service names. Web-saved credentials use restricted state files; deployment environment variables or Secrets retain precedence.",
     endpoint: "Endpoint",
-    qbtApiKey: "API Key (this process only)",
-    qbtApiKeyPlaceholder: "Leave blank to use the .env environment variable",
-    qbtApiKeyHint: "Use the .env environment variable for persistence. A key entered here stays only in the current process and expires on restart.",
-    qbtCredentialConfigured: "API Key is configured for this process",
+    qbtApiKey: "API Key",
+    qbtApiKeyPlaceholder: "Leave blank to keep the saved or deployment credential",
+    qbtApiKeyHint: "Saved keys survive restart without being written to config.json, browser storage, or API responses. Deployment environment/Secret credentials retain precedence.",
+    qbtCredentialConfigured: "API Key saved to restricted credential storage",
     torrentPoolPath: "Torrent pool path",
     torrentPoolHint: "AnimeMachine only watches this directory. Torrents are supplied by the user or an external tool.",
     libraryPath: "Anime library path",
@@ -750,9 +1120,9 @@ const i18n = {
     subtitleSources: "Subtitle sources",
     subtitlesEnabled: "Enable subtitle matching for archive releases",
     assrtEndpoints: "ASSRT API endpoints (one per line)",
-    assrtToken: "ASSRT token (current process only)",
+    assrtToken: "ASSRT token",
     openSubtitlesEndpoint: "OpenSubtitles API endpoint",
-    openSubtitlesKey: "OpenSubtitles API key (current process only)",
+    openSubtitlesKey: "OpenSubtitles API key",
     subtitleSourcesHint: "Only configured official APIs are used. Results follow the UI language; low-confidence matches require manual selection.",
     searchSubtitles: "Find subtitles", useSubtitle: "Use subtitle", subtitlePresent: "Subtitles available",
     subtitleEmbedded: "Embedded subtitles detected", subtitleNotFound: "No reliable subtitles found", subtitleApplied: "Subtitles installed",
@@ -771,6 +1141,8 @@ const i18n = {
     auditStarted: "Local verification started in background batches.",
     automation: "Automation & capacity",
     pollMinutes: "Pool scan interval (minutes)",
+    regionPriority: "Region",
+    regionChina: "China", regionJapan: "Japan", regionKorea: "Korea", regionUsa: "United States", regionEurope: "Europe", regionOther: "Other",
     minimumFree: "Reserved free space (TiB)",
     onDemandHash: "Exact file verification (fast by default; hashes are checked when a comparison baseline exists)",
     otherWarning:
@@ -806,7 +1178,51 @@ const i18n = {
   ja: {
     catalog: "AnimeMachine",
     aboutTitle: "AnimeMachineについて",
-    versionLabel: "バージョン",
+    checkUpdate: "更新を確認",
+    updateNow: "更新",
+    updateChecking: "更新を確認しています…",
+    updateAvailable: "新しいバージョン {version} を利用できます！",
+    updateLatest: "現在のバージョンが最新です。",
+    updatePreparing: "更新をダウンロードして検証しています…",
+    updateRestarting: "更新の準備が完了しました。AnimeMachine を自動的に再起動しています…",
+    updateFailed: "更新に失敗しました：{message}",
+    updateCheckFailed: "更新確認に失敗しました：{message}",
+    updateDockerRequired: "この Docker イメージには Web オンライン更新ランタイムがまだ含まれていません。Docker Compose で一度イメージを更新すると、以後はオンライン更新できます。",
+    updateDockerStateUnavailable: "Docker の状態ディレクトリへ書き込めないため、オンライン更新を安全に準備できません。",
+    updatePortableRequired: "オンライン更新は公式ポータブル Release のみ有効です。ソース環境でも新しいバージョンの確認はできます。",
+    updateUnavailable: "このプラットフォーム向けのオンライン更新パッケージはありません。",
+    updateTab: "更新を確認",
+    updateDetailsHint: "GitHub Release と利用可能なプロキシ経路を確認し、ダウンロードと検証の状態を表示します。異常な経路はクールダウンし、以後は実績のある高速な経路を優先します。",
+    currentVersionLabel: "現在のバージョン",
+    latestVersionLabel: "最新バージョン",
+    downloadSourceLabel: "ダウンロード元",
+    sha256StatusLabel: "SHA-256 検証",
+    upgradeResultLabel: "更新結果",
+    lastCheckLabel: "最終確認",
+    automaticUpdateCheck: "定期的な更新確認",
+    automaticUpdateEnabled: "定期確認を有効にする",
+    automaticUpdateMode: "新しいバージョンを検出したら",
+    updateNotifyOnly: "通知のみ",
+    updateAutoInstall: "自動インストールして再起動",
+    updateCheckTime: "毎日の確認時刻",
+    automaticUpdateHint: "初期設定では無効です。有効にすると実行端末のローカル時刻で1日1回確認します。自動インストールには有効な Release パッケージと SHA-256 検証が必要です。",
+    updateNetworkSources: "更新経路",
+    shaPending: "ダウンロード検証待ち",
+    shaVerified: "検証済み",
+    shaFailed: "検証失敗",
+    shaUnavailable: "利用不可",
+    shaNotRequired: "検証不要",
+    upgradeIdle: "更新未実行",
+    upgradeDownloading: "ダウンロード中",
+    upgradeRestarting: "インストール済み・再起動中",
+    upgradeInstalled: "更新成功",
+    upgradeFailedState: "更新失敗",
+    upgradeStatusAvailable: "新しいバージョンを検出",
+    upgradeStatusLatest: "最新です",
+    upgradeStatusUnavailable: "新しいバージョンはありますがオンライン更新できません",
+    upgradeStatusInstalling: "自動インストール中",
+    updateSourceDirect: "直結",
+    updateSourceProxy: "プロキシ",
     aboutLead: "AnimeMachine は、アニメのメタデータ、Torrent プール、メディアディレクトリ、外部の読み取り専用ライブラリを、一つのローカル Catalog と状態モデルに整理する全自動アニメライブラリシステムです。",
     aboutDetail: "リソース選別、ダウンロード引き渡し、多階層ディレクトリ計画、シリーズ関係、所蔵検証、Web 閲覧、長期保管を扱います。qBittorrent、Ani-RSS、Torrent Collector は任意のコンポーネントです。",
     aboutRelations: "作品関係図は Bangumi Archive と補助根拠から前作、続編、総集編、番外、派生、別解釈、シリーズ横断関係を整理し、実用的な計算時間内でノード配置と関係線の経路を最適化します。",
@@ -826,6 +1242,15 @@ const i18n = {
     password: "パスワード",
     usersTab: "ユーザー",
     usersHint: "一般ユーザーは閲覧とダウンロード登録ができますが、設定は変更できません。",
+    userCreateHint: "ユーザー名は3～64文字の英数字・ピリオド・アンダースコア・ハイフン、パスワードは10文字以上です。",
+    userRole: "ロール",
+    existingUsers: "既存ユーザー",
+    initialAdmin: "初期管理者",
+    currentUser: "現在のユーザー",
+    disabledUser: "無効",
+    noUsers: "ユーザーはいません。",
+    userCreated: "ユーザーを作成しました。",
+    userUpdated: "ユーザー状態を更新しました。",
     normalUser: "一般ユーザー",
     administrator: "管理者",
     createUser: "ユーザー作成",
@@ -840,7 +1265,9 @@ const i18n = {
     custom: "カスタム",
     titleAlias: "タイトル / 別名",
     searchPlaceholder: "日本語・英語・中国語・略称",
-    era: "年代",
+    era: "年",
+    season: "季",
+    seasonSpring: "春（4月前後）", seasonSummer: "夏（7月前後）", seasonAutumn: "秋（10月前後）", seasonWinter: "冬（1月前後）",
     mediaFormat: "形式",
     seriesWork: "シリーズ作品",
     yes: "はい",
@@ -917,21 +1344,24 @@ const i18n = {
       "同じ対象パスの既存ファイルはサイズが異なり、候補に十分な更新根拠がありません。",
     summary: "あらすじ",
     settingsHint:
-      "設定は保存されます。認証情報は実行環境からのみ読み込み、設定ファイルには保存しません。",
+      "設定は保存されます。画面で入力したサービス認証情報は制限付きの資格情報ファイルに保存し、設定ファイルや API 応答には出力しません。",
     acceptedContent: "許可するリリース種別",
-    startMode: "登録後の状態",
     stopped: "停止",
-    start: "自動開始（バッチごとに確認）",
-    allowAutoStart: "計画確認時のみ自動開始を許可",
     save: "保存",
     saved: "保存しました",
     availability: "利用可能なソース",
     available: "利用可能なソースあり",
     unavailable: "利用可能なソースなし",
+    torrentSource: "Torrent ソース",
+    aniRssSource: "Ani-RSS ソース",
     downloadSources: "件のダウンロードソース",
     externalMediaAvailable: "外部メディア対応済み",
     noAvailableSource: "利用可能なソースなし",
-    libraryState: "ライブラリ",
+    libraryState: "ライブラリ状態",
+    localLibrary: "ローカル入庫",
+    externalReadOnly: "外部読み取り専用",
+    submittedDownload: "ダウンロード送信済み",
+    notInLibrary: "未入庫",
     existing: "既存・ダウンロード済み",
     localExisting: "ローカル既存",
     managedComplete: "ダウンロード完了",
@@ -956,15 +1386,15 @@ const i18n = {
     excludedPolicy: "ポリシー不一致",
     searchPoolNow: "ローカルリソースを再検索",
     searchAniRss: "Ani-RSS でリソースを検索",
-    aniRssManaged: "Ani-RSS 管理",
-    aniRssResources: "Ani-RSS リソース",
+    aniRssManaged: "Ani-RSS メディアあり",
+    aniRssResources: "Ani-RSS リソース利用可",
     aniRssMode: "呼び出しモード",
     aniRssPrefer: "Ani-RSS を優先",
     aniRssFallback: "Ani-RSS を予備として使用",
     aniRssManual: "Ani-RSS を手動で使用",
-    aniRssApiKey: "API キー（現在のプロセスのみ）",
-    aniRssApiKeyHint: "永続化には .env の環境変数を使用してください。ここで入力したキーは設定に保存されません。",
-    aniRssCredentialConfigured: "API キーを現在のプロセスに読み込みました。",
+    aniRssApiKey: "API キー",
+    aniRssApiKeyHint: "保存したキーは再起動後も有効で、config.json、ブラウザ保存領域、API 応答には書き出しません。デプロイ環境変数／Secret がある場合はそちらを優先します。",
+    aniRssCredentialConfigured: "API キーを制限付き資格情報ストレージへ保存しました。",
     aniRssMediaPath: "Ani-RSS メディアパス",
     aniRssSyncMinutes: "状態同期間隔（分）",
     aniRssHint: "接続できない場合は自動的に手動モードになり、復旧後に選択したモードへ戻ります。メディアは常に読み取り専用です。",
@@ -973,7 +1403,7 @@ const i18n = {
     searchPoolNone: "検索完了。安全に関連付けられるソースは見つかりませんでした",
     verifyWork: "今すぐ確認",
     verifyRunning: "確認中…",
-    scanIdle: "Torrent プール待機中",
+    scanIdle: "バックグラウンド画像状態を読み込み中",
     library: "ライブラリ",
     playback: "再生",
     noPlayableMedia: "再生可能な本編がありません",
@@ -985,6 +1415,10 @@ const i18n = {
     openPotPlayer: "PotPlayerで開く",
     openIina: "IINAで開く",
     reloadImage: "再読み込み",
+    imageLoading: "画像を読み込み中",
+    imageRetrying: "画像を再試行中",
+    imageNoImage: "画像なし",
+    imageError: "画像の読み込みに失敗",
     aniRssDelete: "削除",
     aniRssDeleteConfirm: "この Ani-RSS 購読とダウンロード済みファイルを削除しますか？",
     aniRssDeleteFailed: "Ani-RSS の削除を確認できませんでした",
@@ -993,12 +1427,8 @@ const i18n = {
     themeLight: "ライトモード",
     remotePlaybackSource: "Ani-RSS リモート再生",
     playbackStartFile: "開始メディアファイル",
-    aniRssPathUnconfigured: "Ani-RSS のメディアパスが設定されていません。プレイヤーでプレイリストを読み込んで再生してください。",
-    aniRssPathUnavailable: "Ani-RSS のメディアパスにアクセスできません。プレイヤーでプレイリストを読み込んで再生してください。",
-    aniRssPathAvailable: "Ani-RSS のメディアパスにアクセスできます。",
     managed: "AnimeMachine管理",
     preexisting: "既存ファイル",
-    notInLibrary: "未登録",
     collection: "コレクション",
     files: "ファイル",
     complete: "収集完了",
@@ -1068,6 +1498,112 @@ const i18n = {
     japaneseSerialGroups: "日本語連載リリース",
     otherResourceGroups: "その他（未識別または条件外）",
     connectionsTab: "接続",
+    diagnosticsTab: "診断",
+    diagnosticsHint: "現在の実行状態と直近の結果のみを表示します。キー、メディア内容、完全なファイルパスは表示しません。",
+    systemHealth: "システム状態",
+    systemHealthHint: "ここでは主要状態のみを集約し、各コンポーネントの詳細は「診断」に表示します。",
+    healthLoading: "実行状態を集約中…",
+    healthOverallNormal: "主要なシステム経路は正常です",
+    healthOverallWarning: "確認が必要な実行状態があります",
+    healthNormal: "正常",
+    healthWarning: "警告",
+    healthNetwork: "ネットワーク",
+    healthAniRss: "Ani-RSS",
+    healthQbittorrent: "qBittorrent",
+    healthStorage: "ストレージ",
+    healthImagePreload: "画像プリロード",
+    healthPlayback: "再生経路",
+    healthReady: "準備完了",
+    healthUnknown: "直近の結果なし",
+    healthDegraded: "直近で異常",
+    healthUnavailable: "利用不可",
+    healthDisabled: "無効",
+    healthManual: "手動モード",
+    healthWarming: "準備中",
+    healthWarm: "準備完了",
+    healthFailed: "失敗",
+    healthSamples: "直近サンプル",
+    healthWarnings: "異常項目",
+    healthSessions: "セッション",
+    healthMode: "モード",
+    healthState: "状態",
+    healthChecked: "確認項目",
+    startupStatus: "起動・バックグラウンド準備",
+    networkDiagnostics: "ネットワーク診断",
+    recheckNetwork: "再検出",
+    currentRoute: "現在の通信経路",
+    networkProfile: "現在のネットワーク環境",
+    performanceBaseline: "性能ベースライン",
+    perfCatalogReady: "Catalog Ready",
+    perfFirstScreen: "初回画面利用可能",
+    perfFirstCover: "最初のカバー",
+    perfWarmComplete: "Warm 完了",
+    previousRun: "前回実行",
+    routeDirect: "直接接続",
+    routeEnvironment: "環境変数プロキシ",
+    routeWindows: "Windows システムプロキシ",
+    routeSystem: "システムプロキシ",
+    imageSourceTrend: "画像ソースの短期ヘルス推移",
+    trend12h: "直近 12 時間",
+    noTrendData: "推移データなし",
+    sourceSelected: "現在の優先ソース",
+    sourceConfidence: "サンプル信頼度",
+    sourceScore: "総合スコア",
+    selectionIncumbentBest: "現在のソースが引き続き最優先",
+    selectionBestQuality: "総合スコアが最上位",
+    selectionHysteresisHold: "切替ヒステリシス期間中のため現在のソースを維持",
+    selectionHysteresisMargin: "候補の優位差が切替閾値未満のため現在のソースを維持",
+    selectionIncumbentCooldown: "現在のソースがクールダウン中のため候補へ切替",
+    selectionCandidateCooldown: "候補がクールダウン中のため現在のソースを維持",
+    selectionMeaningfullyBetter: "候補の優位差が切替閾値を超過",
+    catalogAvailable: "Catalog 利用可能",
+    catalogPreparing: "Catalog 準備中",
+    backgroundImagesPreparing: "バックグラウンドで画像を準備中",
+    backgroundImagesPaused: "画像のバックグラウンド準備を一時停止中",
+    backgroundImagesWaiting: "画像準備はネットワーク復旧待ち",
+    backgroundImagesComplete: "バックグラウンド画像準備完了",
+    imagesPreparedThrough: "新しい作品から遡って {month} まで画像取得済み",
+    imagesPreparingBackward: "新しい作品から古い作品へ遡って画像を準備中",
+    archiveBuildSummary: "現在の Bangumi ベースパッケージ {version}・全 {count} 作品。",
+    estimatedRemaining: "残り見込み",
+    estimatedTime: "残り時間見込み",
+    preloadRate: "直近処理速度",
+    adaptiveConcurrency: "適応型バックグラウンド並行数",
+    budgetIdle: "リソースに余裕あり",
+    budgetForeground: "前景処理が稼働中",
+    budgetForegroundLatency: "前景応答が低下",
+    budgetCpu: "CPU 負荷が高い",
+    budgetIo: "画像 I/O が低下",
+    budgetNetwork: "ネットワーク失敗率が上昇",
+    currentItem: "処理中",
+    successRate: "直近成功率",
+    latency: "遅延",
+    throughput: "スループット",
+    lastFailure: "直近の失敗",
+    noRecentFailure: "直近の失敗なし",
+    imagePreload: "画像プリロード",
+    recentSixMonths: "直近 6 か月",
+    historyCatalog: "履歴カタログ",
+    failedRetry: "失敗再試行",
+    pausePreload: "一時停止",
+    resumePreload: "再開",
+    backgroundConcurrency: "バックグラウンド並行数",
+    backgroundBandwidth: "バックグラウンド帯域 KiB/s（0 = 無制限）",
+    applyLimits: "制限を適用",
+    preloadPaused: "バックグラウンドのプリロードを一時停止中です。前景の画像要求には影響しません。",
+    preloadWaitingNetwork: "ローカルモード中です。ネットワーク復旧後、バックグラウンドのプリロードを自動再開します。",
+    preloadWarm: "バックグラウンド画像準備が完了しました。",
+    preloadRunning: "バックグラウンドで画像を準備中",
+    playbackDiagnostics: "リモート再生セッション",
+    noPlaybackSessions: "直近の再生セッションはありません。",
+    rangeHeader: "Range",
+    resumeCount: "再開回数",
+    upstreamState: "Ani-RSS 上流",
+    transferRate: "転送速度",
+    startupStarting: "Starting · コア初期化中",
+    startupReady: "Ready · Web 利用可能",
+    startupWarming: "Warming · Web 利用可能、バックグラウンド準備中",
+    startupWarm: "Warm · バックグラウンド準備完了",
     subscriptionsTab: "購読",
     logsTab: "ログ",
     historyTab: "履歴",
@@ -1092,12 +1628,12 @@ const i18n = {
     metadataNetworkHint: "健全性と遅延で自動選択し、失敗した接続先を冷却して切り替えます。システムプロキシに対応し、Archiveは必ず公式SHA-256で検証します。",
     metadataEndpointsRequired: "ArchiveマニフェストとBangumi APIの接続先を1件以上残してください。",
     connectionHint:
-      "Compose ではループバックアドレスをサービス名で上書きします。永続的な認証情報は .env の環境変数から読み込みます。",
+      "Compose ではループバックアドレスをサービス名で上書きします。画面保存の資格情報は制限付き状態ファイルを使い、デプロイ環境変数／Secret を優先します。",
     endpoint: "接続先",
-    qbtApiKey: "API Key（現在のプロセスのみ）",
-    qbtApiKeyPlaceholder: "空欄の場合は .env の環境変数を使用",
-    qbtApiKeyHint: ".env の環境変数による永続設定を推奨します。ここで入力したキーは現在のプロセス内だけに保持され、再起動時に消えます。",
-    qbtCredentialConfigured: "現在のプロセスに API Key を設定済み",
+    qbtApiKey: "API Key",
+    qbtApiKeyPlaceholder: "空欄の場合は保存済み／デプロイ資格情報を使用",
+    qbtApiKeyHint: "保存したキーは再起動後も有効で、config.json、ブラウザ保存領域、API 応答には書き出しません。デプロイ環境変数／Secret がある場合はそちらを優先します。",
+    qbtCredentialConfigured: "API Key を制限付き資格情報ストレージへ保存済み",
     torrentPoolPath: "Torrent プールのパス",
     torrentPoolHint: "AnimeMachine はこのディレクトリを監視するだけです。Torrent はユーザーまたは外部ツールが配置します。",
     libraryPath: "アニメライブラリのパス",
@@ -1126,9 +1662,9 @@ const i18n = {
     subtitleSources: "字幕ソース",
     subtitlesEnabled: "アーカイブ作品の字幕照合を有効にする",
     assrtEndpoints: "ASSRT APIエンドポイント（1行に1件）",
-    assrtToken: "ASSRTトークン（現在のプロセスのみ）",
+    assrtToken: "ASSRTトークン",
     openSubtitlesEndpoint: "OpenSubtitles APIエンドポイント",
-    openSubtitlesKey: "OpenSubtitles APIキー（現在のプロセスのみ）",
+    openSubtitlesKey: "OpenSubtitles APIキー",
     subtitleSourcesHint: "設定済みの公式APIだけを使用します。日本語では字幕なしも許容し、低信頼の候補は手動選択とします。",
     searchSubtitles: "字幕を検索", useSubtitle: "この字幕を使用", subtitlePresent: "字幕あり",
     subtitleEmbedded: "内蔵字幕を検出", subtitleNotFound: "信頼できる字幕が見つかりません", subtitleApplied: "字幕を導入しました",
@@ -1147,6 +1683,8 @@ const i18n = {
     auditStarted: "ローカル確認をバックグラウンドで分割開始しました。",
     automation: "自動化・容量",
     pollMinutes: "プール走査間隔（分）",
+    regionPriority: "地域",
+    regionChina: "中国", regionJapan: "日本", regionKorea: "韓国", regionUsa: "米国", regionEurope: "欧州", regionOther: "その他",
     minimumFree: "最低空き容量（TiB）",
     onDemandHash: "ファイルを厳密検証（通常は高速確認、比較基準がある場合のみハッシュを照合）",
     otherWarning:
@@ -1433,7 +1971,7 @@ const api = async (url, opt = {}) => {
         ? x.title_zh_hans || x.title_ja
         : language === "en"
           ? x.title_en || x.title_ja
-          : x.title_ja,
+          : x.title_ja_localized || x.title_ja,
   secondaryTitle = (x) => {
     const title = sameAsOriginalLanguage(x) ? "" : x.title_ja;
     return title && title !== preferred(x) ? title : "";
@@ -1499,7 +2037,8 @@ function applyLanguage() {
             ? eraLabel(x.dataset.code)
             : label(x.dataset.group, x.dataset.code)),
     );
-  sortCountryOptions();
+  updateSeasonControl();
+  updateViewToggle();
   renderMediaChecks();
   if ($("settingsDialog").open) renderPolicy();
   render();
@@ -1507,11 +2046,11 @@ function applyLanguage() {
   updateSortControls();
   if (catalogStats.record_count)
     $("buildInfo").textContent = archiveSummary(catalogStats);
-  if (catalogStats.sync) renderScanProgress(catalogStats);
+  if (catalogStats.sync || startupState) renderScanProgress(catalogStats, startupState);
 }
 function updateSortControls() {
   const random = sort === "random";
-  $("reshuffle").hidden = !random;
+  $("reshuffle").hidden = !random || authSession?.role !== "admin";
   $("sortDirection").hidden = random;
 }
 function eraLabel(x) {
@@ -1540,24 +2079,6 @@ function fill(id, rows, g) {
           `<option value="${esc(x)}" data-group="${g || ""}" data-code="${esc(x)}">${esc(id === "era" ? eraLabel(x) : g ? label(g, x) : x)}</option>`,
       )
       .join("");
-}
-function sortCountryOptions() {
-  if (!options.countries) return;
-  const current = $("country").value;
-  const collator = new Intl.Collator(language, { sensitivity: "base" });
-  fill(
-    "country",
-    [...options.countries].sort((a, b) => {
-      const aOther = String(a).toLowerCase() === "other",
-        bOther = String(b).toLowerCase() === "other";
-      return (
-        Number(aOther) - Number(bOther) ||
-        collator.compare(label("country", a), label("country", b))
-      );
-    }),
-    "country",
-  );
-  $("country").value = current || config.ui?.filterDefaults?.country || "JP";
 }
 function renderMediaChecks() {
   if (!options.media_types) return;
@@ -1609,7 +2130,6 @@ const filters = {
     start_to: $("start_to"),
     source_type: $("source_type"),
     studio: $("studio"),
-    country: $("country"),
     series: $("series_member"),
     director: $("director"),
     voice_actor: $("voice_actor"),
@@ -1627,15 +2147,13 @@ function checked(box) {
 function applyStatusDefaults() {
   const defaults = {
     availability: Number(catalogStats.runtime?.torrents || 0) === 0
-      ? ["available", "unavailable"]
-      : (config.ui?.filterDefaults?.availability || ["available"]),
+      ? ["torrent", "ani-rss", "unavailable"]
+      : (config.ui?.filterDefaults?.availability || ["torrent", "ani-rss"]),
     library_state: config.ui?.filterDefaults?.libraryStates || [
-      "existing",
-      "placeholder",
-      "queued",
-      "downloading",
+      "local",
       "external",
-      "absent",
+      "submitted",
+      "not_in_library",
     ],
   };
   Object.entries(statusGroups).forEach(([name, box]) => {
@@ -1650,6 +2168,7 @@ function saveFilterState() {
   try {
     localStorage.setItem(filterStorageKey, JSON.stringify({
       fields: Object.fromEntries(Object.entries(filters).map(([key, element]) => [key, element.value])),
+      season: $("season").value,
       mediaTypes: [...$("media_type").querySelectorAll("input:checked")].map((item) => item.value),
       statuses: Object.fromEntries(Object.entries(statusGroups).map(([key, box]) => [key, [...box.querySelectorAll("input:checked")].map((item) => item.value)])),
     }));
@@ -1660,15 +2179,44 @@ function restoreFilterState() {
     const state = JSON.parse(localStorage.getItem(filterStorageKey) || "null");
     if (!state?.fields) return false;
     Object.entries(state.fields).forEach(([key, value]) => { if (filters[key]) filters[key].value = value || ""; });
+    $("season").value = String(state.season || "");
+    let storedSeasonYear = exactYear(state.fields.era);
+    if (storedSeasonYear === null && state.season === "winter") {
+      const storedFrom = monthParts(state.fields.start_from), storedTo = monthParts(state.fields.start_to);
+      if (storedFrom?.month === "12" && storedTo?.month === "02" && storedTo.year === storedFrom.year + 1)
+        storedSeasonYear = storedTo.year;
+    }
+    if (storedSeasonYear !== null && $("season").value) {
+      const range = seasonDateRange(storedSeasonYear, $("season").value);
+      $("start_from").value = range.from;
+      $("start_to").value = range.to;
+    }
     if (Array.isArray(state.mediaTypes)) {
       const values = new Set(state.mediaTypes);
       $("media_type").querySelectorAll("input").forEach((item) => (item.checked = values.has(item.value)));
     }
     Object.entries(state.statuses || {}).forEach(([key, values]) => {
-      const selectedValues = new Set(values || []);
+      let migratedValues = key === "availability" && (values || []).includes("available")
+        ? [...(values || []).filter((value) => value !== "available"), "torrent", "ani-rss"]
+        : (values || []);
+      if (key === "library_state") {
+        const legacyLibrary = { existing: "local", external: "external", queued: "submitted", downloading: "submitted",
+          placeholder: "not_in_library", occupied_review: "not_in_library", absent: "not_in_library",
+          not_in_library_catalog: "not_in_library" };
+        migratedValues = [...new Set(migratedValues.map((value) => legacyLibrary[value] || value))];
+      }
+      const selectedValues = new Set(migratedValues);
       statusGroups[key]?.querySelectorAll("input").forEach((item) => (item.checked = selectedValues.has(item.value)));
     });
-    syncEraFromDates();
+    const storedEra = String(state.fields.era || "");
+    syncEraSeasonFromDates();
+    const storedRange = eraDateRange(storedEra);
+    if (storedRange && storedRange.reversible === false
+        && !String(state.fields.start_from || "") && !String(state.fields.start_to || "")) {
+      $("era").value = storedEra;
+      $("season").value = "";
+      updateSeasonControl();
+    }
     return true;
   } catch (_) {
     return false;
@@ -1715,29 +2263,35 @@ async function search() {
     if (searchController === controller) searchController = null;
   }
 }
+function reportPerformanceEvent(event) {
+  if (performanceReported.has(event)) return;
+  performanceReported.add(event);
+  api("/api/diagnostics/performance", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event }),
+  }).catch(() => {});
+}
+
 const sourceBadge = (x, compact = false) => {
     const count = Number(x.usable_torrent_count || 0);
-    const text = count
-      ? `${fmt(count)}${t("downloadSources")}`
-      : x.ani_rss_managed
-        ? t("aniRssManaged")
-        : Number(x.ani_rss_resource_count || 0)
-          ? `${fmt(x.ani_rss_resource_count)} ${t("aniRssResources")}`
-      : x.has_external_media
-        ? t("externalMediaAvailable")
-        : t("noAvailableSource");
-    const kind = count ? "" : x.ani_rss_managed ? "ani-rss-managed" : Number(x.ani_rss_resource_count || 0) ? "ani-rss-resource" : x.has_external_media ? "external" : "muted-badge";
-    return `<span class="badge ${kind}">${esc(text)}</span>`;
+    const aniCount = Number(x.ani_rss_resource_count || 0);
+    const badges = [];
+    if (count) badges.push(`<span class="badge">${esc(`${t("torrentSource")} · ${fmt(count)}`)}</span>`);
+    if (x.ani_rss_managed || aniCount) {
+      const detail = x.ani_rss_managed ? t("aniRssManaged") : `${fmt(aniCount)} ${t("aniRssResources")}`;
+      badges.push(`<span class="badge ${x.ani_rss_managed ? "ani-rss-managed" : "ani-rss-resource"}">${esc(`${t("aniRssSource")} · ${detail}`)}</span>`);
+    }
+    if (!badges.length) badges.push(`<span class="badge muted-badge">${esc(t("noAvailableSource"))}</span>`);
+    return badges.join(compact ? " " : "");
   },
   stateBadge = (x) => {
-    const s = x.library_state || "absent";
-    const text = s === "existing"
-      ? t(x.library_managed ? "managedComplete" : "localExisting")
-      : humanCode(s);
+    const s = x.library_state || "not_in_library";
+    const text = t({ local: "localLibrary", external: "externalReadOnly", submitted: "submittedDownload", not_in_library: "notInLibrary" }[s] || "notInLibrary");
     return `<span class="badge library ${esc(s)}">${esc(text)}</span>`;
   },
   selectable = (x) =>
-    (x.usable_torrent_count > 0 || x.ani_rss_resource_count > 0) &&
+    (x.usable_torrent_count > 0 || x.ani_rss_resource_count > 0 || x.ani_rss_search_available) &&
     ![
       "queued",
       "downloading",
@@ -1745,7 +2299,7 @@ const sourceBadge = (x, compact = false) => {
       "deprecated",
       "upgrade_staged",
       "upgrade_blocked",
-    ].includes(x.library_state),
+    ].includes(x.library_internal_state),
   selector = (x) =>
     selectable(x)
       ? `<label class="pick"><input type="checkbox" data-select="${x.id}" ${selected.has(x.id) ? "checked" : ""}></label>`
@@ -1839,13 +2393,22 @@ function render() {
       .join("");
   bind();
   covers();
+  reportPerformanceEvent("firstScreen");
 }
 function cancelCoverLoads() {
   coverObserver?.disconnect();
   coverBatch?.controller.abort();
+  if (coverBatch?.scrollHandler) window.removeEventListener("scroll", coverBatch.scrollHandler);
   for (const timer of coverBatch?.timers || []) clearTimeout(timer);
   for (const url of coverBatch?.objectUrls || []) URL.revokeObjectURL(url);
   coverBatch = null;
+}
+function setCoverState(target, state = "available") {
+  if (!target) return;
+  const labels = { loading: "imageLoading", retrying: "imageRetrying", no_image: "imageNoImage", error: "imageError", missing: "imageError" };
+  target.dataset.coverState = state;
+  target.dataset.coverStateLabel = labels[state] ? t(labels[state]) : "";
+  target.classList.toggle("cover-unavailable", state === "no_image" || state === "error" || state === "missing");
 }
 function applyCoverBlob(target, blob, batch = coverBatch) {
   if (!target || !target.isConnected) return;
@@ -1858,7 +2421,6 @@ function applyCoverBlob(target, blob, batch = coverBatch) {
   batch?.objectUrls?.add(url);
   target.dataset.coverObjectUrl = url;
   target.style.setProperty("--cover", `url('${url}')`);
-  target.classList.remove("cover-unavailable");
 }
 async function reloadCoverImage(button) {
   const target = button.closest("[data-cover]");
@@ -1870,6 +2432,7 @@ async function reloadCoverImage(button) {
     await api(`/api/anime/${animeId}/image/refresh`, { method: "POST" });
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const status = await api(`/api/anime/${animeId}/image/status`);
+      setCoverState(target, status.state || (status.pending ? "retrying" : "error"));
       if (!status.pending) break;
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
@@ -1878,10 +2441,13 @@ async function reloadCoverImage(button) {
       cache: "no-store",
     });
     if (!response.ok) throw new Error(`cover ${response.status}`);
+    const status = response.headers.get("X-AnimeMachine-Image-Status") || "available";
     applyCoverBlob(target, await response.blob());
+    setCoverState(target, status);
+    if (status === "available") reportPerformanceEvent("firstCover");
     target.dataset.coverAttempt = "0";
   } catch (error) {
-    target.classList.add("cover-unavailable");
+    setCoverState(target, "error");
     alert(error.message);
   } finally {
     button.disabled = false;
@@ -1906,6 +2472,7 @@ function pumpCoverLoads(batch) {
   while (coverBatch === batch && batch.active < 12 && batch.queue.length) {
     const target = batch.queue.shift();
     batch.active += 1;
+    setCoverState(target, Number(target.dataset.coverAttempt || 0) > 0 ? "retrying" : "loading");
     const suffix = coverVersion ? `?v=${coverVersion}` : "";
     fetch(`/api/anime/${target.dataset.cover}/image${suffix}`, {
       signal: batch.controller.signal,
@@ -1916,8 +2483,15 @@ function pumpCoverLoads(batch) {
       return { blob: await response.blob(), status: response.headers.get("X-AnimeMachine-Image-Status") || "available" };
     }).then(({ blob, status }) => {
       if (coverBatch !== batch || !target.isConnected) return;
+      const modal = topModalDialog();
+      if (modal && !modal.contains(target)) {
+        target.dataset.coverQueued = "0";
+        return;
+      }
       applyCoverBlob(target, blob, batch);
-      if (status === "queued") {
+      setCoverState(target, status);
+      if (status === "available") reportPerformanceEvent("firstCover");
+      if (status === "loading" || status === "retrying") {
         const attempt = Number(target.dataset.coverAttempt || 0) + 1;
         target.dataset.coverAttempt = String(attempt);
         const timer = setTimeout(() => {
@@ -1931,32 +2505,71 @@ function pumpCoverLoads(batch) {
         target.dataset.coverAttempt = "0";
       }
     }).catch((error) => {
-      if (error.name !== "AbortError") target.classList.add("cover-unavailable");
+      if (error.name !== "AbortError") setCoverState(target, "error");
     }).finally(() => {
       batch.active -= 1;
       if (coverBatch === batch) pumpCoverLoads(batch);
     });
   }
 }
+function predictiveCoverWindow(batch, direction = "down") {
+  if (coverBatch !== batch) return;
+  const viewport = Math.max(320, window.innerHeight || document.documentElement.clientHeight || 800);
+  const bounds = direction === "up"
+    ? { min: -1.05 * viewport, max: 1.15 * viewport }
+    : { min: -0.15 * viewport, max: 2.05 * viewport };
+  batch.queue = batch.queue.filter((target) => {
+    if (!target.isConnected) return false;
+    const rect = target.getBoundingClientRect(), keep = rect.bottom >= bounds.min && rect.top <= bounds.max;
+    if (!keep) target.dataset.coverQueued = "0";
+    return keep;
+  });
+  const slots = Math.max(0, 18 - batch.active - batch.queue.length);
+  if (!slots) return;
+  const candidates = [...results.querySelectorAll("[data-cover]")].filter((target) => {
+    if (target.dataset.coverQueued === "1") return false;
+    const rect = target.getBoundingClientRect();
+    return rect.bottom >= bounds.min && rect.top <= bounds.max;
+  });
+  candidates.sort((left, right) => {
+    const a = left.getBoundingClientRect(), b = right.getBoundingClientRect();
+    return direction === "up" ? b.bottom - a.bottom : a.top - b.top;
+  });
+  candidates.slice(0, slots).forEach((target) => {
+    const rect = target.getBoundingClientRect(), visible = rect.bottom > 0 && rect.top < viewport;
+    queueCoverElement(target, batch, visible);
+    coverObserver?.unobserve(target);
+  });
+}
 function covers() {
   cancelCoverLoads();
   if (!imagesEnabled) return;
-  const batch = { controller: new AbortController(), queue: [], active: 0, objectUrls: new Set(), timers: new Set() };
+  const batch = { controller: new AbortController(), queue: [], active: 0, objectUrls: new Set(), timers: new Set(), scrollHandler: null };
   coverBatch = batch;
   coverObserver = new IntersectionObserver(
     (es) =>
       es.forEach((e) => {
         if (e.isIntersecting) {
-          queueCoverElement(e.target, batch);
+          queueCoverElement(e.target, batch, true);
           coverObserver.unobserve(e.target);
         }
       }),
-    { rootMargin: "900px" },
+    { rootMargin: "240px 0px 240px 0px" },
   );
-  [...results.querySelectorAll("[data-cover]")].forEach((target, index) => {
-    if (index < 24) queueCoverElement(target, batch);
-    else coverObserver.observe(target);
-  });
+  [...results.querySelectorAll("[data-cover]")].forEach((target) => coverObserver.observe(target));
+  let lastY = window.scrollY, scheduled = false;
+  batch.scrollHandler = () => {
+    if (scheduled || coverBatch !== batch) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      const currentY = window.scrollY, direction = currentY < lastY ? "up" : "down";
+      lastY = currentY;
+      predictiveCoverWindow(batch, direction);
+    });
+  };
+  window.addEventListener("scroll", batch.scrollHandler, { passive: true });
+  requestAnimationFrame(() => predictiveCoverWindow(batch, "down"));
 }
 const suffix = (c) =>
     `(${({ zh: ["中", "CN", "中"], en: ["英", "EN", "英"], ja: ["日", "JA", "日"] }[String(c || "").split("-")[0]] || [c, c, c])[li()]})`,
@@ -2111,7 +2724,7 @@ const suffix = (c) =>
   };
 
 function graphTitle(node) {
-  return node.title_ja || preferred(node);
+  return preferred(node) || node.title_ja;
 }
 
 const relationSubjectCategoryKey = {
@@ -3838,8 +4451,8 @@ function renderRelationGraph(graph) {
       .map((node) => {
         const point = positions.get(node.id),
           canSelect = node.selectable,
-          status = node.library_state || "absent";
-        return `<article class="relation-node ${node.strict_member ? "series" : "context"} ${node.id === graph.rootAnimeId ? "root" : ""}" data-graph-node="${node.id}" style="left:${point.x + shiftX}px;top:${point.y + shiftY}px"><div class="relation-node-head"><input type="checkbox" data-graph-select="${node.id}" ${selected.has(node.id) ? "checked" : ""} ${canSelect ? "" : "disabled"} aria-label="${esc(canSelect ? t("graphSelected") : t("graphUnavailableSelect"))}" title="${esc(canSelect ? t("graphSelected") : t("graphUnavailableSelect"))}"><time title="${esc(localMonth(node.start_month))}">${esc(relationMonth(node.start_month))}</time><span class="relation-subject-chips">${relationSubjectChips(node)}</span></div><button type="button" data-graph-detail="${node.id}">${esc(graphTitle(node))}</button><div class="relation-node-foot"><small>${esc(label("media", node.media_code))} · ${esc(humanCode(status))}${node.strict_member ? "" : ` · ${esc(t("graphContext"))}`}</small>${node.selection_warning ? `<span class="relation-risk" title="${esc(t("graphExistingWarning"))}">!</span>` : ""}</div></article>`;
+          status = node.library_state || "not_in_library";
+        return `<article class="relation-node ${node.strict_member ? "series" : "context"} ${node.id === graph.rootAnimeId ? "root" : ""}" data-graph-node="${node.id}" style="left:${point.x + shiftX}px;top:${point.y + shiftY}px"><div class="relation-node-head"><input type="checkbox" data-graph-select="${node.id}" ${selected.has(node.id) ? "checked" : ""} ${canSelect ? "" : "disabled"} aria-label="${esc(canSelect ? t("graphSelected") : t("graphUnavailableSelect"))}" title="${esc(canSelect ? t("graphSelected") : t("graphUnavailableSelect"))}"><time title="${esc(localMonth(node.start_month))}">${esc(relationMonth(node.start_month))}</time><span class="relation-subject-chips">${relationSubjectChips(node)}</span></div><button type="button" data-graph-detail="${node.id}">${esc(graphTitle(node))}</button><div class="relation-node-foot"><small>${esc(label("media", node.media_code))} · ${esc(t({ local: "localLibrary", external: "externalReadOnly", submitted: "submittedDownload", not_in_library: "notInLibrary" }[status] || "notInLibrary"))}${node.strict_member ? "" : ` · ${esc(t("graphContext"))}`}</small>${node.selection_warning ? `<span class="relation-risk" title="${esc(t("graphExistingWarning"))}">!</span>` : ""}</div></article>`;
       })
       .join("");
   $("relationGraph").innerHTML =
@@ -3960,7 +4573,7 @@ async function showRelationGraph(id) {
   $("relationSubjectPopover").hidden = true;
   relationDialog.classList.remove("expanded");
   relationHiddenCodes.clear();
-  relationDialog.showModal();
+  showModalDialog(relationDialog);
   try {
     renderRelationGraph(await api(`/api/anime/${id}/relations/graph?language=${encodeURIComponent(language)}`));
   } catch (error) {
@@ -3972,9 +4585,13 @@ async function showRelationGraph(id) {
 function summaryLanguage(value) {
   const text = String(value || ""),
     kana = (text.match(/[\u3040-\u30ff]/g) || []).length,
+    hangul = (text.match(/[\uac00-\ud7af]/g) || []).length,
+    cyrillic = (text.match(/[\u0400-\u052f]/g) || []).length,
     latin = (text.match(/[A-Za-z]/g) || []).length,
     han = (text.match(/[\u3400-\u9fff]/g) || []).length;
   if (kana >= 4 && kana >= latin / 2) return "ja";
+  if (hangul >= 4 && hangul >= latin / 2) return "ko";
+  if (cyrillic >= 4 && cyrillic >= latin / 2) return "ru";
   if (latin > Math.max(20, han * 1.5)) return "en";
   if (han) return "zh";
   return "und";
@@ -4016,20 +4633,12 @@ function localizedSummary(x) {
     || candidates[0];
 }
 
-function playbackHtml(state, localMediaAvailable = false) {
+function playbackHtml(state) {
   if (!state?.available)
     return `<section class="playback-panel unavailable"><p class="muted">${t("noPlayableMedia")}</p></section>`;
   const platform = navigator.userAgent || "",
-    remoteAniRss = state.sourceType === "ani-rss",
-    directState = state.aniRssMediaPathState || "not_applicable",
-    directUnavailable = remoteAniRss && directState !== "available"
-      && !localMediaAvailable && !capabilities.qbtCredentialConfigured,
-    episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join(""),
-    pathHint = remoteAniRss
-      ? `<small class="playback-path-state ${directState === "available" ? "available" : "muted"}">${t(directState === "available" ? "aniRssPathAvailable" : directState === "unconfigured" ? "aniRssPathUnconfigured" : "aniRssPathUnavailable")}</small>`
-      : "",
-    disabledDirect = directUnavailable ? " disabled" : "";
-  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions"><button type="button" class="tool dark-tool player-action" data-player="copy">${t("copyPlaylist")}</button><span class="playback-divider" aria-hidden="true">/</span><button type="button" class="tool dark-tool player-action" data-player="system">${t("systemPlayer")}</button><button type="button" class="tool dark-tool player-action" data-player="vlc"${disabledDirect}>${playerIcon("vlc")}<span>${t("openVlc")}</span></button>${/Windows/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="potplayer"${disabledDirect}>${playerIcon("potplayer")}<span>${t("openPotPlayer")}</span></button>` : ""}${/(Macintosh|Mac OS X)/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="iina">${playerIcon("iina")}<span>${t("openIina")}</span></button>` : ""}</div>${pathHint}</section>`;
+    episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join("");
+  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions"><button type="button" class="tool dark-tool player-action" data-player="copy">${t("copyPlaylist")}</button><span class="playback-divider" aria-hidden="true">/</span><button type="button" class="tool dark-tool player-action" data-player="system">${t("systemPlayer")}</button><button type="button" class="tool dark-tool player-action" data-player="vlc">${playerIcon("vlc")}<span>${t("openVlc")}</span></button>${/Windows/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="potplayer">${playerIcon("potplayer")}<span>${t("openPotPlayer")}</span></button>` : ""}${/(Macintosh|Mac OS X)/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="iina">${playerIcon("iina")}<span>${t("openIina")}</span></button>` : ""}</div></section>`;
 }
 
 function playerIcon(kind) {
@@ -4201,12 +4810,12 @@ async function showDetail(id) {
     summary = localizedSummary(x),
     aniResources = x.ani_rss?.resources || [],
     managedByAniRss = aniSubscriptions.length
-      ? `<div class="ani-rss-library">${aniSubscriptions.map((item) => { const value = `ani-rss:${item.remoteId}`, episodes = Number(item.currentEpisode || 0), totalEpisodes = Number(item.totalEpisode || 0), episodeText = episodes ? ` · ${fmt(episodes)}${totalEpisodes ? `/${fmt(totalEpisodes)}` : ""}` : "", deleteAction = episodes > 0 ? `<button type="button" class="text-button ani-rss-delete" data-ani-rss-delete="${esc(item.remoteId)}">${t("aniRssDelete")}</button>` : ""; return `<div class="inventory selectable ani-rss-inventory"><input type="radio" aria-label="${esc(item.title)}" name="library-source-${id}" value="${esc(value)}" ${playbackSources.get(id) === value ? "checked" : ""}><span><b>${t("remotePlaybackSource")} · ${esc(item.title)}</b><small>${t("aniRssManaged")}${episodeText}</small></span>${deleteAction}</div>`; }).join("")}</div>`
+      ? `<div class="ani-rss-library">${aniSubscriptions.map((item) => { const value = `ani-rss:${item.remoteId}`, playable = Number(item.playableCount || 0), episodeText = playable ? ` · ${fmt(playable)} ${t("playlistEntries")}` : "", deleteAction = Number(item.currentEpisode || 0) > 0 ? `<button type="button" class="text-button ani-rss-delete" data-ani-rss-delete="${esc(item.remoteId)}">${t("aniRssDelete")}</button>` : ""; return `<div class="inventory selectable ani-rss-inventory"><input type="radio" aria-label="${esc(item.title)}" name="library-source-${id}" value="${esc(value)}" ${playbackSources.get(id) === value ? "checked" : ""}><span><b>${t("remotePlaybackSource")} · ${esc(item.title)}</b><small>${t("aniRssManaged")}${episodeText}</small></span>${deleteAction}</div>`; }).join("")}</div>`
       : "",
     resourceList = `${torrentGroups(x.torrents).map((group) => torrentGroupHtml(group, x.id)).join("")}${aniResources.map((y) => aniResourceHtml(y, x.id)).join("")}`,
     hasEligibleResource = (x.torrents || []).some((y) => y.eligible) || aniResources.some((y) => y.eligible);
   $("detail").innerHTML =
-    `${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}">${t("reloadImage")}</button></div>` : ""}<span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("tags-fact", t("tag"), displayTags)}</div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryHtml(x.library, x.id)}${managedByAniRss}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackHtml(playbackState, playableTargets.length > 0)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}">${t("reloadImage")}</button></div>` : ""}<span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("tags-fact", t("tag"), displayTags)}</div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryHtml(x.library, x.id)}${managedByAniRss}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
   if (imagesEnabled) queueCoverElement($("detail").querySelector("[data-cover]"), coverBatch, true);
   $("detail")
@@ -4354,7 +4963,7 @@ async function showDetail(id) {
   $("detail").querySelectorAll("[data-player]").forEach((button) => {
     button.onclick = () => handoffPlayback(button.dataset.player, id, button).catch((error) => alert(error.message));
   });
-  if (!detailDialog.open) detailDialog.showModal();
+  showModalDialog(detailDialog);
   requestAnimationFrame(() => {
     if (detailDialog.scrollHeight <= detailDialog.clientHeight) return;
     const cover = $("detail").querySelector(".detail-cover");
@@ -4387,7 +4996,7 @@ async function createPlan(routingMode = "default", originalRequest = null) {
     planState.id = p.planId;
     if (p.state === "building") {
       $("plan").innerHTML = `<h2>${t("plan")}</h2><p class="notice">${t("planBuilding")}</p><p><b>${fmt(p.workCount)}</b> ${t("selectedWorks")}</p>`;
-      planDialog.showModal();
+      showModalDialog(planDialog);
       while (p.state === "building") {
         await new Promise((resolve) => setTimeout(resolve, 750));
         p = await api(`/api/plans/${planState.id}`);
@@ -4456,7 +5065,7 @@ async function createPlan(routingMode = "default", originalRequest = null) {
           alert(`${t("queryFailed")}: ${friendlyPlanError(error)}`);
         }
       };
-    if (!planDialog.open) planDialog.showModal();
+    if (!planDialog.open) showModalDialog(planDialog);
   } catch (e) {
     alert(`${t("queryFailed")}: ${friendlyPlanError(e)}`);
   }
@@ -4608,9 +5217,18 @@ function renderPolicy() {
     ],
     (x) => policyLabel("resolution", x),
   );
+  const regions = { china: true, japan: true, korea: true, usa: true, europe: true, other: true, ...(p.regions || {}) };
+  const regionOrder = language.startsWith("zh")
+    ? ["china", "japan", "korea", "usa", "europe", "other"]
+    : language.startsWith("ja")
+      ? ["japan", "korea", "china", "usa", "europe", "other"]
+      : ["usa", "europe", "china", "japan", "korea", "other"];
+  const regionLabels = { china: "regionChina", japan: "regionJapan", korea: "regionKorea", usa: "regionUsa", europe: "regionEurope", other: "regionOther" };
+  setChecks("allowedRegions", regionOrder.map((key) => [key, regions[key] !== false]), (key) => t(regionLabels[key]));
   [
     "contentClasses",
     "allowedResolutions",
+    "allowedRegions",
   ].forEach((id) =>
     $(id)
       .querySelectorAll("input")
@@ -4716,15 +5334,22 @@ function openSettings() {
   $("archiveManifestEndpoints").value = (network.archiveManifestEndpoints || []).join("\n");
   $("archiveAssetProxyTemplates").value = (network.archiveAssetProxyTemplates || []).join("\n");
   $("bangumiApiEndpoints").value = (network.bangumiApiEndpoints || []).join("\n");
+  const automaticUpdate = config.applicationUpdate?.automaticCheck || {};
+  $("automaticUpdateEnabled").checked = automaticUpdate.enabled === true;
+  $("automaticUpdateMode").value = automaticUpdate.mode || "notify";
+  $("automaticUpdateTime").value = automaticUpdate.time || "04:35";
   refreshArchiveStatus();
   loadLogs();
-  $("settingsDialog").showModal();
+  showModalDialog($("settingsDialog"));
+  loadSystemHealth();
 }
 async function saveSettings(e) {
   e.preventDefault();
-  const p = config.torrentPolicy,
+  const nextConfig = JSON.parse(JSON.stringify(config)),
+    p = nextConfig.torrentPolicy,
     c = enabled("contentClasses"),
-    r = enabled("allowedResolutions");
+    r = enabled("allowedResolutions"),
+    g = enabled("allowedRegions");
   const archiveOrder = order("archiveGroups"), archiveEnabled = new Set([...$("archiveGroups").querySelectorAll("li")].filter(x => x.querySelector("input").checked).map(x => x.dataset.value));
   p.archiveGroupIds = archiveOrder;
   p.resourceGroups.filter((x) => p.archiveGroupIds.includes(x.id)).forEach((x) => (x.enabled = archiveEnabled.has(x.id)));
@@ -4743,6 +5368,7 @@ async function saveSettings(e) {
     (k) => (p.contentClasses[k] = c.has(k)),
   );
   Object.keys(p.resolutions).forEach((k) => (p.resolutions[k] = r.has(k)));
+  p.regions = Object.fromEntries(["china", "japan", "korea", "usa", "europe", "other"].map((key) => [key, g.has(key)]));
   p.serialSubtitle = p.serialSubtitle || {};
   p.serialSubtitle.language = $("serialSubtitleLanguage").value;
   p.serialSubtitle.enabledByLanguage = {};
@@ -4769,25 +5395,23 @@ async function saveSettings(e) {
   [["releaseStrategyPriority", "releaseStrategyPriority"], ["collectionRevisionPriority", "collectionRevisionPriority"], ["attachmentPriority", "attachmentPriority"], ["creationDatePriority", "creationDatePriority"], ["sizePriority", "sizePriority"]].forEach(([key,id]) => {
     p[key] = mergeOrder(p[key] || [], optionalOrder(id));
   });
-  config.download.defaultStartMode = "stopped";
-  delete config.download.allowExplicitAutoStart;
-  delete config.download.autoStartMaximumTasksPerBatch;
-  delete config.storageGuard.maximumQueuedTiB;
-  delete config.storageGuard.maximumDailyAddTiB;
-  config.components.downloadClient.submissionEnabled = $("submissionAllowed").checked;
-  config.components.downloadClient.endpoint = $("qbtEndpoint").value.trim();
-  await configureQbtCredential();
-  config.components.aniRss = {
-    ...(config.components.aniRss || {}),
+  nextConfig.download.defaultStartMode = "stopped";
+  delete nextConfig.download.allowExplicitAutoStart;
+  delete nextConfig.download.autoStartMaximumTasksPerBatch;
+  delete nextConfig.storageGuard.maximumQueuedTiB;
+  delete nextConfig.storageGuard.maximumDailyAddTiB;
+  nextConfig.components.downloadClient.submissionEnabled = $("submissionAllowed").checked;
+  nextConfig.components.downloadClient.endpoint = $("qbtEndpoint").value.trim();
+  nextConfig.components.aniRss = {
+    ...(nextConfig.components.aniRss || {}),
     endpoint: $("aniRssEndpoint").value.trim() || "http://127.0.0.1:7789",
     mode: $("aniRssMode").value,
     mediaPath: $("aniRssMediaPath").value.trim(),
     syncMinutes: Math.max(5, +$("aniRssSyncMinutes").value || 30),
   };
-  await configureAniRssCredential();
-  config.deployment.torrentPoolRoot = $("torrentPoolPath").value.trim();
-  config.deployment.libraryUncRoot = $("libraryPath").value.trim();
-  config.deployment.qbtLibraryRoot = $("qbtLibraryPath").value.trim();
+  nextConfig.deployment.torrentPoolRoot = $("torrentPoolPath").value.trim();
+  nextConfig.deployment.libraryUncRoot = $("libraryPath").value.trim();
+  nextConfig.deployment.qbtLibraryRoot = $("qbtLibraryPath").value.trim();
   const externalSource = {
     id: "external-read-only",
     kind: $("externalReadOnlyKind").value,
@@ -4799,18 +5423,21 @@ async function saveSettings(e) {
     +$("externalScanMinutes").value || 60,
     ),
   };
-  config.externalLibraries = [externalSource];
+  nextConfig.externalLibraries = [externalSource];
   const lines = (id) => $(id).value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-  config.subtitles = config.subtitles || {};
-  config.subtitles.enabled = $("subtitlesEnabled").checked;
-  const subtitleProviderMap = Object.fromEntries((config.subtitles.providers || []).map((item) => [item.id, item]));
-  config.subtitles.providers = [
+  nextConfig.subtitles = nextConfig.subtitles || {};
+  nextConfig.subtitles.enabled = $("subtitlesEnabled").checked;
+  const subtitleProviderMap = Object.fromEntries((nextConfig.subtitles.providers || []).map((item) => [item.id, item]));
+  nextConfig.subtitles.providers = [
     { ...(subtitleProviderMap.assrt || {}), id: "assrt", name: "ASSRT", enabled: true, apiKeyEnv: "ASSRT_API_TOKEN", endpoints: lines("assrtEndpoints") },
     { ...(subtitleProviderMap.opensubtitles || {}), id: "opensubtitles", name: "OpenSubtitles", enabled: true, apiKeyEnv: "OPEN_SUBTITLES_API_KEY", endpoints: [$("openSubtitlesEndpoint").value.trim()].filter(Boolean) },
   ];
-  const subtitleCredentials = { assrt: $("assrtToken").value.trim(), opensubtitles: $("openSubtitlesKey").value.trim() };
-  if (subtitleCredentials.assrt || subtitleCredentials.opensubtitles)
-    await api("/api/connections/subtitles/credentials", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subtitleCredentials) });
+  const credentials = {
+    qbittorrent: $("qbtApiKey").value.trim(),
+    aniRss: $("aniRssApiKey").value.trim(),
+    assrt: $("assrtToken").value.trim(),
+    opensubtitles: $("openSubtitlesKey").value.trim(),
+  };
   const directPathMappings = lines("directPathMappings").map((line) => {
     const separator = line.indexOf("=>");
     if (separator < 1 || separator >= line.length - 2)
@@ -4821,7 +5448,7 @@ async function saveSettings(e) {
     };
   });
   const playbackIdle = Math.max(900, Math.min(172800, +$("playlistTtl").value || 43200));
-  config.playback = {
+  nextConfig.playback = {
     enabled: $("playbackEnabled").checked,
     preferDirectPaths: $("preferDirectPaths").checked,
     publicBaseUrl: $("playbackPublicUrl").value.trim(),
@@ -4829,21 +5456,48 @@ async function saveSettings(e) {
     playlistMaximumSeconds: Math.max(playbackIdle, Math.min(2592000, +$("playlistMaximum").value || 604800)),
     directPathMappings,
   };
-  config.metadata.network = config.metadata.network || {};
-  config.metadata.network.archiveManifestEndpoints = lines("archiveManifestEndpoints");
-  config.metadata.network.archiveAssetProxyTemplates = lines("archiveAssetProxyTemplates");
-  config.metadata.network.bangumiApiEndpoints = lines("bangumiApiEndpoints");
-  if (!config.metadata.network.archiveManifestEndpoints.length || !config.metadata.network.bangumiApiEndpoints.length)
+  nextConfig.metadata.network = nextConfig.metadata.network || {};
+  nextConfig.metadata.network.archiveManifestEndpoints = lines("archiveManifestEndpoints");
+  nextConfig.metadata.network.archiveAssetProxyTemplates = lines("archiveAssetProxyTemplates");
+  nextConfig.metadata.network.bangumiApiEndpoints = lines("bangumiApiEndpoints");
+  if (!nextConfig.metadata.network.archiveManifestEndpoints.length || !nextConfig.metadata.network.bangumiApiEndpoints.length)
     throw new Error(t("metadataEndpointsRequired"));
-  await api("/api/config", {
-    method: "PUT",
+  nextConfig.applicationUpdate = {
+    automaticCheck: {
+      enabled: $("automaticUpdateEnabled").checked,
+      mode: $("automaticUpdateMode").value === "install" ? "install" : "notify",
+      time: $("automaticUpdateTime").value || "04:35",
+    },
+  };
+
+  // Commit configuration and newly entered credentials as one server-side transaction.
+  await api("/api/settings", {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
+    body: JSON.stringify({ config: nextConfig, credentials }),
   });
-  capabilities = await api("/api/capabilities");
+  config = nextConfig;
+  if (credentials.qbittorrent) {
+    $("qbtApiKey").value = "";
+    capabilities.qbtCredentialConfigured = true;
+    $("qbtCredentialState").textContent = t("qbtCredentialConfigured");
+  }
+  if (credentials.aniRss) {
+    $("aniRssApiKey").value = "";
+    capabilities.aniRssCredentialConfigured = true;
+    $("aniRssCredentialState").textContent = t("aniRssCredentialConfigured");
+  }
+  if (credentials.assrt) $("assrtToken").value = "";
+  if (credentials.opensubtitles) $("openSubtitlesKey").value = "";
+  try {
+    capabilities = await api("/api/capabilities");
+  } catch (_) {
+    // The settings transaction is already complete; a status refresh failure must not report it as failed.
+  }
   $("saveState").textContent = t("saved");
   setTimeout(() => ($("saveState").textContent = ""), 1600);
   page = 0;
+  loadSystemHealth();
   search();
 }
 function archiveText(s) {
@@ -4912,15 +5566,14 @@ async function runMaintenance(kind) {
 async function testConnection(kind) {
   const isAniRss = kind === "ani-rss",
     endpoint = $(isAniRss ? "aniRssEndpoint" : "qbtEndpoint").value,
+    apiKey = $(isAniRss ? "aniRssApiKey" : "qbtApiKey").value.trim(),
     state = $(isAniRss ? "aniRssState" : "qbtState");
   state.textContent = "…";
   try {
-    if (isAniRss) await configureAniRssCredential();
-    else await configureQbtCredential();
     const r = await api("/api/connections/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, endpoint }),
+      body: JSON.stringify({ kind, endpoint, apiKey }),
     });
     state.textContent = r.authenticated
       ? `${t("connectionOk")}${r.version ? ` · ${r.version}` : ""}`
@@ -4930,32 +5583,6 @@ async function testConnection(kind) {
   } catch (e) {
     state.textContent = `${t("connectionFailed")}: ${e.message}`;
   }
-}
-async function configureAniRssCredential() {
-  const field = $("aniRssApiKey"), key = field?.value.trim();
-  if (!key) return false;
-  const result = await api("/api/connections/ani-rss/credential", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey: key }),
-  });
-  field.value = "";
-  capabilities.aniRssCredentialConfigured = Boolean(result.configured);
-  $("aniRssCredentialState").textContent = t("aniRssCredentialConfigured");
-  return true;
-}
-async function configureQbtCredential() {
-  const field = $("qbtApiKey"), key = field?.value.trim();
-  if (!key) return false;
-  const result = await api("/api/connections/qbittorrent/credential", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey: key }),
-  });
-  field.value = "";
-  capabilities.qbtCredentialConfigured = Boolean(result.configured);
-  $("qbtCredentialState").textContent = t("qbtCredentialConfigured");
-  return true;
 }
 async function loadLogs() {
   try {
@@ -5022,65 +5649,283 @@ async function persistUi() {
     body: JSON.stringify(config),
   });
 }
-function archiveSummary(s) {
-  catalogStats = s;
-  let d = new Date(s.archive_created_at),
-    m = String(s.archive_name || "").match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (Number.isNaN(d.valueOf()) && m)
-    d = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
-  const sync = s.sync || {}, phaseNames = {
-      starting: ["准备", "preparing", "準備"], pool_discovery: ["发现种子", "discovering torrents", "Torrent 検出"],
-      pool_parse: ["解析种子", "parsing torrents", "Torrent 解析"], pool_reconcile: ["增量收口", "reconciling changes", "差分整理"],
-      torrent_mapping: ["关联作品", "mapping works", "作品対応"], partial_ready: ["部分结果可用", "partial results ready", "一部利用可能"],
-      external_library: ["外部库", "external library", "外部ライブラリ"], runtime_overlay: ["更新索引", "updating index", "索引更新"],
-      library_audit: ["核验收藏库", "auditing library", "ライブラリ検査"], ready: ["完成", "complete", "完了"],
-    }, phase = phaseNames[sync.phase]?.[li()] || sync.phase || "";
-  const done = Number(sync.stats?.parsed || 0) + Number(sync.stats?.unchanged || 0), total = Number(sync.stats?.discovered || 0);
-  const progress = sync.state === "running" && phase ? ` · ${t("backgroundSync")}: ${phase}${total ? ` ${fmt(done)}/${fmt(total)}` : ""}` : "";
-  return `${t("archiveReady")}: ${fmt(s.record_count)} ${t("works").trim()} · ${Number.isNaN(d.valueOf()) ? "—" : new Intl.DateTimeFormat(localeForLanguage(), { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }).format(d)} · ${fmt(s.runtime?.torrents || 0)} ${t("torrentAssets")}${progress}`;
+function archiveVersion(s) {
+  const nameMatch = String(s?.archive_name || "").match(/((?:19|20)\d{2})[-_.]?(\d{2})[-_.]?(\d{2})/);
+  if (nameMatch) return `${nameMatch[1]}${nameMatch[2]}${nameMatch[3]}`;
+  const created = new Date(s?.archive_created_at || "");
+  if (Number.isNaN(created.valueOf())) return "—";
+  return `${created.getUTCFullYear()}${String(created.getUTCMonth() + 1).padStart(2, "0")}${String(created.getUTCDate()).padStart(2, "0")}`;
 }
-function renderScanProgress(s) {
-  const sync = s?.sync || {}, stats = sync.stats || sync.details || {}, phaseNames = {
-      archive_resolve: ["检查动画底库", "Checking catalog archive", "カタログアーカイブ確認"],
-      archive_download: ["下载动画底库", "Downloading catalog archive", "カタログアーカイブ取得"],
-      archive_ready: ["校验动画底库", "Verifying catalog archive", "カタログアーカイブ検証"],
-      catalog_parse: ["构建动画数据库", "Building anime catalog", "アニメカタログ構築"],
-      catalog_ready: ["动画数据库可用", "Anime catalog ready", "アニメカタログ準備完了"],
-      starting: ["准备扫描", "Preparing scan", "スキャン準備"],
-      pool_discovery: ["发现种子", "Discovering torrents", "Torrent 検出"],
-      pool_parse: ["解析种子", "Parsing torrents", "Torrent 解析"],
-      pool_reconcile: ["增量收口", "Reconciling", "差分整理"],
-      initial_torrent_mapping: ["初步关联作品", "Initial work mapping", "初期作品対応"],
-      partial_ready: ["部分结果可用", "Partial results ready", "一部利用可能"],
-      torrent_mapping: ["关联作品", "Mapping works", "作品対応"],
-      path_reconciliation: ["校正本地路径", "Reconciling local paths", "ローカルパス照合"],
-      torrent_search: ["搜索本地资源", "Searching local resources", "ローカル資源検索"],
-      pool_unavailable: ["资源池不可用", "Torrent pool unavailable", "Torrent プール利用不可"],
-      external_library: ["扫描外部库", "Scanning external library", "外部ライブラリ走査"],
-      runtime_overlay: ["更新检索索引", "Updating search index", "検索索引更新"],
-      library_audit: ["核验收藏库", "Verifying library", "ライブラリ確認"],
-      ready: ["扫描完成", "Scan complete", "スキャン完了"],
-    }, label = phaseNames[sync.phase]?.[li()] || sync.phase || t("scanIdle"),
-    done = Number(stats.received || 0) || Number(stats.parsed || 0) + Number(stats.unchanged || 0) || Number(stats.processed || stats.examined || 0),
-    total = Number(stats.discovered || stats.total || 0), bar = $("scanProgressBar"), box = $("scanProgress");
-  box.classList.toggle("idle", sync.state !== "running");
-  if (sync.state === "running" && total > 0) {
-    const percentage = Math.min(99, Math.round(done * 100 / total));
-    bar.value = done <= total ? percentage : 99;
-    $("scanProgressText").textContent = `${label} · ${fmt(done)}/${fmt(total)}`;
-  } else if (sync.state === "running") {
-    bar.removeAttribute("value");
-    $("scanProgressText").textContent = label;
-  } else {
-    bar.value = sync.state === "complete" ? 100 : 0;
-    $("scanProgressText").textContent = sync.state === "complete" ? label : t("scanIdle");
+function archiveSummary(s) {
+  catalogStats = s || {};
+  return t("archiveBuildSummary")
+    .replace("{version}", archiveVersion(catalogStats))
+    .replace("{count}", fmt(Number(catalogStats.record_count || 0)));
+}
+function localizedMonth(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return "—";
+  const year = Number(match[1]), month = Number(match[2]);
+  if (year < 1 || month < 1 || month > 12) return "—";
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, 1);
+  date.setUTCHours(0, 0, 0, 0);
+  return new Intl.DateTimeFormat(localeForLanguage(), { year: "numeric", month: "2-digit", timeZone: "UTC" }).format(date);
+}
+function diagnosticRouteLabel(route) {
+  const mode = String(route?.mode || "direct");
+  const name = mode === "environment_proxy" ? t("routeEnvironment")
+    : mode === "windows_system_proxy" ? t("routeWindows")
+    : mode === "system_proxy" ? t("routeSystem") : t("routeDirect");
+  return route?.proxy ? `${name} · ${route.proxy}` : name;
+}
+function formatDiagnosticRate(bytesPerSecond) {
+  const value = Number(bytesPerSecond || 0);
+  if (!value) return "—";
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MiB/s`;
+  return `${Math.round(value / 1024)} KiB/s`;
+}
+function formatEta(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "—";
+  if (value < 60) return `${Math.max(1, Math.round(value))}s`;
+  const minutes = Math.round(value / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+function selectionReasonText(reason) {
+  return t({
+    incumbent_best: "selectionIncumbentBest",
+    best_quality: "selectionBestQuality",
+    hysteresis_hold: "selectionHysteresisHold",
+    hysteresis_margin: "selectionHysteresisMargin",
+    incumbent_cooldown: "selectionIncumbentCooldown",
+    candidate_cooldown: "selectionCandidateCooldown",
+    meaningfully_better: "selectionMeaningfullyBetter",
+  }[String(reason || "")] || "selectionBestQuality");
+}
+function budgetReasonText(reason) {
+  const keys = String(reason || "idle").split("+").filter(Boolean).map((value) => ({
+    idle: "budgetIdle", foreground: "budgetForeground", foreground_latency: "budgetForegroundLatency",
+    cpu: "budgetCpu", io: "budgetIo", network: "budgetNetwork",
+  }[value])).filter(Boolean);
+  return [...new Set(keys)].map((key) => t(key)).join(" · ") || t("budgetIdle");
+}
+function renderStartupDiagnostics(startup) {
+  if (!startup) return;
+  const key = startup.state === "Starting" ? "startupStarting"
+    : startup.state === "Warming" ? "startupWarming"
+    : startup.state === "Warm" ? "startupWarm" : "startupReady";
+  if ($("startupDiagnostics")) {
+    const performance = startup.performance || {},
+      formatTiming = (value) => value == null ? "—" : Number(value) < 1000 ? `${Math.round(Number(value))} ms` : `${(Number(value) / 1000).toFixed(2)} s`,
+      previous = performance.previous || {},
+      metrics = [
+        ["perfCatalogReady", performance.catalogReadyMs, previous.catalogReadyMs],
+        ["perfFirstScreen", performance.firstScreenMs, previous.firstScreenMs],
+        ["perfFirstCover", performance.firstCoverMs, previous.firstCoverMs],
+        ["perfWarmComplete", performance.warmCompleteMs, previous.warmCompleteMs],
+      ];
+    $("startupDiagnostics").innerHTML = `${startup.catalogReady ? `<span class="catalog-ready-badge">${esc(t("catalogAvailable"))}</span> ` : ""}${esc(t(key))}<div class="performance-baseline"><small>${esc(t("performanceBaseline"))}</small>${metrics.map(([label, value, prior]) => `<span><b>${esc(t(label))}</b> ${esc(formatTiming(value))}${prior == null ? "" : ` <small>(${esc(t("previousRun"))} ${esc(formatTiming(prior))})</small>`}</span>`).join("")}</div>`;
   }
 }
+function diagnosticTrendSparkline(points) {
+  const values = (points || []).map((point) => Number(point.score) * 100).filter(Number.isFinite);
+  if (!values.length) return `<span class="muted trend-empty">${esc(t("noTrendData"))}</span>`;
+  const width = 150, height = 32, pad = 3;
+  const coordinates = values.map((value, index) => {
+    const x = values.length === 1 ? width / 2 : pad + index * (width - pad * 2) / (values.length - 1);
+    const y = height - pad - Math.max(0, Math.min(100, value)) * (height - pad * 2) / 100;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg class="trend-sparkline" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(t("imageSourceTrend"))}"><line x1="3" y1="29" x2="147" y2="29"></line><polyline points="${coordinates}"></polyline></svg>`;
+}
+function renderImageSourceTrends(item) {
+  if (item?.service !== "bangumi_image" || !item?.trends) return "";
+  const routes = [
+    ["direct", t("routeDirect")],
+    ["environment_proxy", t("routeEnvironment")],
+    ["windows_system_proxy", t("routeWindows")],
+  ];
+  if ((item.trends.system_proxy || []).length) routes.push(["system_proxy", t("routeSystem")]);
+  return `<div class="image-route-trends"><div class="trend-heading"><b>${esc(t("imageSourceTrend"))}</b><small>${esc(t("trend12h"))}</small></div>${routes.map(([mode, label]) => {
+    const points = item.trends[mode] || [], latest = points.at(-1);
+    const summary = latest ? `${Math.round(Number(latest.successRate || 0) * 100)}% · ${latest.latencyMs == null ? "—" : `${Math.round(Number(latest.latencyMs))} ms`}` : "—";
+    return `<div class="trend-route"><span><b>${esc(label)}</b><small>${esc(summary)}</small></span>${diagnosticTrendSparkline(points)}</div>`;
+  }).join("")}</div>`;
+}
+function renderNetworkDiagnostics(payload) {
+  if (!$("networkDiagnostics")) return;
+  const profile = payload?.networkProfile || {};
+  $("networkRouteSummary").textContent = `${t("networkProfile")}: ${profile.label || profile.kind || "—"} · ${t("currentRoute")}: ${diagnosticRouteLabel(payload?.route)}`;
+  const items = payload?.items || [];
+  $("networkDiagnostics").innerHTML = items.map((item) => {
+    const success = item.recentSuccessRate == null ? "—" : `${Math.round(Number(item.recentSuccessRate) * 100)}%`;
+    const latency = item.latencyMs == null ? "—" : `${Math.round(Number(item.latencyMs))} ms`;
+    const throughput = item.throughputKiBps == null ? "—" : `${Math.round(Number(item.throughputKiBps))} KiB/s`;
+    const failure = item.lastFailure || t("noRecentFailure"), selection = item.selection || {};
+    const selectionDetail = selection.selected
+      ? `<small class="source-selection"><b>${esc(t("sourceSelected"))}</b> · ${esc(selectionReasonText(selection.reason))} · ${esc(t("sourceConfidence"))} ${Math.round(Number(selection.confidence || 0) * 100)}% · ${esc(t("sourceScore"))} ${Math.round(Number(selection.quality || 0) * 100)}</small>`
+      : "";
+    return `<div class="diagnostic-item"><div><b>${esc(item.label || item.service)}</b><small>${esc(item.baseUrl || "")} · ${esc(diagnosticRouteLabel(item.route))}</small>${selectionDetail}</div><span><small>${t("successRate")}</small><br>${esc(success)}</span><span><small>${t("latency")}</small><br>${esc(latency)}</span><span><small>${t("throughput")}</small><br>${esc(throughput)}</span><span><small>${t("lastFailure")}</small><br>${esc(failure)}</span>${renderImageSourceTrends(item)}</div>`;
+  }).join("") || `<p class="muted">—</p>`;
+}
+function renderImagePreload(payload) {
+  if (!$("imagePreloadStages")) return;
+  const labels = { recent: t("recentSixMonths"), history: t("historyCatalog"), retry: t("failedRetry") };
+  const stages = payload?.stages || {};
+  $("imagePreloadStages").innerHTML = ["recent", "history", "retry"].map((name) => {
+    const stage = stages[name] || {}, done = Number(stage.done || 0), total = Number(stage.total || 0), failed = Number(stage.failed || 0);
+    const percent = total > 0 ? Math.min(100, Math.round(done * 100 / total)) : (payload?.state === "warm" ? 100 : 0);
+    return `<div class="preload-stage"><b>${esc(labels[name])}</b><progress max="100" value="${percent}"></progress><span>${fmt(done)}/${fmt(total)}${failed ? ` · ${t("failed")} ${fmt(failed)}` : ""}</span></div>`;
+  }).join("");
+  const remaining = Number(payload?.estimatedRemaining || 0), current = payload?.current || {},
+    eta = payload?.estimatedSeconds, rate = Number(payload?.throughputItemsPerSecond || 0), budget = payload?.resourceBudget || {};
+  if ($("imagePreloadMeta")) {
+    const budgetConcurrency = Number(budget.effectiveConcurrency);
+    $("imagePreloadMeta").innerHTML = `<span><b>${esc(t("estimatedRemaining"))}</b> ${fmt(remaining)}</span>`
+      + `<span><b>${esc(t("estimatedTime"))}</b> ${esc(formatEta(eta))}</span>`
+      + `${rate > 0 ? `<span><b>${esc(t("preloadRate"))}</b> ${rate.toFixed(rate < 1 ? 2 : 1)}/s</span>` : ""}`
+      + `${Number.isFinite(budgetConcurrency) ? `<span><b>${esc(t("adaptiveConcurrency"))}</b> ${fmt(budgetConcurrency)} · ${esc(budgetReasonText(budget.reason))}</span>` : ""}`
+      + `${current.title ? `<span><b>${esc(t("currentItem"))}</b> ${esc(current.title)}${Number(current.batchSize || 0) > 1 ? ` +${fmt(Number(current.batchSize) - 1)}` : ""}</span>` : ""}`;
+  }
+  const controls = payload?.controls || {};
+  if (document.activeElement !== $("imagePreloadConcurrency")) $("imagePreloadConcurrency").value = Number(controls.concurrency || 1);
+  if (document.activeElement !== $("imagePreloadBandwidth")) $("imagePreloadBandwidth").value = Number(controls.bandwidthKiBps || 0);
+  const paused = Boolean(controls.paused);
+  $("toggleImagePreload").dataset.paused = paused ? "1" : "0";
+  $("toggleImagePreload").textContent = t(paused ? "resumePreload" : "pausePreload");
+  $("imagePreloadStatus").textContent = paused ? t("preloadPaused")
+    : payload?.state === "waiting_network" ? t("preloadWaitingNetwork")
+    : payload?.state === "warm" ? t("preloadWarm")
+    : `${t("preloadRunning")}${payload?.stage ? ` · ${labels[payload.stage] || payload.stage}` : ""}`;
+}
+function renderPlaybackDiagnostics(payload) {
+  if (!$("playbackDiagnostics")) return;
+  const items = payload?.items || [];
+  $("playbackDiagnostics").innerHTML = items.map((item) =>
+    `<div class="diagnostic-item"><div><b>${esc(item.name || item.token || "—")}</b><small>${esc(item.source || "")} · ${esc(item.state || "")}</small></div><span><small>${t("rangeHeader")}</small><br>${esc(item.range || "full")}</span><span><small>${t("resumeCount")}</small><br>${fmt(item.resumeCount || 0)}</span><span><small>${t("upstreamState")}</small><br>${esc(item.upstream || "—")}</span><span><small>${t("transferRate")}</small><br>${esc(formatDiagnosticRate(item.rateBps))}</span></div>`
+  ).join("") || `<p class="muted">${t("noPlaybackSessions")}</p>`;
+}
+function systemHealthLabels() {
+  return {
+    names: { network: t("healthNetwork"), aniRss: t("healthAniRss"), qbittorrent: t("healthQbittorrent"), storage: t("healthStorage"), imagePreload: t("healthImagePreload"), playback: t("healthPlayback") },
+    details: { ready: t("healthReady"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
+  };
+}
+function systemHealthExtra(item) {
+  const info = item?.info || {}, parts = [];
+  if (item?.id === "network") {
+    parts.push(`${t("currentRoute")}: ${diagnosticRouteLabel({ mode: info.route })}`);
+    parts.push(`${t("healthSamples")}: ${fmt(Number(info.sampled || 0))}`);
+    if (Number(info.degraded || 0)) parts.push(`${t("healthWarnings")}: ${fmt(Number(info.degraded))}`);
+  } else if (item?.id === "aniRss") {
+    parts.push(`${t("healthMode")}: ${String(info.mode || "—")}`);
+    parts.push(`${t("healthState")}: ${String(info.connectionState || "—")}`);
+  } else if (item?.id === "qbittorrent") {
+    parts.push(`${t("healthState")}: ${info.enabled === false ? t("healthDisabled") : (item.detail ? (systemHealthLabels().details[item.detail] || item.detail) : "—")}`);
+  } else if (item?.id === "storage") {
+    parts.push(`${t("healthChecked")}: ${fmt(Number(info.checked || 0))}`);
+    if (Number(info.warnings || 0)) parts.push(`${t("healthWarnings")}: ${fmt(Number(info.warnings))}`);
+  } else if (item?.id === "imagePreload") {
+    parts.push(`${t("healthState")}: ${String(info.stage || info.state || "—")}`);
+    parts.push(`${t("estimatedRemaining")}: ${fmt(Number(info.estimatedRemaining || 0))}`);
+    if (info.current) parts.push(`${t("currentItem")}: ${String(info.current)}`);
+  } else if (item?.id === "playback") {
+    parts.push(`${t("healthSessions")}: ${fmt(Number(info.sessions || 0))}`);
+    if (Number(info.degraded || 0)) parts.push(`${t("healthWarnings")}: ${fmt(Number(info.degraded))}`);
+  }
+  return parts.join(" · ");
+}
+function renderSystemHealth(payload) {
+  if (!$("systemHealthItems")) return;
+  const { names, details } = systemHealthLabels();
+  const warning = payload?.status === "warning";
+  $("systemHealthSummary").className = `system-health-summary ${warning ? "warning" : "normal"}`;
+  $("systemHealthSummary").textContent = t(warning ? "healthOverallWarning" : "healthOverallNormal");
+  $("systemHealthItems").innerHTML = (payload?.items || []).map((item) => {
+    const isWarning = item.status === "warning";
+    return `<div class="system-health-item ${isWarning ? "warning" : "normal"}"><span class="health-dot" aria-hidden="true"></span><span><b>${esc(names[item.id] || item.id)}</b><small>${esc(details[item.detail] || item.detail || "")}</small></span><strong>${esc(t(isWarning ? "healthWarning" : "healthNormal"))}</strong></div>`;
+  }).join("");
+}
+function renderSystemHealthDiagnostics(payload) {
+  if (!$("systemHealthDiagnostics")) return;
+  const { names, details } = systemHealthLabels();
+  $("systemHealthDiagnostics").innerHTML = (payload?.items || []).map((item) => {
+    const isWarning = item.status === "warning", extra = systemHealthExtra(item);
+    const detail = [details[item.detail] || item.detail || "", extra].filter(Boolean).join(" · ");
+    return `<div class="system-health-item ${isWarning ? "warning" : "normal"}"><span class="health-dot" aria-hidden="true"></span><span><b>${esc(names[item.id] || item.id)}</b><small title="${esc(detail)}">${esc(detail)}</small></span><strong>${esc(t(isWarning ? "healthWarning" : "healthNormal"))}</strong></div>`;
+  }).join("") || `<p class="muted">—</p>`;
+}
+async function loadSystemHealth() {
+  if (!$("systemHealthItems")) return;
+  $("systemHealthSummary").className = "system-health-summary muted";
+  $("systemHealthSummary").textContent = t("healthLoading");
+  try {
+    renderSystemHealth(await api("/api/system/health"));
+  } catch (error) {
+    $("systemHealthSummary").className = "system-health-summary warning";
+    $("systemHealthSummary").textContent = `${t("healthOverallWarning")} · ${error.message}`;
+    $("systemHealthItems").innerHTML = "";
+  }
+}
+let diagnosticTimer;
+function renderDiagnosticFailure(id, error) {
+  const target = $(id);
+  if (target) target.innerHTML = `<p class="error">${esc(error?.message || String(error || "error"))}</p>`;
+}
+async function loadDiagnostics() {
+  clearTimeout(diagnosticTimer);
+  if (!$('settingsDialog')?.open || !document.querySelector('[data-panel="diagnostics"]')?.classList.contains('active')) return;
+  const requests = await Promise.allSettled([
+    api("/api/startup/state"), api("/api/system/health"), api("/api/diagnostics/network"), api("/api/images/preload"), api("/api/diagnostics/playback"),
+  ]);
+  const renderers = [
+    [renderStartupDiagnostics, "startupDiagnostics"],
+    [renderSystemHealthDiagnostics, "systemHealthDiagnostics"],
+    [renderNetworkDiagnostics, "networkDiagnostics"],
+    [renderImagePreload, "imagePreloadStages"],
+    [renderPlaybackDiagnostics, "playbackDiagnostics"],
+  ];
+  requests.forEach((result, index) => {
+    if (result.status === "fulfilled") renderers[index][0](result.value);
+    else renderDiagnosticFailure(renderers[index][1], result.reason);
+  });
+  diagnosticTimer = setTimeout(loadDiagnostics, 2500);
+}
+function renderScanProgress(s, startup = null) {
+  if (startup) startupState = startup;
+  const state = startupState || {}, preload = state.preload || {},
+    bar = $("scanProgressBar"), box = $("scanProgress"), catalogBadge = $("catalogReadyBadge");
+  if (catalogBadge) {
+    catalogBadge.hidden = false;
+    catalogBadge.textContent = t(state.catalogReady ? "catalogAvailable" : "catalogPreparing");
+  }
+  let imageStatus = "backgroundImagesPreparing";
+  if (state.state === "Warm" || preload.state === "warm") imageStatus = "backgroundImagesComplete";
+  else if (preload.state === "paused") imageStatus = "backgroundImagesPaused";
+  else if (preload.state === "waiting_network") imageStatus = "backgroundImagesWaiting";
+  const frontier = String(preload.preparedThroughMonth || "");
+  const frontierLabel = language.startsWith("zh") ? frontier : localizedMonth(frontier);
+  const detail = frontier && frontierLabel !== "—"
+    ? t("imagesPreparedThrough").replace("{month}", frontierLabel)
+    : t("imagesPreparingBackward");
+  const separator = " · ";
+  const statusSuffix = language.startsWith("zh") ? "；" : language.startsWith("ja") ? "；" : ";";
+  $("scanProgressText").textContent = `${t(imageStatus)}${separator}${detail}${statusSuffix}`;
+  const done = Number(preload.overallDone || 0), total = Number(preload.overallTotal || 0);
+  if (state.state === "Warm") bar.value = 100;
+  else if (total > 0) bar.value = Math.min(99, Math.round(done * 100 / total));
+  else bar.removeAttribute("value");
+  box.classList.toggle("idle", state.state !== "Starting" && state.state !== "Warming");
+}
+
 let syncSummaryTimer, lastCatalogRecordCount = null, lastArchiveName = null;
 async function pollSyncSummary() {
   clearTimeout(syncSummaryTimer);
   try {
-    const stats = await api("/api/stats");
+    const [stats, startup] = await Promise.all([api("/api/stats"), api("/api/startup/state")]);
     const count = Number(stats.record_count || 0), archiveName = String(stats.archive_name || "");
     if ((lastCatalogRecordCount === 0 && count > 0) ||
         (lastArchiveName === "bootstrap-pending" && archiveName !== "bootstrap-pending")) {
@@ -5089,9 +5934,11 @@ async function pollSyncSummary() {
     }
     lastCatalogRecordCount = count;
     lastArchiveName = archiveName;
+    startupState = startup;
     $("buildInfo").textContent = archiveSummary(stats);
-    renderScanProgress(stats);
-    syncSummaryTimer = setTimeout(pollSyncSummary, stats.sync?.state === "running" ? 1500 : 15000);
+    renderScanProgress(stats, startup);
+    const activeWarmup = startup?.state === "Starting" || startup?.state === "Warming";
+    syncSummaryTimer = setTimeout(pollSyncSummary, stats.sync?.state === "running" || activeWarmup ? 1500 : 15000);
   } catch (_) {
     syncSummaryTimer = setTimeout(pollSyncSummary, 10000);
   }
@@ -5102,45 +5949,143 @@ function setRecentDates() {
     monthValue = (year, month) => `${year}-${String(month).padStart(2, "0")}`;
   $("start_from").value = monthValue(start.getFullYear(), start.getMonth() + 1);
   $("start_to").value = monthValue(endYear, endMonth);
-  $("era").value = "";
+  syncEraSeasonFromDates();
+}
+function exactYear(value) {
+  const text = String(value || ""), year = Number(text);
+  return /^\d{4}$/.test(text) && year >= 1000 && year <= 9999 ? year : null;
+}
+function monthParts(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]);
+  return year >= 1 && month >= 1 && month <= 12
+    ? { year, month: String(month).padStart(2, "0") }
+    : null;
+}
+function ensureEraYearOption(year) {
+  const select = $("era"), value = String(year);
+  if (!select || [...select.options].some((option) => option.value === value)) return;
+  const option = document.createElement("option");
+  option.value = value;
+  option.textContent = value;
+  option.dataset.generatedYear = "1";
+  select.insertBefore(option, select.options[1] || null);
+}
+function seasonDateRange(year, season) {
+  const y = Number(year);
+  if (!Number.isInteger(y) || y < 1) return null;
+  if (season === "winter") return { from: `${y - 1}-12`, to: `${y}-02` };
+  if (season === "spring") return { from: `${y}-03`, to: `${y}-05` };
+  if (season === "summer") return { from: `${y}-06`, to: `${y}-08` };
+  if (season === "autumn") return { from: `${y}-09`, to: `${y}-11` };
+  return { from: `${y}-01`, to: `${y}-12` };
 }
 function eraDateRange(value) {
-  if (/^\d{4}$/.test(value))
-    return { from: `${value}-01`, to: `${value}-12`, reversible: true };
+  const year = exactYear(value);
+  if (year !== null) return { ...seasonDateRange(year, ""), reversible: true };
   if (/^\d{4}s$/.test(value)) {
     const first = +value.slice(0, 4);
-    return {
-      from: `${first}-01`,
-      to: `${first + 9}-12`,
-      reversible: true,
-    };
+    return { from: `${first}-01`, to: `${first + 9}-12`, reversible: true };
   }
-  if (value === "before1980")
-    return { from: "", to: "1979-12", reversible: true };
-  if (value === "future_or_unknown")
-    return { from: "", to: "", reversible: false };
+  if (value === "before1980") return { from: "", to: "1979-12", reversible: true };
+  if (value === "future_or_unknown") return { from: "", to: "", reversible: false };
   return null;
 }
+function updateSeasonControl() {
+  const select = $("season"), year = exactYear($("era").value);
+  const enabled = year !== null;
+  select.disabled = !enabled;
+  if (!enabled) select.value = "";
+}
 function applyEraDateRange(value) {
+  const year = exactYear(value);
+  if (year !== null) {
+    ensureEraYearOption(year);
+    const selectedSeason = $("season").value;
+    if (selectedSeason) {
+      const range = seasonDateRange(year, selectedSeason);
+      $("start_from").value = range.from;
+      $("start_to").value = range.to;
+      updateSeasonControl();
+      return;
+    }
+    const from = monthParts($("start_from").value), to = monthParts($("start_to").value);
+    if (from) $("start_from").value = `${year}-${from.month}`;
+    else $("start_from").value = `${year}-01`;
+    if (to) $("start_to").value = `${year}-${to.month}`;
+    else $("start_to").value = `${year}-12`;
+    updateSeasonControl();
+    return;
+  }
+  $("season").value = "";
+  updateSeasonControl();
   const range = eraDateRange(value);
   if (!range) return;
   $("start_from").value = range.from;
   $("start_to").value = range.to;
 }
-function syncEraFromDates() {
-  const from = $("start_from").value,
-    to = $("start_to").value,
-    matching = (options.eras || []).find((value) => {
+function applySeasonDateRange() {
+  const year = exactYear($("era").value);
+  if (year === null) {
+    $("season").value = "";
+    updateSeasonControl();
+    return;
+  }
+  const range = seasonDateRange(year, $("season").value);
+  $("start_from").value = range.from;
+  $("start_to").value = range.to;
+}
+function syncEraSeasonFromDates() {
+  const from = $("start_from").value, to = $("start_to").value,
+    fromParts = monthParts(from), toParts = monthParts(to);
+  let matchedEra = "", matchedSeason = "";
+  if (fromParts && toParts) {
+    const candidateYears = [...new Set([fromParts.year, toParts.year, fromParts.year + 1])];
+    for (const year of candidateYears) {
+      for (const season of ["winter", "spring", "summer", "autumn"]) {
+        const range = seasonDateRange(year, season);
+        if (range.from === from && range.to === to) {
+          ensureEraYearOption(year);
+          matchedEra = String(year);
+          matchedSeason = season;
+          break;
+        }
+      }
+      if (matchedSeason) break;
+    }
+    if (!matchedEra && fromParts.year === toParts.year) {
+      ensureEraYearOption(fromParts.year);
+      matchedEra = String(fromParts.year);
+    }
+  }
+  if (!matchedEra) {
+    for (const value of options.eras || []) {
+      if (exactYear(value) !== null) continue;
       const range = eraDateRange(value);
-      return range?.reversible && range.from === from && range.to === to;
-    });
-  $("era").value = matching || "";
+      if (range?.reversible && range.from === from && range.to === to) {
+        matchedEra = value;
+        break;
+      }
+    }
+  }
+  $("era").value = matchedEra;
+  $("season").value = matchedSeason;
+  updateSeasonControl();
+}
+
+function updateViewToggle() {
+  const button = $("viewToggle");
+  if (!button) return;
+  const key = view === "cards" ? "table" : "cards";
+  button.textContent = t(key);
+  button.title = t(key);
+  button.setAttribute("aria-label", t(key));
 }
 function setView(v) {
-  view = v;
-  results.className = `results ${v}`;
-  $("cardsView").classList.toggle("active", v === "cards");
-  $("tableView").classList.toggle("active", v === "table");
+  view = v === "table" ? "table" : "cards";
+  results.className = `results ${view}`;
+  updateViewToggle();
   render();
 }
 function applyRoleUi() {
@@ -5151,7 +6096,7 @@ function applyRoleUi() {
   document.querySelectorAll("[data-admin-only]").forEach((element) => (element.hidden = !admin));
 }
 function showLogin() {
-  if (!$("loginDialog").open) $("loginDialog").showModal();
+  showModalDialog($("loginDialog"));
   setTimeout(() => $("loginUsername").focus(), 0);
 }
 async function establishSession() {
@@ -5168,32 +6113,172 @@ async function establishSession() {
     throw error;
   }
 }
+function setUserManagementStatus(message = "", error = false) {
+  const target = $("userManagementStatus");
+  if (!target) return;
+  target.textContent = message;
+  target.classList.toggle("error", error);
+}
 async function loadUsers() {
   if (authSession?.role !== "admin") return;
-  const payload = await api("/api/auth/users");
-  $("userList").innerHTML = payload.items.map((user) =>
-    `<div class="log-item user-row"><b>${esc(user.username)}</b><span>${t(user.role === "admin" ? "administrator" : "normalUser")}</span><button type="button" class="text-button toggle-user" data-user-id="${user.id}" data-enabled="${user.enabled ? "1" : "0"}">${t(user.enabled ? (user.initialAdmin ? "disableInitialAdmin" : "disableUser") : "enableUser")}</button></div>`
-  ).join("");
-  $("userList").querySelectorAll(".toggle-user").forEach((button) => {
-    button.onclick = async () => {
-      await api(`/api/auth/users/${button.dataset.userId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: button.dataset.enabled !== "1" }) });
-      await loadUsers();
-    };
+  try {
+    const payload = await api("/api/auth/users");
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    $("userList").innerHTML = items.map((user) => {
+      const current = user.username === authSession?.username;
+      const badges = [
+        `<span class="user-badge">${esc(t(user.role === "admin" ? "administrator" : "normalUser"))}</span>`,
+        user.initialAdmin ? `<span class="user-badge">${esc(t("initialAdmin"))}</span>` : "",
+        current ? `<span class="user-badge">${esc(t("currentUser"))}</span>` : "",
+        !user.enabled ? `<span class="user-badge disabled">${esc(t("disabledUser"))}</span>` : "",
+      ].join("");
+      const initial = String(user.username || "?").slice(0, 1);
+      return `<div class="user-row"><div class="user-summary"><span class="user-avatar" aria-hidden="true">${esc(initial)}</span><span class="user-identity"><b>${esc(user.username)}</b><small>${esc(t(user.role === "admin" ? "administrator" : "normalUser"))}</small></span></div><span class="user-badges">${badges}</span><button type="button" class="text-button toggle-user" data-user-id="${user.id}" data-enabled="${user.enabled ? "1" : "0"}" ${current ? "disabled" : ""}>${esc(t(user.enabled ? "disableUser" : "enableUser"))}</button></div>`;
+    }).join("") || `<p class="user-empty">${esc(t("noUsers"))}</p>`;
+    $("userList").querySelectorAll(".toggle-user").forEach((button) => {
+      button.onclick = async () => {
+        button.disabled = true;
+        setUserManagementStatus();
+        try {
+          await api(`/api/auth/users/${button.dataset.userId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: button.dataset.enabled !== "1" }) });
+          setUserManagementStatus(t("userUpdated"));
+          await loadUsers();
+        } catch (error) {
+          setUserManagementStatus(error.message, true);
+          button.disabled = false;
+        }
+      };
+    });
+  } catch (error) {
+    $("userList").innerHTML = `<p class="error">${esc(error.message)}</p>`;
+  }
+}
+function updateReasonText(reason) {
+  return t({
+    docker_update_required: "updateDockerRequired",
+    docker_update_runtime_unavailable: "updateDockerRequired",
+    docker_state_not_writable: "updateDockerStateUnavailable",
+    portable_release_required: "updatePortableRequired",
+    install_root_unavailable: "updatePortableRequired",
+    portable_release_invalid: "updatePortableRequired",
+    install_parent_not_writable: "updatePortableRequired",
+    platform_not_supported: "updateUnavailable",
+    release_asset_unavailable: "updateUnavailable",
+    release_checksum_unavailable: "updateUnavailable",
+  }[String(reason || "")] || "updateUnavailable");
+}
+function updateMessage(key, values = {}) {
+  let value = t(key);
+  Object.entries(values).forEach(([name, replacement]) => {
+    value = value.replaceAll(`{${name}}`, String(replacement));
   });
+  return value;
+}
+function updateShaText(value) {
+  return t({ pending: "shaPending", verified: "shaVerified", failed: "shaFailed", unavailable: "shaUnavailable", not_required: "shaNotRequired" }[String(value || "")] || "shaPending");
+}
+function updateUpgradeText(value) {
+  const status = String(value?.status || "");
+  if (!status) return t("upgradeIdle");
+  return t({ downloading: "upgradeDownloading", restarting: "upgradeRestarting", installed: "upgradeInstalled", failed: "upgradeFailedState", available: "upgradeStatusAvailable", latest: "upgradeStatusLatest", unavailable: "upgradeStatusUnavailable", installing: "upgradeStatusInstalling" }[status] || "upgradeIdle");
+}
+function updateDateText(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? String(value) : new Intl.DateTimeFormat(localeForLanguage(), { dateStyle: "short", timeStyle: "medium" }).format(date);
+}
+function renderUpdateSourceDiagnostics(payload) {
+  const target = $("updateSourceDiagnostics");
+  if (!target) return;
+  const items = payload?.items || [];
+  target.innerHTML = items.map((item) => {
+    const latency = item.latencyMs == null ? "—" : `${Math.round(Number(item.latencyMs))} ms`;
+    const success = item.recentSuccessRate == null ? "—" : `${Math.round(Number(item.recentSuccessRate) * 100)}%`;
+    const selected = item.selection?.selected ? ` · ${t("sourceSelected")}` : "";
+    const type = t(item.sourceType === "proxy" ? "updateSourceProxy" : "updateSourceDirect");
+    const cooling = item.coolingDown ? ` · ${t("selectionCandidateCooldown")}` : "";
+    return `<div class="diagnostic-item"><div><b>${esc(item.label || item.kind || "—")}</b><small>${esc(item.host || item.baseUrl || "")} · ${esc(type)}${esc(selected)}${esc(cooling)}</small></div><span><small>${t("latency")}</small><br>${esc(latency)}</span><span><small>${t("successRate")}</small><br>${esc(success)}</span><span><small>${t("lastFailure")}</small><br>${esc(item.lastFailure || t("noRecentFailure"))}</span></div>`;
+  }).join("") || `<p class="muted">—</p>`;
+}
+function renderUpdateDetails(payload) {
+  if ($("updateCurrentVersion")) $("updateCurrentVersion").textContent = payload.currentVersion || "—";
+  if ($("updateLatestVersion")) $("updateLatestVersion").textContent = payload.latestVersion || "—";
+  if ($("updateDownloadSource")) $("updateDownloadSource").textContent = payload.downloadSourceLabel || payload.downloadSource || "—";
+  if ($("updateSha256Status")) $("updateSha256Status").textContent = updateShaText(payload.sha256Status);
+  if ($("updateUpgradeResult")) $("updateUpgradeResult").textContent = updateUpgradeText(payload.upgradeResult || payload.automaticResult);
+  if ($("updateLastChecked")) $("updateLastChecked").textContent = updateDateText(payload.checkedAt);
+  renderUpdateSourceDiagnostics(payload.sourceDiagnostics);
+}
+function updateButtons() {
+  return {
+    checks: [$("checkApplicationUpdateDetail")].filter(Boolean),
+    applies: [$("applyApplicationUpdateDetail")].filter(Boolean),
+    statuses: [$("updateDetailStatus")].filter(Boolean),
+  };
+}
+async function loadApplicationUpdate(force = false) {
+  const controls = updateButtons();
+  if (!controls.checks.length || authSession?.role !== "admin") return;
+  controls.checks.forEach((button) => button.disabled = true);
+  controls.statuses.forEach((target) => { target.classList.remove("error"); target.textContent = t("updateChecking"); });
+  try {
+    const payload = await api(`/api/update/status${force ? "?force=1" : ""}`, { timeoutMs: 30000 });
+    controls.applies.forEach((button) => {
+      button.hidden = !(payload.updateAvailable && payload.canUpdate);
+      button.dataset.version = payload.latestVersion || "";
+    });
+    const message = payload.updateAvailable
+      ? (payload.canUpdate ? t("upgradeStatusAvailable") : updateReasonText(payload.reason))
+      : t("updateLatest");
+    controls.statuses.forEach((target) => target.textContent = message);
+    renderUpdateDetails(payload);
+    return payload;
+  } catch (error) {
+    controls.applies.forEach((button) => button.hidden = true);
+    controls.statuses.forEach((target) => { target.classList.add("error"); target.textContent = updateMessage("updateCheckFailed", { message: error.message }); });
+    throw error;
+  } finally {
+    controls.checks.forEach((button) => button.disabled = false);
+  }
+}
+async function applyApplicationUpdate() {
+  const controls = updateButtons();
+  controls.applies.forEach((button) => button.disabled = true);
+  controls.checks.forEach((button) => button.disabled = true);
+  controls.statuses.forEach((target) => { target.classList.remove("error"); target.textContent = t("updatePreparing"); });
+  try {
+    const payload = await api("/api/update/apply", { method: "POST", timeoutMs: 180000 });
+    controls.statuses.forEach((target) => target.textContent = t("updateRestarting"));
+    const expected = String(payload.version || controls.applies.find((button) => button.dataset.version)?.dataset.version || "");
+    const deadline = Date.now() + 150000;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      try {
+        const health = await api("/api/health/live", { timeoutMs: 2500 });
+        if (health.ok && (!expected || health.version === expected)) { window.location.reload(); return; }
+      } catch (_) {}
+    }
+    throw new Error("restart_timeout");
+  } catch (error) {
+    controls.statuses.forEach((target) => { target.classList.add("error"); target.textContent = updateMessage("updateFailed", { message: error.message }); });
+    controls.applies.forEach((button) => button.disabled = false);
+    controls.checks.forEach((button) => button.disabled = false);
+  }
 }
 async function initialize() {
   try {
     if (!(await establishSession())) return;
-    const [stats, o, c, cap, groups] = await Promise.all([
+    const [stats, o, c, cap, groups, startup] = await Promise.all([
       api("/api/stats", { timeoutMs: 30000 }),
       api("/api/options", { timeoutMs: 30000 }),
       api("/api/config", { timeoutMs: 30000 }),
       api("/api/capabilities", { timeoutMs: 30000 }),
       api("/api/resource-groups", { timeoutMs: 30000 }),
+      api("/api/startup/state", { timeoutMs: 30000 }),
     ]);
     config = c;
     catalogStats = stats;
-    if ($("appVersion")) $("appVersion").textContent = stats.version || "—";
+    startupState = startup;
     lastCatalogRecordCount = Number(stats.record_count || 0);
     lastArchiveName = String(stats.archive_name || "");
     capabilities = cap;
@@ -5210,7 +6295,6 @@ async function initialize() {
     fill("era", o.eras);
     fill("source_type", o.source_types, "source");
     fill("studio", o.studios);
-    fill("country", o.countries, "country");
     fill("tag", o.tags, "theme");
     personSuggestions("directorSuggestions", o.directors);
     personSuggestions("voiceSuggestions", o.voice_actors);
@@ -5224,9 +6308,10 @@ async function initialize() {
     setView(view);
     applyLanguage();
     $("buildInfo").textContent = archiveSummary(stats);
-    renderScanProgress(stats);
+    renderScanProgress(stats, startup);
     await search();
-    syncSummaryTimer = setTimeout(pollSyncSummary, stats.sync?.state === "running" ? 1500 : 15000);
+    const activeWarmup = startup?.state === "Starting" || startup?.state === "Warming";
+    syncSummaryTimer = setTimeout(pollSyncSummary, stats.sync?.state === "running" || activeWarmup ? 1500 : 15000);
   } catch (e) {
     results.innerHTML = `<div class="error">${t("failed")}: ${esc(e.message)}</div>`;
     $("buildInfo").textContent = t("failed");
@@ -5236,7 +6321,7 @@ Object.values(filters).forEach((e) =>
   e.addEventListener("input", () => {
     if (e.id === "era") applyEraDateRange(e.value);
     else if (e.id === "start_from" || e.id === "start_to")
-      syncEraFromDates();
+      syncEraSeasonFromDates();
     clearTimeout(timer);
     saveFilterState();
     page = 0;
@@ -5250,6 +6335,13 @@ Object.values(filters).forEach((e) =>
     );
   }),
 );
+$("season").addEventListener("input", () => {
+  applySeasonDateRange();
+  clearTimeout(timer);
+  saveFilterState();
+  page = 0;
+  timer = setTimeout(search, 0);
+});
 Object.values(statusGroups).forEach((b) =>
   b.addEventListener("change", () => {
     page = 0;
@@ -5260,11 +6352,12 @@ Object.values(statusGroups).forEach((b) =>
 $("reset").onclick = () => {
   try { localStorage.removeItem(filterStorageKey); } catch (_) {}
   Object.values(filters).forEach((x) => (x.value = ""));
-  $("country").value = config.ui?.filterDefaults?.country || "JP";
   applyStatusDefaults();
   $("media_type").innerHTML = "";
   renderMediaChecks();
   setRecentDates();
+  $("season").value = "";
+  updateSeasonControl();
   saveFilterState();
   page = 0;
   search();
@@ -5284,12 +6377,8 @@ $("language").onchange = async (e) => {
   await persistUi();
   search();
 };
-$("cardsView").onclick = () => {
-  setView("cards");
-  persistUi();
-};
-$("tableView").onclick = () => {
-  setView("table");
+$("viewToggle").onclick = () => {
+  setView(view === "cards" ? "table" : "cards");
   persistUi();
 };
 $("settingsButton").onclick = openSettings;
@@ -5313,9 +6402,20 @@ $("loginForm").onsubmit = async (event) => {
   }
 };
 $("createUser").onclick = async () => {
-  await api("/api/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("newUsername").value, password: $("newUserPassword").value, role: $("newUserRole").value }) });
-  $("newUsername").value = ""; $("newUserPassword").value = "";
-  await loadUsers();
+  const button = $("createUser"), username = $("newUsername"), password = $("newUserPassword");
+  setUserManagementStatus();
+  if (!username.reportValidity() || !password.reportValidity()) return;
+  button.disabled = true;
+  try {
+    await api("/api/auth/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: username.value, password: password.value, role: $("newUserRole").value }) });
+    username.value = ""; password.value = "";
+    setUserManagementStatus(t("userCreated"));
+    await loadUsers();
+  } catch (error) {
+    setUserManagementStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 };
 document.querySelectorAll(".settings-tabs .tab").forEach(
   (b) =>
@@ -5327,12 +6427,45 @@ document.querySelectorAll(".settings-tabs .tab").forEach(
       document
         .querySelector(`[data-panel="${b.dataset.tab}"]`)
         .classList.add("active");
+      if (b.dataset.tab === "diagnostics") loadDiagnostics();
+      else clearTimeout(diagnosticTimer);
       if (b.dataset.tab === "logs") loadLogs();
       if (b.dataset.tab === "history") loadHistory();
       if (b.dataset.tab === "subscriptions") loadWatches();
       if (b.dataset.tab === "users") loadUsers();
+      if (b.dataset.tab === "updates") loadApplicationUpdate();
     }),
 );
+$("recheckNetwork").onclick = async () => {
+  const button = $("recheckNetwork");
+  button.disabled = true;
+  try {
+    renderNetworkDiagnostics(await api("/api/diagnostics/network/recheck", { method: "POST", timeoutMs: 30000 }));
+  } catch (error) {
+    renderDiagnosticFailure("networkDiagnostics", error);
+    $("networkRouteSummary").textContent = error.message;
+  } finally { button.disabled = false; }
+};
+async function controlImagePreload(payload, button) {
+  button.disabled = true;
+  $("imagePreloadStatus").classList.remove("error");
+  try {
+    renderImagePreload(await api("/api/images/preload/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), timeoutMs: 15000 }));
+  } catch (error) {
+    $("imagePreloadStatus").classList.add("error");
+    $("imagePreloadStatus").textContent = error.message;
+  } finally { button.disabled = false; }
+}
+$("toggleImagePreload").onclick = async () => {
+  const button = $("toggleImagePreload"), paused = button.dataset.paused === "1";
+  await controlImagePreload({ paused: !paused }, button);
+};
+$("applyImagePreloadLimits").onclick = async () => {
+  const button = $("applyImagePreloadLimits");
+  await controlImagePreload({ concurrency: Number($("imagePreloadConcurrency").value || 1), bandwidthKiBps: Number($("imagePreloadBandwidth").value || 0) }, button);
+};
+$("checkApplicationUpdateDetail").onclick = () => loadApplicationUpdate(true).catch(() => {});
+$("applyApplicationUpdateDetail").onclick = () => applyApplicationUpdate();
 $("updateArchive").onclick = () =>
   startArchiveUpdate().catch(
     (e) => ($("archiveStatus").textContent = e.message),
@@ -5412,6 +6545,23 @@ $("createPlan").onclick = () => createPlan();
 document
   .querySelectorAll("dialog .close")
   .forEach((b) => (b.onclick = () => b.closest("dialog").close()));
+document.querySelectorAll("dialog").forEach((dialog) => {
+  dialog.addEventListener("close", () => {
+    for (let index = modalStack.length - 1; index >= 0; index -= 1) {
+      if (modalStack[index] === dialog) modalStack.splice(index, 1);
+    }
+    if (!topModalDialog() && coverBatch) {
+      requestAnimationFrame(() => predictiveCoverWindow(coverBatch, "down"));
+    }
+  });
+});
+document.addEventListener("wheel", (event) => {
+  if (event.ctrlKey) return;
+  const dialog = topModalDialog();
+  if (!dialog || modalWheelHasTarget(event, dialog)) return;
+  scrollModalFallback(event, dialog);
+  event.preventDefault();
+}, { capture: true, passive: false });
 window.__ANM_APP_STARTED__ = true;
 localizeStaticUi();
 initialize();

@@ -31,7 +31,7 @@ cp "$script_dir/AnimeMachine-macOS.command" "$release/AnimeMachine-macOS.command
 cp "$script_dir/Clean-AnimeMachine.sh" "$release/Clean-AnimeMachine.sh"
 cp "$root/scripts/windows/AnimeMachine.ps1" "$root/scripts/windows/AnimeMachine.cmd" "$release/"
 cp "$root/scripts/windows/Clean-AnimeMachine.ps1" "$root/scripts/windows/Clean-AnimeMachine.cmd" "$release/"
-cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$release/"
+cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$release/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/" \;
 if [ -d "$root/docs/images" ]; then cp -R "$root/docs/images" "$release/docs/images"; fi
 cp "$root/VERSION" "$root/RELEASE_PYTHON_VERSION" "$release/"

@@ -1,5 +1,5 @@
 [中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)  
-[README](README.ja.md) | [導入・利用ガイド](docs/guide.ja.md) | [アーキテクチャとデータベース](docs/architecture.ja.md)
+[README](README.ja.md) | [導入・利用ガイド](docs/guide.ja.md) | [アーキテクチャとデータベース](docs/architecture.ja.md) | [更新履歴](CHANGELOG.md)
 
 # AnimeMachine · Automated Anime Library
 
@@ -28,14 +28,12 @@ AnimeMachine は全自動アニメライブラリシステムです。アニメ�
 - Bangumi Archive を基礎にアニメカタログを構築します。初回起動時はローカル SQLite Catalog をバックグラウンドで作成し、完全性検査後に原子的に公開します。
 - Torrent プールは増分走査します。指紋が変化していない処理済みファイルは再解析せず、大規模な全量走査中でも完了済みバッチから検索やリソース選択に利用できます。
 - Docker の自動コレクション構成では Torrent Collector を有効化できます。タイトル、Torrent manifest、ローカル Catalog の証拠を組み合わせて `accept / reject / defer` を判定し、共有 Torrent プールへ書き込むのは `accept` だけです。証拠不足は固定の話数幅で完全性を推測せず `defer` のまま残します。毎週追加される単話リリースは Ani-RSS へ購読を依頼して遠隔アクセスできます。
-- ダウンロード計画は、完全な一括リリース、話数/巻数の組み合わせ、差分補完、同一 infohash の既存タスクへのファイル選択追加に対応します。AnimeMachine 管理の qBittorrent タスクは先に計画を生成し、ユーザーの選択に応じて停止状態のまま送信できます。
+- ダウンロード計画は、完全な一括リリース、話数/巻数の組み合わせ、差分補完、同一 infohash の既存タスクへのファイル選択追加に対応します。AnimeMachine 管理の qBittorrent タスクは先に計画を生成し、常に停止状態で送信します。計画内容を確認した後、ユーザーが qBittorrent 側で開始します。
 - 管理対象ライブラリにはローカルメディアディレクトリまたは読み書き可能な UNC/NAS ディレクトリを利用できます。既存メディアは移動や改名をせず、外部読み取り専用ライブラリとしてマッピングできます。
 - qBittorrent、Ani-RSS、Torrent Collector はすべて任意です。一部だけを使うことも、Compose で完全な自動コレクション経路を構成することもできます。
-- 再生では M3U プレイリストを生成し、システムプレイヤー、VLC、PotPlayer に渡します。サーバーとクライアントでパスが異なる場合は、プレイヤー側から見えるパスマッピングを別途設定できます。
+- 再生では M3U プレイリストを生成し、システムプレイヤー、VLC、PotPlayer に渡します。サーバーとクライアントでパスが異なる場合はプレイヤー側から見えるパスマッピングを設定でき、Ani-RSS メディアをマウントしていない場合でも HTTP 中継で Range シークと短時間切断からの再開に対応します。
 - アーカイブ向けリソースでは、内蔵/外部字幕を確認し、ユーザーが設定した字幕サービスへ接続できます。字幕処理によって外部読み取り専用メディアへの書き込み権限が生じることはありません。
 - 作品関係図でシリーズ内の位置と論理関係を表示し、関連作品へ直接移動できます。
-
-
 
 ## クイックスタート
 
@@ -49,7 +47,7 @@ Windows では `scripts/windows/AnimeMachine.cmd`、Linux では `scripts/unix/A
 
 `deploy/compose` には四つの定義済み構成があります。(1)AnimeMachine 単体、(2)外部 qBittorrent 連携、(3)Torrent Collector と内蔵 qBittorrent、(4)Torrent Collector・qBittorrent・Ani-RSS を同じ Compose プロジェクトで管理する完全構成です。最初の三構成では外部 Ani-RSS を任意で接続でき、未設定でも Catalog、ディレクトリ、Torrent Pool、ローカルライブラリを管理できます。
 
-構成例は公開イメージ `ghcr.io/kyupi-git/animemachine:latest` を使用します。運用環境では具体的なバージョンタグの固定を推奨します。
+0.2.0 の構成例は公開イメージ `ghcr.io/kyupi-git/animemachine:0.2.0` を既定で固定します。`latest` へ変更すると以後のリリースへ追従するため、運用環境では具体的なバージョンタグを固定したまま使うことを推奨します。
 
 選択したディレクトリで `.env.example` を `.env` にコピーし、ホスト側のパスと必要なシークレットを設定してから `docker compose up -d` を実行します。四つの構成はコンポーネント境界によって区分されます。選択は、既存の qBittorrent、Ani-RSS、メディアディレクトリが別の場所で動作しているかどうかを基準にします。詳細は [導入・利用ガイド](docs/guide.ja.md#docker-compose) を参照してください。
 

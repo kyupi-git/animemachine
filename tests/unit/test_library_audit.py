@@ -22,6 +22,12 @@ class LibraryAuditTests(unittest.TestCase):
         self.assertEqual(library_audit._state(30), "partial")
         self.assertEqual(library_audit._state(29.9), "incomplete")
 
+    def test_signature_keeps_korean_and_cyrillic_title_tokens(self):
+        korean = library_audit._signature("도굴왕 01.mkv", 1000, "main_video")
+        russian = library_audit._signature("Смешарики 01.mkv", 1000, "main_video")
+        self.assertIn("도굴왕", korean["tokens"])
+        self.assertIn("смешарики", russian["tokens"])
+
     def test_observed_reuses_physical_root_snapshot(self):
         with tempfile.TemporaryDirectory() as root:
             media = Path(root) / "Episode 01.mkv"

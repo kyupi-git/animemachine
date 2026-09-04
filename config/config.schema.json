@@ -35,7 +35,8 @@
       "required": [
         "libraryUncRoot",
         "qbtLibraryRoot",
-        "torrentPoolRoot"
+        "torrentPoolRoot",
+        "historyDirectoryName"
       ],
       "properties": {
         "libraryUncRoot": {
@@ -49,6 +50,11 @@
         "torrentPoolRoot": {
           "type": "string",
           "minLength": 1
+        },
+        "historyDirectoryName": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^/\\\\]+$"
         }
       },
       "additionalProperties": true
@@ -95,9 +101,50 @@
             }
           },
           "additionalProperties": false
+        },
+        "downloadClient": {
+          "type": "object",
+          "required": [
+            "endpoint",
+            "category",
+            "tags"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string"
+            },
+            "endpoint": {
+              "type": "string",
+              "pattern": "^https?://"
+            },
+            "credentialRef": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "submissionEnabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
         }
       },
-      "additionalProperties": true
+      "additionalProperties": true,
+      "required": [
+        "downloadClient"
+      ]
     },
     "performance": {
       "type": "object",
@@ -294,6 +341,7 @@
         },
         "pageSize": {
           "enum": [
+            12,
             20,
             50,
             100,
@@ -391,6 +439,30 @@
           "additionalProperties": {
             "type": "boolean"
           }
+        },
+        "regions": {
+          "type": "object",
+          "properties": {
+            "china": {
+              "type": "boolean"
+            },
+            "japan": {
+              "type": "boolean"
+            },
+            "korea": {
+              "type": "boolean"
+            },
+            "usa": {
+              "type": "boolean"
+            },
+            "europe": {
+              "type": "boolean"
+            },
+            "other": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         },
         "resolutions": {
           "type": "object",
@@ -616,6 +688,36 @@
     },
     "safety": {
       "type": "object"
+    },
+    "applicationUpdate": {
+      "type": "object",
+      "properties": {
+        "automaticCheck": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "mode",
+            "time"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "mode": {
+              "enum": [
+                "notify",
+                "install"
+              ]
+            },
+            "time": {
+              "type": "string",
+              "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

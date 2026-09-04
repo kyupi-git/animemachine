@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateRange(0, 65535)][int]$Port = 0,
     [string]$BindAddress = '',
@@ -17,6 +17,8 @@ if ($releaseLayout) {
     $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 }
 $appRoot = if ($packagedApp) { Join-Path $projectRoot 'app' } elseif (-not $releaseLayout) { Join-Path $projectRoot 'src' } else { '' }
+$env:ANM_INSTALL_ROOT = $projectRoot
+$env:ANM_INSTALL_MODE = if ($releaseLayout) { 'portable' } else { 'source' }
 $exampleConfig = Join-Path $projectRoot 'config\config.example.json'
 $environmentExample = if ($releaseLayout) {
     Join-Path $projectRoot '.env.local.example'

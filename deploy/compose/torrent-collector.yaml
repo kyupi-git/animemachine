@@ -1,6 +1,6 @@
 services:
   torrent-collector:
-    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.1.0}
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
     restart: unless-stopped
     init: true
     user: "${PUID:-1000}:${PGID:-1000}"

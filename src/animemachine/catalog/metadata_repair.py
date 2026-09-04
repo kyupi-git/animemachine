@@ -4,7 +4,7 @@ from __future__ import annotations
 import contextlib, datetime as dt, json, sqlite3, time
 from pathlib import Path
 from typing import Any
-from ..network import sources as network_sources
+from ..network import registry as network_registry, sources as network_sources
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS metadata_repair_queue(
@@ -32,7 +32,11 @@ def run_batch(db_path: Path, config: dict[str, Any]) -> dict[str, int]:
     policy = config.get("metadata", {}).get("onlineRepair", {})
     if not policy.get("enabled", False): return {"processed": 0, "repaired": 0, "failed": 0}
     network = config.get("metadata", {}).get("network", {})
-    endpoints = network.get("bangumiApiEndpoints") or ["https://api.bgm.tv"]
+    endpoints = list(dict.fromkeys([
+        *(network.get("bangumiApiEndpoints") or []),
+        *(item.base_url for item in network_registry.for_service("bangumi_api")),
+        "https://api.bgm.tv",
+    ]))
     limit = max(1, min(200, int(policy.get("batchSize", 50))))
     result = {"processed": 0, "repaired": 0, "failed": 0}
     with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db:
