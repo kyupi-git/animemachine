@@ -51,7 +51,9 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertNotIn("COPY scripts/", dockerfile)
         self.assertNotIn("COPY deploy/", dockerfile)
         self.assertIn("COPY pyproject.toml VERSION", dockerfile)
-        self.assertIn("!VERSION", (ROOT / ".dockerignore").read_text(encoding="utf-8"))
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        self.assertIn("!VERSION", dockerignore)
+        self.assertIn("!packaging/docker/entrypoint.py", dockerignore)
 
     def test_publication_metadata_uses_the_canonical_repository(self):
         canonical_repo = "https://github.com/kyupi-git/animemachine"
