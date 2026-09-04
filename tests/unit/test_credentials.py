@@ -58,11 +58,12 @@ class CredentialStoreTests(unittest.TestCase):
             self.assertNotIn("ANM_ANI_RSS_API_KEY", os.environ)
 
     def test_windows_directory_acl_is_inherited_by_new_credential_files(self):
-        with tempfile.TemporaryDirectory() as directory, \
-                mock.patch.object(credentials.os, "name", "nt"), \
-                mock.patch.dict(os.environ, {"USERNAME": "anm", "USERDOMAIN": "HOST"}, clear=False), \
-                mock.patch.object(credentials.subprocess, "run") as run:
-            credentials._restrict_permissions(Path(directory), directory=True)
+        with tempfile.TemporaryDirectory() as directory:
+            credential_directory = Path(directory)
+            with mock.patch.object(credentials.os, "name", "nt"), \
+                    mock.patch.dict(os.environ, {"USERNAME": "anm", "USERDOMAIN": "HOST"}, clear=False), \
+                    mock.patch.object(credentials.subprocess, "run") as run:
+                credentials._restrict_permissions(credential_directory, directory=True)
         arguments = run.call_args.args[0]
         self.assertIn("HOST\\anm:(OI)(CI)F", arguments)
         self.assertIn("*S-1-5-18:(OI)(CI)F", arguments)
