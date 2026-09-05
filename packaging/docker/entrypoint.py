@@ -104,6 +104,78 @@ def _rollback(pending: dict[str, str]) -> None:
     (_update_root() / "pending.json").unlink(missing_ok=True)
 
 
+
+def _numeric_id(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = int(raw, 10)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a numeric user/group id (got {raw!r}).") from exc
+    if not 0 <= value <= 2_147_483_647:
+        raise SystemExit(f"{name} must be between 0 and 2147483647.")
+    return value
+
+
+def _option(arguments: list[str], name: str) -> str:
+    for index, value in enumerate(arguments):
+        if value == name and index + 1 < len(arguments):
+            return arguments[index + 1]
+        if value.startswith(name + "="):
+            return value.partition("=")[2]
+    return ""
+
+
+def _writable_paths(arguments: list[str]) -> list[Path]:
+    command = arguments[0] if arguments else "run"
+    paths: list[Path] = []
+    if command in {"run", "init", "serve", "healthcheck", "validate-config", "sync"}:
+        paths.extend([
+            Path(os.getenv("ANM_CONFIG_PATH", "/Config/config.json")).parent,
+            Path(os.getenv("ANM_STATE_DIR", "/Data/state")),
+            Path(os.getenv("ANM_LIBRARY_DIR", "/Library")),
+        ])
+        incomplete = os.getenv("ANM_INCOMPLETE_DIR", "").strip()
+        if incomplete:
+            paths.append(Path(incomplete))
+    elif command in {"qbt-bootstrap", "ani-rss-bootstrap"}:
+        config_dir = _option(arguments, "--config-dir")
+        if config_dir:
+            paths.append(Path(config_dir))
+        if command == "qbt-bootstrap":
+            for name in ("ANM_QBT_LIBRARY_DIR", "ANM_ANI_RSS_MEDIA_DIR", "ANM_INCOMPLETE_DIR"):
+                value = os.getenv(name, "").strip()
+                if value:
+                    paths.append(Path(value))
+    elif command == "torrent-collector":
+        paths.extend([
+            Path(os.getenv("TORRENT_COLLECTOR_STATE_DIR", "/CollectorState")),
+            Path(os.getenv("ANM_TORRENT_POOL_DIR", "/Torrents")),
+        ])
+    return list(dict.fromkeys(paths))
+
+
+def _drop_privileges(arguments: list[str]) -> None:
+    if os.name != "posix" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    uid = _numeric_id("PUID", 1000)
+    gid = _numeric_id("PGID", 1000)
+    for path in _writable_paths(arguments):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            stat = path.stat()
+            if stat.st_uid != uid or stat.st_gid != gid:
+                os.chown(path, uid, gid)
+        except OSError as exc:
+            print(f"Warning: unable to prepare writable path {path}: {exc}", file=sys.stderr, flush=True)
+    if uid == 0 and gid == 0:
+        return
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+    if os.environ.get("HOME", "").strip() in {"", "/root"}:
+        os.environ["HOME"] = "/tmp"
+
+
 def _host(arguments: list[str]) -> str:
     for index, value in enumerate(arguments):
         if value == "--host" and index + 1 < len(arguments):
@@ -194,6 +266,7 @@ def _forward_signal(signum: int, _frame) -> None:
 
 def main(arguments: list[str]) -> int:
     global _ACTIVE_CHILD
+    _drop_privileges(arguments)
     signal.signal(signal.SIGTERM, _forward_signal)
     signal.signal(signal.SIGINT, _forward_signal)
     is_server = not arguments or arguments[0] == "run"

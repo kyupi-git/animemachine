@@ -34,7 +34,6 @@ ENV PYTHONUNBUFFERED=1 \
     ANM_STATE_DIR=/Data/state \
     ANM_CONFIG_PATH=/Config/config.json \
     ANM_IMPORTS_DIR=/Imports
-USER anm
 EXPOSE 8787
 ENTRYPOINT ["python", "/opt/animemachine/docker-entrypoint.py"]
 CMD ["run"]

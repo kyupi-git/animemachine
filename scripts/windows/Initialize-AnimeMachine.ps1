@@ -6,9 +6,13 @@ $example = Join-Path $root '.env.example'
 $environment = Join-Path $root '.env'
 if (-not (Test-Path -LiteralPath $example -PathType Leaf)) { throw ".env.example was not found in $root" }
 $composeFile = Join-Path $root 'compose.yaml'
+$managedQbt = $false
+$managedAni = $false
 if (Test-Path -LiteralPath $composeFile -PathType Leaf) {
     $composeText = [IO.File]::ReadAllText($composeFile)
-    if ($composeText -match '(?m)^\s+(?:qbittorrent|ani-rss):') {
+    $managedQbt = $composeText -match '(?m)^\s+qbt-bootstrap:'
+    $managedAni = $composeText -match '(?m)^\s+ani-rss-bootstrap:'
+    if ($managedQbt -or $managedAni) {
         $rawVersion = (& docker compose version --short 2>$null)
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($rawVersion)) { throw 'Docker Compose 2.20.3 or newer is required.' }
         $match = [regex]::Match([string]$rawVersion, '(\d+)\.(\d+)\.(\d+)')
@@ -48,12 +52,15 @@ function New-QbtKey {
 
 $text = [IO.File]::ReadAllText($environment)
 $generated = @{}
-foreach ($entry in @(
-    @{Name='ANM_QBT_API_KEY';Value=(New-QbtKey)},
-    @{Name='ANM_QBT_WEB_PASSWORD';Value=(New-HexSecret 'qbtweb_')},
-    @{Name='ANM_ANI_RSS_API_KEY';Value=(New-HexSecret 'ani_')},
-    @{Name='ANM_ADMIN_PASSWORD';Value=(New-HexSecret 'anm_')}
-)) {
+$entries = @(@{Name='ANM_ADMIN_PASSWORD';Value=(New-HexSecret 'anm_')})
+if ($managedQbt) {
+    $entries += @{Name='ANM_QBT_API_KEY';Value=(New-QbtKey)}
+    $entries += @{Name='ANM_QBT_WEB_PASSWORD';Value=(New-HexSecret 'qbtweb_')}
+}
+if ($managedAni) {
+    $entries += @{Name='ANM_ANI_RSS_API_KEY';Value=(New-HexSecret 'ani_')}
+}
+foreach ($entry in $entries) {
     $pattern = '(?m)^' + [regex]::Escape($entry.Name) + '=(.*)$'
     $match = [regex]::Match($text, $pattern)
     if (-not $match.Success -or [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) {

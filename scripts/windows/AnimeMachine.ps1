@@ -56,6 +56,14 @@ function Resolve-AnmPath([string]$Value, [string]$Default) {
     if ([IO.Path]::IsPathRooted($candidate)) { return [IO.Path]::GetFullPath($candidate) }
     return [IO.Path]::GetFullPath((Join-Path $projectRoot $candidate))
 }
+function Get-AnmProbeHost([string]$HostValue) {
+    $value = $HostValue.Trim()
+    if ([string]::IsNullOrWhiteSpace($value) -or $value -eq '0.0.0.0' -or $value -eq '*') { return '127.0.0.1' }
+    if ($value -eq '::') { return '[::1]' }
+    if ($value.StartsWith('[') -and $value.EndsWith(']')) { return $value }
+    if ($value.Contains(':')) { return "[$value]" }
+    return $value
+}
 function Get-AnmListener([int]$ListenPort) {
     $pattern = "^\s*TCP\s+\S+:$ListenPort\s+\S+\s+LISTENING\s+(\d+)\s*$"
     @(netstat -ano -p tcp | ForEach-Object {
@@ -89,8 +97,8 @@ $env:ANM_AUTH_ENABLED = if ($DisableAuthentication) { 'false' } elseif ($env:ANM
 $env:ANM_SUBMISSION_ENABLED = if ($DisableSubmission) { 'false' } elseif ($env:ANM_SUBMISSION_ENABLED) { $env:ANM_SUBMISSION_ENABLED } else { 'true' }
 $environmentPort = 0
 $validPort = [int]::TryParse($env:ANM_WEB_PORT, [ref]$environmentPort) -and $environmentPort -ge 1 -and $environmentPort -le 65535
-$Port = if ($Port -gt 0) { $Port } elseif ($validPort) { $environmentPort } else { 8877 }
-$BindAddress = if ($BindAddress) { $BindAddress } elseif ($env:ANM_BIND_ADDRESS) { $env:ANM_BIND_ADDRESS } else { '127.0.0.1' }
+$Port = if ($Port -gt 0) { $Port } elseif ($validPort) { $environmentPort } else { 8787 }
+$BindAddress = if ($BindAddress) { $BindAddress } elseif ($env:ANM_BIND_ADDRESS) { $env:ANM_BIND_ADDRESS } else { '0.0.0.0' }
 
 $config = Resolve-AnmPath $env:ANM_CONFIG_PATH (Join-Path $projectRoot 'config.json')
 $stateRoot = Resolve-AnmPath $env:ANM_STATE_DIR (Join-Path $projectRoot $(if ($releaseLayout) { 'data\state' } else { '.local\state' }))
@@ -177,10 +185,12 @@ if ($CheckOnly) {
     exit 0
 }
 
+$probeHost = Get-AnmProbeHost $BindAddress
+$probeUri = "http://${probeHost}:$Port/api/health/live"
 foreach ($processId in @(Get-AnmListener $Port)) {
     $verified = $false
     try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health/live" -TimeoutSec 3
+        $health = Invoke-RestMethod -Uri $probeUri -TimeoutSec 3
         $process = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $processId) -ErrorAction Stop
         $commandLine = [string]$process.CommandLine
         $verified = ($health.ok -eq $true -and $health.service -eq 'AnimeMachine' -and
@@ -189,7 +199,7 @@ foreach ($processId in @(Get-AnmListener $Port)) {
         $verified = $false
     }
     if ($verified) {
-        Write-Host "AnimeMachine is already running: http://127.0.0.1:$Port"
+        Write-Host "AnimeMachine is already running: http://${probeHost}:$Port"
         exit 0
     }
     throw "Port $Port is occupied by another or unverified process (PID $processId); no process was stopped."

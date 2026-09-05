@@ -99,6 +99,7 @@ function scrollModalFallback(event, dialog) {
 const i18n = {
   "zh-Hans": {
     catalog: "AnimeMachine",
+    catalogTagline: "全自动动画收藏库",
     aboutTitle: "关于 AnimeMachine",
     checkUpdate: "检测更新",
     updateNow: "更新",
@@ -108,6 +109,10 @@ const i18n = {
     updatePreparing: "正在下载并校验更新…",
     updateRestarting: "更新已就绪，AnimeMachine 正在自动重启…",
     updateFailed: "更新失败：{message}",
+    updateRestartTimeout: "更新后服务未在预期时间内恢复。",
+    playbackHandoffUnavailable: "外部播放器交接不可用。",
+    randomSeedUnavailable: "无法取得新的随机种子。",
+    maintenanceUnsupported: "不支持的维护操作。",
     updateCheckFailed: "检测更新失败：{message}",
     updateDockerRequired: "当前 Docker 镜像尚不包含 Web 在线升级运行时；请先通过 Docker Compose 更新一次镜像，之后即可直接在线升级。",
     updateDockerStateUnavailable: "Docker 状态目录不可写，无法安全保存在线升级数据。",
@@ -151,7 +156,6 @@ const i18n = {
     aboutComponents: "AnimeMachine 本身不提供动画检索或下载，也不内置 Torrent、磁力链接或媒体内容。外部媒体目录按只读来源处理；实际下载与订阅由用户连接的外部组件完成。",
     aboutArchiveSource: "提供本地动画元数据底包与作品关系基础。",
     aboutBangumiSource: "用于补全底包中缺失或明显异常的公开元数据。",
-    aboutMalSource: "在本地证据不足时作为作品身份和前后作关系的辅助来源。",
     aboutAniRssSource: "提供可选的新番订阅、状态同步与远程播放能力；AnimeMachine 通过其 HTTP API 连接。",
     aboutSubtitleSources: "是用户可选的外部字幕 API；字幕版权及使用条件由对应服务说明。",
     cards: "卡片",
@@ -305,7 +309,7 @@ const i18n = {
     searchAniRss: "通过 Ani-RSS 查询资源",
     aniRssManaged: "Ani-RSS 媒体已存在",
     aniRssResources: "Ani-RSS 资源可用",
-    aniRssMode: "调用模式",
+    aniRssMode: "资源调用模式",
     aniRssPrefer: "优先调用 Ani-RSS",
     aniRssFallback: "备选调用 Ani-RSS",
     aniRssManual: "手动调用 Ani-RSS",
@@ -314,7 +318,7 @@ const i18n = {
     aniRssCredentialConfigured: "API Key 已保存到受限凭据存储。",
     aniRssMediaPath: "Ani-RSS 媒体路径",
     aniRssSyncMinutes: "状态同步间隔（分钟）",
-    aniRssHint: "连接无效时自动按“手动调用”运行；连接恢复后使用所选模式。媒体目录始终只读。",
+    aniRssHint: "此模式只控制资源查询与规划；订阅和 API 媒体状态仍按同步间隔更新。连接无效时自动停用远端资源，恢复后使用所选模式；媒体目录始终只读。",
     searchPoolRunning: "正在检索资源池…",
     searchPoolDone: "检索完成，已更新可用资源",
     searchPoolNone: "检索完成，仍未找到可安全关联的资源",
@@ -342,6 +346,10 @@ const i18n = {
     themeSystem: "跟随系统",
     themeDark: "暗黑模式",
     themeLight: "浅色模式",
+    languageControl: "界面语言",
+    closeDialog: "关闭",
+    sortDirectionLabel: "排序方向",
+    settingsSectionsLabel: "设置分区",
     remotePlaybackSource: "Ani-RSS 远程播放",
     playbackStartFile: "起始媒体文件",
     managed: "AnimeMachine 管理",
@@ -635,6 +643,7 @@ const i18n = {
   },
   en: {
     catalog: "AnimeMachine",
+    catalogTagline: "Automated Anime Library",
     aboutTitle: "About AnimeMachine",
     checkUpdate: "Check for updates",
     updateNow: "Update",
@@ -644,6 +653,10 @@ const i18n = {
     updatePreparing: "Downloading and verifying the update…",
     updateRestarting: "The update is ready. AnimeMachine is restarting automatically…",
     updateFailed: "Update failed: {message}",
+    updateRestartTimeout: "The service did not recover within the expected time after the update.",
+    playbackHandoffUnavailable: "External player handoff is unavailable.",
+    randomSeedUnavailable: "A new random seed could not be obtained.",
+    maintenanceUnsupported: "Unsupported maintenance operation.",
     updateCheckFailed: "Update check failed: {message}",
     updateDockerRequired: "This Docker image does not yet include the Web update runtime. Update the image once with Docker Compose; later releases can be installed online.",
     updateDockerStateUnavailable: "The Docker state directory is not writable, so the online update cannot be staged safely.",
@@ -687,7 +700,6 @@ const i18n = {
     aboutComponents: "AnimeMachine does not provide anime search or downloads and does not bundle torrents, magnet links or media content. External media directories remain read-only; actual downloads and subscriptions are handled by components connected by the user.",
     aboutArchiveSource: "supplies the local catalog base and relationship evidence.",
     aboutBangumiSource: "fills public metadata that is missing or clearly inconsistent in the archive.",
-    aboutMalSource: "provides supporting identity and chronology evidence when local evidence is insufficient.",
     aboutAniRssSource: "provides optional seasonal subscriptions, state synchronization and remote playback through its HTTP API.",
     aboutSubtitleSources: "is an optional external subtitle API; subtitle rights and usage terms remain with the provider.",
     cards: "Cards",
@@ -846,7 +858,7 @@ const i18n = {
     searchAniRss: "Search via Ani-RSS",
     aniRssManaged: "Ani-RSS media available",
     aniRssResources: "Ani-RSS resources available",
-    aniRssMode: "Invocation mode",
+    aniRssMode: "Resource routing mode",
     aniRssPrefer: "Prefer Ani-RSS",
     aniRssFallback: "Use Ani-RSS as fallback",
     aniRssManual: "Use Ani-RSS manually",
@@ -855,7 +867,7 @@ const i18n = {
     aniRssCredentialConfigured: "API key saved to restricted credential storage.",
     aniRssMediaPath: "Ani-RSS media path",
     aniRssSyncMinutes: "State sync interval (minutes)",
-    aniRssHint: "An unavailable connection falls back to manual mode; the chosen mode resumes after recovery. Media access is always read-only.",
+    aniRssHint: "This mode controls resource discovery and planning only; subscriptions and API media state still refresh on the sync interval. An unavailable connection disables remote resources until recovery. Media access is always read-only.",
     searchPoolRunning: "Searching the torrent pool…",
     searchPoolDone: "Search complete; available sources updated",
     searchPoolNone: "Search complete; no safely linkable source found",
@@ -883,6 +895,10 @@ const i18n = {
     themeSystem: "System theme",
     themeDark: "Dark mode",
     themeLight: "Light mode",
+    languageControl: "Interface language",
+    closeDialog: "Close",
+    sortDirectionLabel: "Sort direction",
+    settingsSectionsLabel: "Settings sections",
     remotePlaybackSource: "Ani-RSS remote playback",
     playbackStartFile: "Starting media file",
     managed: "Managed by AnimeMachine",
@@ -1177,6 +1193,7 @@ const i18n = {
   },
   ja: {
     catalog: "AnimeMachine",
+    catalogTagline: "全自動アニメライブラリ",
     aboutTitle: "AnimeMachineについて",
     checkUpdate: "更新を確認",
     updateNow: "更新",
@@ -1186,6 +1203,10 @@ const i18n = {
     updatePreparing: "更新をダウンロードして検証しています…",
     updateRestarting: "更新の準備が完了しました。AnimeMachine を自動的に再起動しています…",
     updateFailed: "更新に失敗しました：{message}",
+    updateRestartTimeout: "更新後、所定時間内にサービスの復帰を確認できませんでした。",
+    playbackHandoffUnavailable: "外部プレーヤー連携を利用できません。",
+    randomSeedUnavailable: "新しいランダムシードを取得できませんでした。",
+    maintenanceUnsupported: "未対応のメンテナンス操作です。",
     updateCheckFailed: "更新確認に失敗しました：{message}",
     updateDockerRequired: "この Docker イメージには Web オンライン更新ランタイムがまだ含まれていません。Docker Compose で一度イメージを更新すると、以後はオンライン更新できます。",
     updateDockerStateUnavailable: "Docker の状態ディレクトリへ書き込めないため、オンライン更新を安全に準備できません。",
@@ -1229,7 +1250,6 @@ const i18n = {
     aboutComponents: "AnimeMachine 自体はアニメの検索やダウンロードを提供せず、Torrent、マグネットリンク、メディア内容も内蔵しません。外部メディアディレクトリは読み取り専用で扱い、実際のダウンロードと購読はユーザーが接続した外部コンポーネントが実行します。",
     aboutArchiveSource: "ローカルカタログのベースと作品関係の根拠を提供します。",
     aboutBangumiSource: "アーカイブで欠落または明らかに不整合な公開メタデータを補完します。",
-    aboutMalSource: "ローカル根拠が不足する場合に作品同定と前後関係の補助根拠として使用します。",
     aboutAniRssSource: "HTTP API を通じて、任意の新番購読、状態同期、リモート再生機能を提供します。",
     aboutSubtitleSources: "任意で利用する外部字幕APIです。字幕の権利と利用条件は各サービスに従います。",
     cards: "カード",
@@ -1388,7 +1408,7 @@ const i18n = {
     searchAniRss: "Ani-RSS でリソースを検索",
     aniRssManaged: "Ani-RSS メディアあり",
     aniRssResources: "Ani-RSS リソース利用可",
-    aniRssMode: "呼び出しモード",
+    aniRssMode: "リソース利用モード",
     aniRssPrefer: "Ani-RSS を優先",
     aniRssFallback: "Ani-RSS を予備として使用",
     aniRssManual: "Ani-RSS を手動で使用",
@@ -1397,7 +1417,7 @@ const i18n = {
     aniRssCredentialConfigured: "API キーを制限付き資格情報ストレージへ保存しました。",
     aniRssMediaPath: "Ani-RSS メディアパス",
     aniRssSyncMinutes: "状態同期間隔（分）",
-    aniRssHint: "接続できない場合は自動的に手動モードになり、復旧後に選択したモードへ戻ります。メディアは常に読み取り専用です。",
+    aniRssHint: "このモードはリソース検索と計画だけを制御し、購読と API メディア状態は同期間隔どおり更新します。接続できない場合はリモートリソースを停止し、復旧後に選択したモードへ戻ります。メディアは常に読み取り専用です。",
     searchPoolRunning: "Torrent プールを検索中…",
     searchPoolDone: "検索が完了し、利用可能なソースを更新しました",
     searchPoolNone: "検索完了。安全に関連付けられるソースは見つかりませんでした",
@@ -1425,6 +1445,10 @@ const i18n = {
     themeSystem: "システム設定",
     themeDark: "ダークモード",
     themeLight: "ライトモード",
+    languageControl: "表示言語",
+    closeDialog: "閉じる",
+    sortDirectionLabel: "並び順",
+    settingsSectionsLabel: "設定セクション",
     remotePlaybackSource: "Ani-RSS リモート再生",
     playbackStartFile: "開始メディアファイル",
     managed: "AnimeMachine管理",
@@ -1962,15 +1986,24 @@ const api = async (url, opt = {}) => {
     String(value || "")
       .split("-")[0]
       .toLowerCase(),
-  sameAsOriginalLanguage = (x) =>
-    languageBase(language) === languageBase(x.original_language || "ja"),
+  sameAsOriginalLanguage = (x) => {
+    const originalBase = languageBase(x.original_language || "ja");
+    if (language === "zh-Hans" && originalBase === "zh")
+      return !(x.title_zh_hans && x.title_zh_hans !== x.title_ja);
+    return languageBase(language) === originalBase;
+  },
+  englishReadableTitle = (value) => {
+    const title = String(value || "").normalize("NFKC").trim();
+    return title && [...title].every((char) =>
+      !/\p{Letter}/u.test(char) || /\p{Script=Latin}/u.test(char)) ? title : "";
+  },
   preferred = (x) =>
-    sameAsOriginalLanguage(x)
-      ? x.title_ja
-      : language === "zh-Hans"
-        ? x.title_zh_hans || x.title_ja
+    language === "zh-Hans"
+      ? x.title_zh_hans || x.title_zh_hans_localized || x.title_ja
+      : sameAsOriginalLanguage(x)
+        ? x.title_ja
         : language === "en"
-          ? x.title_en || x.title_ja
+          ? englishReadableTitle(x.title_en) || englishReadableTitle(x.title_en_localized) || x.title_ja
           : x.title_ja_localized || x.title_ja,
   secondaryTitle = (x) => {
     const title = sameAsOriginalLanguage(x) ? "" : x.title_ja;
@@ -2008,6 +2041,12 @@ function localizeStaticUi() {
   document
     .querySelectorAll("[data-i18n-placeholder]")
     .forEach((e) => (e.placeholder = t(e.dataset.i18nPlaceholder)));
+  document
+    .querySelectorAll("[data-i18n-aria-label]")
+    .forEach((e) => e.setAttribute("aria-label", t(e.dataset.i18nAriaLabel)));
+  document
+    .querySelectorAll("[data-i18n-title]")
+    .forEach((e) => e.setAttribute("title", t(e.dataset.i18nTitle)));
   $("language").value = language;
   ["start_from", "start_to"].forEach((id) => $(id).lang = localeForLanguage());
 }
@@ -2072,7 +2111,7 @@ function eraLabel(x) {
 }
 function fill(id, rows, g) {
   $(id).innerHTML =
-    `<option value=""${id === "era" ? ' data-i18n="custom"' : ""}>${t(id === "era" ? "custom" : "all")}</option>` +
+    `<option value="" data-i18n="${id === "era" ? "custom" : "all"}">${t(id === "era" ? "custom" : "all")}</option>` +
     rows
       .map(
         (x) =>
@@ -2631,7 +2670,7 @@ const suffix = (c) =>
       size = group.members.length,
       unit = group.top.releaseUnit;
     return unit === "collection"
-      ? (archive ? ["合卷", "Disc collection", "全巻"][li()] : ["合集", "Collection", "合集"][li()])
+      ? (archive ? ["合卷", "Disc collection", "全巻"][li()] : ["合集", "Collection", "コレクション"][li()])
       : unit === "volume"
         ? (size > 1 ? ["多卷", "Multiple volumes", "複数巻"][li()] : ["单卷", "Single volume", "単巻"][li()])
         : (size > 1 ? ["多集", "Multiple episodes", "複数話"][li()] : ["单集", "Single episode", "単話"][li()]);
@@ -2781,7 +2820,7 @@ function showRelationSubjectPopover(button, graph, pinned = false) {
   if (!popover || !subjects.length) return;
   relationSubjectPopoverPinned = pinned;
   relationSubjectPopoverKey = `${button.dataset.relatedNode}:${category}`;
-  popover.innerHTML = `<header><b>${esc(t(relationSubjectCategoryKey[category]))}</b><span>${esc(node.title_ja || "")}</span></header><ul>${subjects.map((item) => relatedSubjectLine(item, category)).join("")}</ul>`;
+  popover.innerHTML = `<header><b>${esc(t(relationSubjectCategoryKey[category]))}</b><span>${esc(graphTitle(node))}</span></header><ul>${subjects.map((item) => relatedSubjectLine(item, category)).join("")}</ul>`;
   popover.hidden = false;
   const rect = button.getBoundingClientRect(),
     box = popover.getBoundingClientRect(),
@@ -4456,7 +4495,7 @@ function renderRelationGraph(graph) {
       })
       .join("");
   $("relationGraph").innerHTML =
-    `<header class="relation-heading"><div><p class="eyebrow">AnimeMachine · Automated Anime Library</p><h2>${esc(graph.seriesTitle || graphTitle(nodesById.get(graph.rootAnimeId)))} · ${t("relationGraph")}</h2><p>${t("relationHint")}</p>${graph.contextTruncated ? `<p class="relation-context-note">${t("graphContextTruncated")}</p>` : ""}<div class="relation-legend">${legend}</div></div><div class="relation-heading-actions"><b>${esc(t("relatedWorksCount").replace("{count}", fmt(graph.strictMemberCount)))}</b><div class="relation-export-actions"><button type="button" class="relation-fullscreen" data-relation-export="png">${t("exportPng")}</button><button type="button" class="relation-fullscreen" data-relation-export="svg">${t("exportSvg")}</button><button type="button" class="relation-fullscreen" data-relation-fullscreen>${t("fullscreenGraph")}</button></div></div></header><div class="relation-scroll"><div class="relation-stage" style="width:${width}px;height:${height}px"><svg class="relation-lines" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true"><defs><marker id="relation-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z"/></marker></defs><g transform="translate(${shiftX} ${shiftY})">${edges}</g></svg>${edgeLabels}${nodes}</div></div>`;
+    `<header class="relation-heading"><div><p class="eyebrow">AnimeMachine · ${esc(t("catalogTagline"))}</p><h2>${esc(graphTitle(nodesById.get(graph.rootAnimeId)) || graph.seriesTitle)} · ${t("relationGraph")}</h2><p>${t("relationHint")}</p>${graph.contextTruncated ? `<p class="relation-context-note">${t("graphContextTruncated")}</p>` : ""}<div class="relation-legend">${legend}</div></div><div class="relation-heading-actions"><b>${esc(t("relatedWorksCount").replace("{count}", fmt(graph.strictMemberCount)))}</b><div class="relation-export-actions"><button type="button" class="relation-fullscreen" data-relation-export="png">${t("exportPng")}</button><button type="button" class="relation-fullscreen" data-relation-export="svg">${t("exportSvg")}</button><button type="button" class="relation-fullscreen" data-relation-fullscreen>${t("fullscreenGraph")}</button></div></div></header><div class="relation-scroll"><div class="relation-stage" style="width:${width}px;height:${height}px"><svg class="relation-lines" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true"><defs><marker id="relation-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z"/></marker></defs><g transform="translate(${shiftX} ${shiftY})">${edges}</g></svg>${edgeLabels}${nodes}</div></div>`;
   const fullscreenButton = $("relationGraph").querySelector(
     "[data-relation-fullscreen]",
   );
@@ -4718,7 +4757,7 @@ async function handoffPlayback(kind, animeId, button) {
     anchor.remove();
     return;
   }
-  if (!handoff.protocolUrl) throw new Error("Playback handoff is unavailable");
+  if (!handoff.protocolUrl) throw new Error(t("playbackHandoffUnavailable"));
   location.href = handoff.protocolUrl;
 }
 
@@ -4787,7 +4826,7 @@ async function showDetail(id) {
             relationText = isTypedAdaptation
               ? t(sourceKind === kindCode ? "originalWithKind" : "adaptationWithKind").replace("{kind}", kind)
               : (relationLabels[y.relation_code] || relationLabels.other)[li()];
-          return `<li>${relationText ? `${esc(relationText)} · ` : ""}${esc(y.related_title)} · <a class="source" href="https://bgm.tv/subject/${Number(y.related_bgm_id)}" target="_blank" rel="noreferrer">BGM #${Number(y.related_bgm_id)}</a></li>`;
+          return `<li>${relationText ? `${esc(relationText)} · ` : ""}${esc(y.related_display_title || y.related_title)} · <a class="source" href="https://bgm.tv/subject/${Number(y.related_bgm_id)}" target="_blank" rel="noreferrer">BGM #${Number(y.related_bgm_id)}</a></li>`;
         })
         .join("") || "<li>—</li>",
     detailRelationButton = Number(x.series_member_count || 1) > 1
@@ -5546,7 +5585,7 @@ async function importArchive(file) {
   }
 }
 async function runMaintenance(kind) {
-  if (kind !== "metadata") throw new Error("unsupported maintenance operation");
+  if (kind !== "metadata") throw new Error(t("maintenanceUnsupported"));
   await api("/api/metadata/repair", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   const poll = setInterval(async () => {
     try {
@@ -5621,7 +5660,7 @@ async function loadHistory() {
 }
 async function loadWatches() {
   try {
-    const r = await api("/api/watches");
+    const r = await api(`/api/watches?language=${encodeURIComponent(language)}`);
     $("watchList").innerHTML = r.items.length
       ? r.items.map((x) => `<div class="log"><b>${esc(x.title)}</b><span>${esc(sourceClassText(x.sourceClass))} · ${esc(x.resourceGroup || t("other"))} · ${esc(x.resolution ? `${x.resolution}p` : t("other"))} · ${esc(x.subtitle || t("other"))}</span><small>${esc(x.releaseUnit)} #${x.lastSequence} · ${x.pendingCount}</small><button type="button" class="text-button remove-watch" data-watch="${x.watchId}">${t("removeWatch")}</button></div>`).join("")
       : `<p class="muted">${t("noWatches")}</p>`;
@@ -5788,7 +5827,7 @@ function renderImagePreload(payload) {
       + `<span><b>${esc(t("estimatedTime"))}</b> ${esc(formatEta(eta))}</span>`
       + `${rate > 0 ? `<span><b>${esc(t("preloadRate"))}</b> ${rate.toFixed(rate < 1 ? 2 : 1)}/s</span>` : ""}`
       + `${Number.isFinite(budgetConcurrency) ? `<span><b>${esc(t("adaptiveConcurrency"))}</b> ${fmt(budgetConcurrency)} · ${esc(budgetReasonText(budget.reason))}</span>` : ""}`
-      + `${current.title ? `<span><b>${esc(t("currentItem"))}</b> ${esc(current.title)}${Number(current.batchSize || 0) > 1 ? ` +${fmt(Number(current.batchSize) - 1)}` : ""}</span>` : ""}`;
+      + `${(preferred(current) || current.title) ? `<span><b>${esc(t("currentItem"))}</b> ${esc(preferred(current) || current.title)}${Number(current.batchSize || 0) > 1 ? ` +${fmt(Number(current.batchSize) - 1)}` : ""}</span>` : ""}`;
   }
   const controls = payload?.controls || {};
   if (document.activeElement !== $("imagePreloadConcurrency")) $("imagePreloadConcurrency").value = Number(controls.concurrency || 1);
@@ -5831,7 +5870,11 @@ function systemHealthExtra(item) {
   } else if (item?.id === "imagePreload") {
     parts.push(`${t("healthState")}: ${String(info.stage || info.state || "—")}`);
     parts.push(`${t("estimatedRemaining")}: ${fmt(Number(info.estimatedRemaining || 0))}`);
-    if (info.current) parts.push(`${t("currentItem")}: ${String(info.current)}`);
+    if (info.current) {
+      const currentTitle = typeof info.current === "object"
+        ? (preferred(info.current) || info.current.title || "") : String(info.current);
+      if (currentTitle) parts.push(`${t("currentItem")}: ${currentTitle}`);
+    }
   } else if (item?.id === "playback") {
     parts.push(`${t("healthSessions")}: ${fmt(Number(info.sessions || 0))}`);
     if (Number(info.degraded || 0)) parts.push(`${t("healthWarnings")}: ${fmt(Number(info.degraded))}`);
@@ -6258,7 +6301,7 @@ async function applyApplicationUpdate() {
         if (health.ok && (!expected || health.version === expected)) { window.location.reload(); return; }
       } catch (_) {}
     }
-    throw new Error("restart_timeout");
+    throw new Error(t("updateRestartTimeout"));
   } catch (error) {
     controls.statuses.forEach((target) => { target.classList.add("error"); target.textContent = updateMessage("updateFailed", { message: error.message }); });
     controls.applies.forEach((button) => button.disabled = false);
@@ -6494,7 +6537,7 @@ $("sort").onchange = (e) => {
 $("reshuffle").onclick = async () => {
   try {
     const result = await api("/api/catalog/reshuffle", { method: "POST" });
-    if (!result.seed) throw new Error("random seed unavailable");
+    if (!result.seed) throw new Error(t("randomSeedUnavailable"));
     seed = String(result.seed);
     page = 0;
     await search();

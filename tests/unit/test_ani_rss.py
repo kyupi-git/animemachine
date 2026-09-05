@@ -330,6 +330,24 @@ class AniRssTest(unittest.TestCase):
         self.assertEqual(8.5, evidence["score"])
         self.assertFalse(evidence["completed"])
 
+    def test_current_ani_rss_media_path_field_is_synchronized(self):
+        FakeAniRss.subscriptions = [{
+            "id": "remote-current", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True,
+            "currentEpisodeNumber": 3, "totalEpisodeNumber": 12,
+            "customDownloadPathTemplate": "/media/current/Work",
+        }]
+        ani_rss.sync(self.db_path, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute(
+                "SELECT remote_media_path,evidence_json FROM ani_rss_subscription WHERE remote_id='remote-current'"
+            ).fetchone()
+            evidence = json.loads(row["evidence_json"])
+        self.assertEqual("/media/current/Work", row["remote_media_path"])
+        self.assertEqual("/media/current/Work", evidence["customDownloadPathTemplate"])
+        self.assertEqual("/media/current/Work", evidence["downloadPath"])
+
     def test_image_worker_network_snapshot_tracks_current_ani_rss_credential(self):
         os.environ["ANM_ANI_RSS_API_KEY"] = "first-key"
         first = service.image_network_config(self.config)
@@ -448,6 +466,43 @@ class AniRssTest(unittest.TestCase):
         self.assertNotEqual(first[0], refreshed[0])
         self.assertEqual("image/webp", refreshed[1])
 
+    def test_successful_sync_releases_stale_no_cover_when_ani_rss_has_cover(self):
+        import io
+        from PIL import Image
+
+        output = io.BytesIO()
+        Image.new("RGB", (8, 8), (30, 60, 90)).save(output, "PNG")
+        FakeAniRss.media["/remote/cover.png"] = output.getvalue()
+        FakeAniRss.subscriptions = [{
+            "id": "remote-cover-recovery", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "cover": "/remote/cover.png",
+            "enable": True, "currentEpisodeNumber": 2, "totalEpisodeNumber": 12,
+        }]
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("""CREATE TABLE anime_image(
+                anime_id INTEGER PRIMARY KEY,mime_type TEXT,image_blob BLOB,source_url TEXT,
+                etag TEXT,fetched_at TEXT,error TEXT)""")
+            db.execute(
+                "INSERT INTO anime_image(anime_id,fetched_at,error) VALUES(1,?, 'no_cover')",
+                (dt.datetime.now(dt.timezone.utc).isoformat(),),
+            )
+
+        ani_rss.sync(self.db_path, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            fetched_at, error = db.execute(
+                "SELECT fetched_at,error FROM anime_image WHERE anime_id=1").fetchone()
+        self.assertIsNone(fetched_at)
+        self.assertIsNone(error)
+
+        recovered = service.get_anime_image(self.db_path, 1, network={
+            "bangumiSubjectCacheEndpoints": [], "bangumiApiEndpoints": [], "bangumiImageEndpoints": []
+        }, log_timing=False)
+        self.assertIsNotNone(recovered)
+        self.assertEqual("image/webp", recovered[1])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            source = db.execute("SELECT source_url FROM anime_image WHERE anime_id=1").fetchone()[0]
+        self.assertEqual("ani-rss://remote-cover-recovery/cover", source)
+
     def test_sync_due_skips_cleanly_without_ani_rss_credential(self):
         os.environ.pop("ANM_ANI_RSS_API_KEY", None)
         self.assertFalse(ani_rss.sync_due(self.db_path, self.config))
@@ -499,8 +554,223 @@ class AniRssTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "playback source is unavailable"):
             ani_rss.playback_items(self.db_path, 1, self.config, "remote-a")
 
-        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        resynced = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("ready", resynced["state"])
+        self.assertTrue(resynced["resourceRefreshRequired"])
         self.assertEqual("ready", ani_rss.state(self.db_path, self.config)["connection_state"])
+        self.assertEqual([], ani_rss.resources(self.db_path, 1))
+        self.assertTrue(ani_rss.background_search_due(self.db_path, 1, self.config))
+
+    def test_failed_switch_to_new_endpoint_discards_previous_resource_cache(self):
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        self.assertEqual(1, ani_rss.search(self.db_path, 1, self.config)["found"])
+        self.assertTrue(ani_rss.resources(self.db_path, 1))
+
+        changed = json.loads(json.dumps(self.config))
+        changed["components"]["aniRss"]["endpoint"] = "http://127.0.0.1:1"
+        failed = ani_rss.sync(self.db_path, changed)
+        self.assertEqual("error", failed["state"])
+        self.assertTrue(failed["resourceRefreshRequired"])
+        self.assertEqual([], ani_rss.resources(self.db_path, 1))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM ani_rss_search_state WHERE anime_id=1"
+            ).fetchone())
+
+    def test_late_resource_search_from_previous_credential_cannot_repopulate_cache(self):
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        started = threading.Event()
+        release = threading.Event()
+        outcome: dict[str, object] = {}
+        failures: list[BaseException] = []
+
+        class SlowSearchClient:
+            def call(self, path, **kwargs):
+                if path == "mikan":
+                    return {"weeks": [{"items": [{"url": "https://mikan.test/Home/Bangumi/late",
+                                                     "title": "作品"}]}]}
+                if path == "mikanGroup":
+                    started.set()
+                    release.wait(5)
+                    return [{"label": "LateGroup", "rss": "https://mikan.test/RSS/late",
+                             "items": [{"title": "[LateGroup] Work - 01 (1080p) [WEB-DL]",
+                                        "size": 100}]}]
+                raise AssertionError(path)
+
+        def run_search():
+            try:
+                outcome.update(ani_rss.search(self.db_path, 1, self.config))
+            except BaseException as exc:  # surface thread failures in the test process
+                failures.append(exc)
+
+        with mock.patch.object(ani_rss, "_client", return_value=SlowSearchClient()):
+            thread = threading.Thread(target=run_search)
+            thread.start()
+            self.assertTrue(started.wait(5))
+            os.environ["ANM_ANI_RSS_API_KEY"] = "rotated-key"
+            switched = ani_rss.sync(self.db_path, self.config)
+            self.assertTrue(switched["resourceRefreshRequired"])
+            release.set()
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual([], failures)
+        self.assertTrue(outcome.get("stale"))
+        self.assertEqual([], ani_rss.resources(self.db_path, 1))
+
+    def test_resource_search_discards_results_when_proxy_route_changes_mid_attempt(self):
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        with mock.patch.object(ani_rss, "_route_revision", side_effect=[10, 11]):
+            result = ani_rss.search(self.db_path, 1, self.config)
+        self.assertTrue(result.get("stale"))
+        self.assertEqual([], ani_rss.resources(self.db_path, 1))
+
+    def test_malformed_about_payload_fails_closed(self):
+        original_call = ani_rss.Client.call
+
+        def malformed_about(client, path, **kwargs):
+            if path == "about":
+                return []
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=malformed_about):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("error", result["state"])
+        self.assertEqual("RuntimeError", result["errorType"])
+
+    def test_malformed_listani_payload_fails_closed_without_attribute_error(self):
+        original_call = ani_rss.Client.call
+
+        def malformed_list(client, path, **kwargs):
+            if path == "listAni":
+                return []
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=malformed_list):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("error", result["state"])
+        self.assertEqual("RuntimeError", result["errorType"])
+        self.assertEqual("error", ani_rss.state(self.db_path, self.config)["connection_state"])
+
+    def test_malformed_nested_listani_payload_does_not_age_existing_subscription(self):
+        FakeAniRss.subscriptions = [{
+            "id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True,
+        }]
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        original_call = ani_rss.Client.call
+
+        def malformed_nested(client, path, **kwargs):
+            if path == "listAni":
+                return {"total": 0, "weekList": [{"items": {"unexpected": "object"}}]}
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=malformed_nested):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("error", result["state"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            row = db.execute(
+                "SELECT remote_state,missed_successful_syncs,deleted_at FROM ani_rss_subscription WHERE remote_id='remote-a'"
+            ).fetchone()
+        self.assertEqual(("enabled", 0, None), row)
+
+    def test_missing_listani_week_list_fails_closed_without_aging_existing_subscription(self):
+        FakeAniRss.subscriptions = [{
+            "id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True,
+        }]
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        original_call = ani_rss.Client.call
+
+        def missing_week_list(client, path, **kwargs):
+            if path == "listAni":
+                return {"total": 0}
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=missing_week_list):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("error", result["state"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            row = db.execute(
+                "SELECT remote_state,missed_successful_syncs,deleted_at FROM ani_rss_subscription WHERE remote_id='remote-a'"
+            ).fetchone()
+        self.assertEqual(("enabled", 0, None), row)
+
+    def test_legacy_listani_without_total_syncs_but_does_not_infer_remote_deletion(self):
+        FakeAniRss.subscriptions = [
+            {"id": "remote-a", "title": "作品 A", "bgmUrl": "https://bgm.tv/subject/123",
+             "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True},
+            {"id": "remote-b", "title": "作品 B", "bgmUrl": "https://bgm.tv/subject/123",
+             "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True},
+        ]
+        self.assertTrue(ani_rss.sync(self.db_path, self.config)["snapshotComplete"])
+        original_call = ani_rss.Client.call
+        remaining = FakeAniRss.subscriptions[0]
+
+        def legacy_list_without_total(client, path, **kwargs):
+            if path == "listAni":
+                return {"weekList": [{"items": [remaining]}]}
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=legacy_list_without_total):
+            for _ in range(3):
+                result = ani_rss.sync(self.db_path, self.config)
+                self.assertTrue(result["listingComplete"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            row = db.execute(
+                "SELECT remote_state,missed_successful_syncs,deleted_at FROM ani_rss_subscription WHERE remote_id='remote-b'"
+            ).fetchone()
+        self.assertEqual(("enabled", 0, None), row)
+
+    def test_malformed_nested_playlist_is_not_coerced_to_empty(self):
+        client = ani_rss.Client(self.config["components"]["aniRss"]["endpoint"], "secret-test")
+        with mock.patch.object(client, "call", return_value={"items": {"unexpected": "object"}}):
+            with self.assertRaisesRegex(RuntimeError, "playList.items"):
+                client.play_list("https://mikan.test/RSS/Bangumi?bangumiId=123")
+
+    def test_malformed_listani_total_fails_closed_without_aging_existing_subscription(self):
+        FakeAniRss.subscriptions = [{
+            "id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True,
+        }]
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        original_call = ani_rss.Client.call
+
+        def malformed_total(client, path, **kwargs):
+            if path == "listAni":
+                return {"total": "not-a-number", "weekList": [{"items": []}]}
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=malformed_total):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("error", result["state"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            row = db.execute(
+                "SELECT remote_state,missed_successful_syncs,deleted_at FROM ani_rss_subscription WHERE remote_id='remote-a'"
+            ).fetchone()
+        self.assertEqual(("enabled", 0, None), row)
+
+    def test_null_playlist_is_not_coerced_to_empty_or_allowed_to_erase_media(self):
+        FakeAniRss.subscriptions = [{
+            "id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True,
+        }]
+        self.assertTrue(ani_rss.sync(self.db_path, self.config)["snapshotComplete"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            before = db.execute("SELECT COUNT(*) FROM ani_rss_media WHERE remote_id='remote-a'").fetchone()[0]
+        original_call = ani_rss.Client.call
+
+        def null_playlist(client, path, **kwargs):
+            if path == "playList":
+                return None
+            return original_call(client, path, **kwargs)
+
+        with mock.patch.object(ani_rss.Client, "call", new=null_playlist):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertFalse(result["snapshotComplete"])
+        self.assertEqual(1, result["mediaFailures"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            after = db.execute("SELECT COUNT(*) FROM ani_rss_media WHERE remote_id='remote-a'").fetchone()[0]
+        self.assertEqual(before, after)
 
     def test_removed_credential_disables_cached_api_playback_snapshot(self):
         FakeAniRss.subscriptions = [{
@@ -561,7 +831,7 @@ class AniRssTest(unittest.TestCase):
         self.assertLessEqual(calls[0][0], 4)
         self.assertEqual(1, calls[0][2])
 
-    def test_cached_cover_endpoint_failure_short_circuits_queue_and_proxy_change_retries(self):
+    def test_cached_cover_endpoint_failure_ignores_unrelated_proxy_change_for_local_endpoint(self):
         from PIL import Image
         output = __import__("io").BytesIO()
         Image.new("RGB", (2, 2), (10, 20, 30)).save(output, format="PNG")
@@ -579,9 +849,42 @@ class AniRssTest(unittest.TestCase):
         # A queue of image refreshes must not each wait on the same broken file API.
         self.assertIsNone(ani_rss.cached_cover(self.db_path, 1, self.config))
         self.assertEqual(first_requests, FakeAniRss.file_requests)
-        # A live proxy/network revision invalidates the short circuit immediately.
+        # Local/LAN Ani-RSS is always direct. An unrelated proxy toggle must not
+        # release its endpoint cooldown and make the image queue retry early.
         with mock.patch.object(ani_rss.network_transport, "proxy_revision", return_value=999):
-            self.assertIsNotNone(ani_rss.cached_cover(self.db_path, 1, self.config))
+            self.assertIsNone(ani_rss.cached_cover(self.db_path, 1, self.config))
+        self.assertEqual(first_requests, FakeAniRss.file_requests)
+
+    def test_remote_cover_cooldown_expires_on_relevant_route_generation_change(self):
+        endpoint = "https://ani-rss.example"
+        fingerprint = "credential-generation"
+        with mock.patch.object(ani_rss.network_transport, "proxy_route", return_value={
+                "mode": "environment_proxy", "proxy": "http://proxy.example:8080",
+                "revision": 10, "reason": "environment"}):
+            ani_rss._cover_endpoint_result(endpoint, fingerprint, healthy=False)
+            self.assertFalse(ani_rss._cover_endpoint_available(endpoint, fingerprint))
+        with mock.patch.object(ani_rss.network_transport, "proxy_route", return_value={
+                "mode": "direct", "proxy": "", "revision": 11, "reason": "fallback"}):
+            self.assertTrue(ani_rss._cover_endpoint_available(endpoint, fingerprint))
+
+    def test_cached_cover_failure_does_not_block_rotated_credential_after_resync(self):
+        from PIL import Image
+        output = __import__("io").BytesIO()
+        Image.new("RGB", (2, 2), (10, 20, 30)).save(output, format="PNG")
+        FakeAniRss.media["/remote/cover.png"] = output.getvalue()
+        FakeAniRss.subscriptions = [{
+            "id": "remote-cover-credential", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/rss-cover-credential", "cover": "/remote/cover.png", "enable": True,
+            "currentEpisodeNumber": 1, "totalEpisodeNumber": 12,
+        }]
+        ani_rss.sync(self.db_path, self.config)
+        FakeAniRss.fail_file_requests = 1
+        self.assertIsNone(ani_rss.cached_cover(self.db_path, 1, self.config))
+        first_requests = FakeAniRss.file_requests
+
+        os.environ["ANM_ANI_RSS_API_KEY"] = "rotated-key"
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        self.assertIsNotNone(ani_rss.cached_cover(self.db_path, 1, self.config))
         self.assertGreater(FakeAniRss.file_requests, first_requests)
 
     def test_cached_cover_rejects_non_image_file_even_when_file_api_returns_success(self):
@@ -592,7 +895,182 @@ class AniRssTest(unittest.TestCase):
             "currentEpisodeNumber": 1, "totalEpisodeNumber": 12,
         }]
         ani_rss.sync(self.db_path, self.config)
-        self.assertIsNone(ani_rss.cached_cover(self.db_path, 1, self.config))
+        with mock.patch.object(ani_rss, "_cover_endpoint_result") as endpoint_result:
+            self.assertIsNone(ani_rss.cached_cover(self.db_path, 1, self.config))
+        endpoint_result.assert_not_called()
+
+    def test_route_change_gates_ready_snapshot_until_revalidated(self):
+        from PIL import Image
+        output = __import__("io").BytesIO()
+        Image.new("RGB", (2, 2), (10, 20, 30)).save(output, format="PNG")
+        FakeAniRss.media["/remote/cover.png"] = output.getvalue()
+        FakeAniRss.subscriptions = [{
+            "id": "remote-route-gate", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "url": "https://mikan.test/rss-route-gate", "cover": "/remote/cover.png", "enable": True,
+            "currentEpisodeNumber": 1, "totalEpisodeNumber": 12,
+        }]
+        ani_rss.sync(self.db_path, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+            db.execute("INSERT OR REPLACE INTO metadata VALUES('ani_rss_route_revision','10')")
+        before_files = FakeAniRss.file_requests
+        with mock.patch.object(ani_rss, "_route_revision", return_value=11):
+            current = ani_rss.state(self.db_path, self.config)
+            self.assertEqual("unknown", current["connection_state"])
+            self.assertEqual("manual", current["effective_mode"])
+            self.assertEqual([], ani_rss.resources(self.db_path, 1, self.config))
+            self.assertIsNone(ani_rss.cached_cover(self.db_path, 1, self.config))
+        self.assertEqual(before_files, FakeAniRss.file_requests)
+        with mock.patch.object(ani_rss, "_route_revision", return_value=None):
+            self.assertEqual("ready", ani_rss.state(self.db_path, self.config)["connection_state"])
+
+    def test_sync_due_retries_immediately_when_proxy_route_changes(self):
+        FakeAniRss.subscriptions = []
+        result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("ready", result["state"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+            db.execute("INSERT OR REPLACE INTO metadata VALUES('ani_rss_route_revision','10')")
+            stamp = dt.datetime.fromisoformat(db.execute(
+                "SELECT last_success_at FROM ani_rss_state WHERE singleton=1"
+            ).fetchone()[0])
+        with mock.patch.object(ani_rss, "_route_revision", return_value=10):
+            self.assertFalse(ani_rss.sync_due(
+                self.db_path, self.config, now=stamp + dt.timedelta(minutes=1)))
+        with mock.patch.object(ani_rss, "_route_revision", return_value=11):
+            self.assertTrue(ani_rss.sync_due(
+                self.db_path, self.config, now=stamp + dt.timedelta(minutes=1)))
+
+    def test_sync_records_route_generation_from_start_of_attempt(self):
+        FakeAniRss.subscriptions = []
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        route = {"revision": 10}
+        original_snapshot = ani_rss.Client.subscription_snapshot
+
+        def changing_snapshot(client):
+            result = original_snapshot(client)
+            route["revision"] = 11
+            return result
+
+        def proxy_route(_url):
+            return {"reason": "proxy", "revision": route["revision"], "mode": "proxy", "proxy": "http://proxy"}
+
+        with mock.patch.object(ani_rss.network_transport, "proxy_route", side_effect=proxy_route), \
+                mock.patch.object(ani_rss.Client, "subscription_snapshot", new=changing_snapshot):
+            result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("ready", result["state"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            recorded = db.execute(
+                "SELECT value FROM metadata WHERE key='ani_rss_route_revision'"
+            ).fetchone()[0]
+            stamp = dt.datetime.fromisoformat(db.execute(
+                "SELECT last_success_at FROM ani_rss_state WHERE singleton=1"
+            ).fetchone()[0])
+        self.assertEqual("10", recorded)
+        with mock.patch.object(ani_rss, "_route_revision", return_value=11):
+            self.assertTrue(ani_rss.sync_due(
+                self.db_path, self.config, now=stamp + dt.timedelta(minutes=1)))
+
+    def test_remote_bypass_route_still_tracks_proxy_revision(self):
+        with mock.patch.object(ani_rss.network_transport, "proxy_route", return_value={"reason": "bypass", "revision": 7}):
+            self.assertEqual(7, ani_rss._route_revision({"endpoint": "https://ani-rss.example"}))
+        with mock.patch.object(ani_rss.network_transport, "proxy_route", return_value={"reason": "local", "revision": 8}):
+            self.assertIsNone(ani_rss._route_revision({"endpoint": "http://127.0.0.1:7789"}))
+
+    def test_failed_resource_search_records_error_and_uses_short_retry(self):
+        class BrokenClient:
+            def call(self, *_args, **_kwargs):
+                raise RuntimeError("endpoint unavailable")
+
+        with mock.patch.object(ani_rss, "_client", return_value=BrokenClient()):
+            with self.assertRaises(RuntimeError):
+                ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            row = db.execute(
+                "SELECT last_attempt_at,error_text FROM ani_rss_search_state WHERE anime_id=1"
+            ).fetchone()
+        self.assertIn("RuntimeError", row[1])
+        attempted = dt.datetime.fromisoformat(row[0])
+        self.assertFalse(ani_rss.background_search_due(
+            self.db_path, 1, self.config, now=attempted + dt.timedelta(minutes=1)))
+        self.assertTrue(ani_rss.background_search_due(
+            self.db_path, 1, self.config, now=attempted + dt.timedelta(minutes=6)))
+
+    def test_malformed_nested_resource_search_records_short_retry_error(self):
+        class MalformedClient:
+            def call(self, path, **_kwargs):
+                if path == "mikan":
+                    return {"weeks": [{"items": {"unexpected": "object"}}]}
+                raise AssertionError(path)
+
+        with mock.patch.object(ani_rss, "_client", return_value=MalformedClient()):
+            with self.assertRaisesRegex(RuntimeError, r"mikan\.weeks\[\]\.items"):
+                ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            attempted, error_text = db.execute(
+                "SELECT last_attempt_at,error_text FROM ani_rss_search_state WHERE anime_id=1"
+            ).fetchone()
+        self.assertIn("RuntimeError", error_text)
+        self.assertTrue(ani_rss.background_search_due(
+            self.db_path, 1, self.config,
+            now=dt.datetime.fromisoformat(attempted) + dt.timedelta(minutes=6),
+        ))
+
+    def test_malformed_nested_mikan_group_records_error_without_replacing_resources(self):
+        class MalformedGroupClient:
+            def call(self, path, **_kwargs):
+                if path == "mikan":
+                    return {"weeks": [{"items": [{
+                        "url": "https://mikan.test/Home/Bangumi/malformed", "title": "Work"
+                    }]}]}
+                if path == "mikanGroup":
+                    return [{"label": "Broken", "rss": "https://mikan.test/RSS/broken",
+                             "items": {"unexpected": "object"}}]
+                raise AssertionError(path)
+
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            ani_rss.migrate(db)
+            db.execute(
+                "INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("keep", 1, "ani-rss", "follow", "Known good", "Group", "webrip", 1080, None,
+                 1, 1, 1, 100, 1, "00000000", "{}", ani_rss.utcnow(), "2999-01-01T00:00:00+00:00"),
+            )
+        with mock.patch.object(ani_rss, "_client", return_value=MalformedGroupClient()):
+            with self.assertRaisesRegex(RuntimeError, r"mikanGroup\[\]\.items"):
+                ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(1, db.execute(
+                "SELECT COUNT(*) FROM ani_rss_resource WHERE anime_id=1 AND resource_id='keep'"
+            ).fetchone()[0])
+            self.assertIn("RuntimeError", db.execute(
+                "SELECT error_text FROM ani_rss_search_state WHERE anime_id=1"
+            ).fetchone()[0])
+
+    def test_resource_search_tries_english_title_after_other_titles_miss(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET title_zh_hans='中文名',title_ja='日本語名',title_en='Work' WHERE id=1")
+        queries: list[str] = []
+
+        class NameAwareClient:
+            def call(self, path, **kwargs):
+                if path == "mikan":
+                    name = str((kwargs.get("params") or {}).get("text") or "")
+                    queries.append(name)
+                    if name != "Work":
+                        return {"weeks": []}
+                    return {"weeks": [{"items": [{"url": "https://mikan.test/Home/Bangumi/english",
+                                                     "title": "Work"}]}]}
+                if path == "mikanGroup":
+                    return [{"label": "EnglishGroup", "rss": "https://mikan.test/RSS/english",
+                             "items": [{"title": "[EnglishGroup] Work - 01 (1080p) [WEB-DL]",
+                                        "size": 100}]}]
+                raise AssertionError(path)
+
+        with mock.patch.object(ani_rss, "_client", return_value=NameAwareClient()):
+            result = ani_rss.search(self.db_path, 1, self.config)
+        self.assertEqual(["中文名", "日本語名", "Work"], queries)
+        self.assertEqual(1, result["found"])
 
     def test_sync_due_recovers_from_future_wall_clock_timestamp(self):
         future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=2)).isoformat()
@@ -695,6 +1173,10 @@ class AniRssTest(unittest.TestCase):
         later = now + dt.timedelta(minutes=21)
         self.assertTrue(ani_rss.background_search_due(self.db_path, 1, self.config, now=later))
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE ani_rss_search_state SET last_attempt_at=? WHERE anime_id=1",
+                       ((later + dt.timedelta(days=2)).isoformat(),))
+        self.assertTrue(ani_rss.background_search_due(self.db_path, 1, self.config, now=later))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET start_month='2024-09' WHERE id=1")
         self.assertFalse(ani_rss.background_search_due(self.db_path, 1, self.config, now=later))
 
@@ -741,6 +1223,15 @@ class AniRssTest(unittest.TestCase):
         second = ani_rss.refresh_background_resources(self.db_path, self.config)
         self.assertTrue(second["started"])
         self.assertEqual(0, second["refreshed"])
+
+    def test_background_refresh_does_not_count_stale_provider_result_as_refreshed(self):
+        self.assertTrue(ani_rss.sync(self.db_path, self.config)["snapshotComplete"])
+        with mock.patch.object(ani_rss, "search", return_value={"animeId": 1, "found": 0,
+                                                                 "eligible": 0, "stale": True}):
+            result = ani_rss.refresh_background_resources(self.db_path, self.config)
+        self.assertTrue(result["started"])
+        self.assertEqual(0, result["refreshed"])
+        self.assertEqual(0, result["failed"])
 
     def test_background_resource_scan_lease_skips_overlapping_pass(self):
         with ani_rss.background_resource_scan_lease() as first:

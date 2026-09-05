@@ -144,10 +144,6 @@
       "enabled": true,
       "deferUntilLocalReady": true,
       "batchSize": 50,
-      "providers": [
-        "bangumi",
-        "mal"
-      ],
       "neverAddOutsideArchive": true,
       "reasons": [
         "missing",
@@ -175,16 +171,10 @@
       "bangumiSubjectCacheEndpoints": [
         "https://bgm-cache.wushuo.top"
       ],
-      "malApiEndpoints": [
-        "https://api.myanimelist.net/v2"
-      ],
       "useSystemProxy": true
     },
     "images": {
       "primaryProvider": "bangumi",
-      "fallbackProviders": [
-        "mal"
-      ],
       "fetchOnDemand": true,
       "fullPrefetch": false,
       "foregroundRequestsPreemptPrefetch": true
@@ -253,8 +243,7 @@
       "reviewFromEpisodes": 3
     },
     "createSeparateMoviesAndIndependentStories": true,
-    "mergeNativeUndividedCollectionsWithSharedAttachments": true,
-    "deprecatedRecutMarker": "deprecated.txt"
+    "mergeNativeUndividedCollectionsWithSharedAttachments": true
   },
   "scope": {
     "excludeLongRunningContinuous": false

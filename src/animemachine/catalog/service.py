@@ -632,12 +632,15 @@ def infer_language(title: str) -> str:
         return "ko"
     if re.search(r"[\u0400-\u052f]", title):
         return "ru"
+    # Han text must win over a Latin-ratio heuristic.  Otherwise aliases such
+    # as "Re：从零开始的异世界生活 Memory Snow" are incorrectly tagged as
+    # English merely because the Latin suffix is long.
+    if re.search(r"[\u3400-\u9fff]", title):
+        return "zh"
     ascii_letters = len(re.findall(r"[A-Za-z]", title))
     visible = len(re.findall(r"\S", title)) or 1
     if ascii_letters / visible >= 0.45:
         return "en"
-    if re.search(r"[\u3400-\u9fff]", title):
-        return "zh"
     return "und"
 
 
@@ -685,17 +688,33 @@ def cast_language(person_name: str, original_language: str) -> str:
     return "und"
 
 
+def _valid_english_display_title(title: str) -> bool:
+    """Reject titles containing scripts that cannot be an English display name.
+
+    Latin-only brands, numerals and punctuation remain valid; non-Latin aliases are
+    still retained in ``anime_title`` for search and original-title display.
+    """
+    value = unicodedata.normalize("NFKC", str(title or "")).strip()
+    if not value:
+        return False
+    # An ``en`` alias can be polluted by far more scripts than the common CJK
+    # cases. Accept alphabetic characters only when Unicode classifies them as
+    # Latin; digits, punctuation and symbols remain valid (for titles such as 86).
+    return all("LATIN" in unicodedata.name(char, "") for char in value if char.isalpha())
+
+
 def choose_display_english_title(titles: Iterable[dict[str, str] | str]) -> str | None:
-    """Choose a readable English display title while retaining every alias for search.
+    """Choose a readable, script-valid English display title while retaining aliases for search.
 
     Archive aliases are community-entered and ordered for editing, not display.
-    Keep the first candidate unless it has strong shorthand/truncation evidence;
+    Keep the first valid candidate unless it has strong shorthand/truncation evidence;
     this avoids rewriting intentional lowercase brands merely for typography.
     """
     candidates = unique(
         str(item.get("title", "") if isinstance(item, dict) else item).strip()
         for item in titles
-        if not isinstance(item, dict) or item.get("language") == "en"
+        if (not isinstance(item, dict) or item.get("language") == "en")
+        and _valid_english_display_title(str(item.get("title", "") if isinstance(item, dict) else item))
     )
     if not candidates:
         return None
@@ -736,27 +755,35 @@ def choose_display_english_title(titles: Iterable[dict[str, str] | str]) -> str 
     return max(replacements, key=quality)
 
 
+def _refresh_display_english_titles_db(db: sqlite3.Connection) -> dict[str, int]:
+    """Fill or improve English display titles from the aliases already stored in the catalog."""
+    grouped: dict[int, tuple[str | None, list[str]]] = {}
+    for anime_id, current, alias in db.execute(
+            "SELECT w.id,w.title_en,t.title FROM anime_work w "
+            "LEFT JOIN anime_title t ON t.anime_id=w.id AND t.language='en' "
+            "ORDER BY w.id,t.rowid"):
+        key = int(anime_id)
+        if key not in grouped:
+            grouped[key] = (str(current) if current else None, [])
+        if alias and str(alias) not in grouped[key][1]:
+            grouped[key][1].append(str(alias))
+    updates: list[tuple[str | None, int]] = []
+    for anime_id, (current, aliases) in grouped.items():
+        candidates = ([current] if current else []) + [value for value in aliases if value != current]
+        selected = choose_display_english_title(candidates)
+        if selected != current:
+            updates.append((selected, anime_id))
+    db.executemany("UPDATE anime_work SET title_en=? WHERE id=?", updates)
+    db.execute(
+        "INSERT OR REPLACE INTO metadata(key,value) VALUES('english_display_title_policy','quality-v4')"
+    )
+    return {"examined": len(grouped), "updated": len(updates)}
+
+
 def refresh_display_english_titles(db_path: Path) -> dict[str, int]:
-    """Re-evaluate only suspicious English display choices from stored aliases."""
-    with contextlib.closing(sqlite3.connect(db_path, timeout=120)) as db:
-        rows = list(db.execute("SELECT id,title_en FROM anime_work WHERE title_en IS NOT NULL"))
-        updates: list[tuple[str, int]] = []
-        for anime_id, current in rows:
-            aliases = [str(current), *[
-                str(row[0]) for row in db.execute(
-                    "SELECT title FROM anime_title WHERE anime_id=? AND language='en' ORDER BY rowid",
-                    (anime_id,),
-                ) if str(row[0]) != str(current)
-            ]]
-            selected = choose_display_english_title(aliases)
-            if selected and selected != current:
-                updates.append((selected, int(anime_id)))
-        with db:
-            db.executemany("UPDATE anime_work SET title_en=? WHERE id=?", updates)
-            db.execute(
-                "INSERT OR REPLACE INTO metadata(key,value) VALUES('english_display_title_policy','quality-v1')"
-            )
-        return {"examined": len(rows), "updated": len(updates)}
+    """Refresh English display choices, including older rows whose title_en was never populated."""
+    with contextlib.closing(sqlite3.connect(db_path, timeout=120)) as db, db:
+        return _refresh_display_english_titles_db(db)
 
 
 def parse_start_month(raw: str | None) -> tuple[str, str]:
@@ -1495,13 +1522,17 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
             runtime_catalog.migrate_overlay(db)
             ani_rss.migrate(db)
             now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+            uses_wikidata = any(
+                title.get("source") == "wikidata" for row in rows for title in row.titles
+            )
             metadata_rows = [
                 ("schema_version", "1"), ("built_at", now),
                 ("record_count", str(len(rows))),
-                ("sources", "Bangumi Archive; Wikidata labels/aliases"),
-                ("license_notice", "Bangumi entries: CC BY-SA 3.0; Wikidata: CC0"),
+                ("sources", "Bangumi Archive" + ("; Wikidata labels/aliases" if uses_wikidata else "")),
+                ("license_notice", "Bangumi entries: CC BY-SA 3.0" + ("; Wikidata: CC0" if uses_wikidata else "")),
                 ("build_state", "enriching"),
-                ("feature_schema_version", "14")
+                ("feature_schema_version", "14"),
+                ("english_display_title_policy", "quality-v4")
             ]
             if archive_meta:
                 metadata_rows.extend([
@@ -1645,15 +1676,53 @@ def dict_rows(cursor: sqlite3.Cursor) -> list[dict[str, Any]]:
 def localized_archive_title(db: sqlite3.Connection, anime_id: int, language: str,
                             original_title: str = "") -> str | None:
     """Return the best stored localized title without changing the Archive primary title."""
-    row = db.execute(
+    rows = db.execute(
         """SELECT title FROM anime_title
            WHERE anime_id=? AND language=? AND trim(title)<>'' AND title<>?
            ORDER BY CASE source WHEN 'bangumi-archive' THEN 0 ELSE 1 END,
                     CASE title_type WHEN 'primary' THEN 0 WHEN 'label' THEN 1 ELSE 2 END,
-                    rowid LIMIT 1""",
+                    rowid""",
         (anime_id, language, original_title),
-    ).fetchone()
-    return str(row[0]) if row and row[0] else None
+    ).fetchall()
+    if language == "en":
+        return choose_display_english_title(str(row[0]) for row in rows if row and row[0])
+    return str(rows[0][0]) if rows and rows[0][0] else None
+
+
+def localized_display_title(db: sqlite3.Connection, anime_id: int, language: str,
+                            original_title: str, original_language: str = "ja",
+                            stored_zh_hans: str | None = None, stored_en: str | None = None) -> str:
+    """Return the best title for the current UI language without inventing translations."""
+    original = str(original_title or "").strip()
+    ui_language = str(language or "en")
+    ui_base = ui_language.split("-", 1)[0].lower()
+    original_base = str(original_language or "ja").split("-", 1)[0].lower()
+    if ui_language == "zh-Hans":
+        translated = str(stored_zh_hans or "").strip() or localized_archive_title(
+            db, anime_id, "zh-Hans", original
+        )
+        # ``original_language`` is currently coarse-grained to ``zh`` for both
+        # simplified and traditional Chinese works. Prefer an explicit
+        # Simplified-Chinese title when one exists instead of treating every
+        # Chinese-script primary title as already matching zh-Hans.
+        return translated or original
+    if ui_base == "en":
+        if original_base == "en":
+            return original
+        translated = choose_display_english_title([str(stored_en or "")]) or localized_archive_title(
+            db, anime_id, "en", original
+        )
+        # Missing translations should not leak into ``title_en`` or be invented.
+        # For display only, fall back to the Archive primary/original title so the
+        # English UI remains usable even when upstream metadata has no English name.
+        return translated or original
+    if ui_base == "ja":
+        if original_base == "ja":
+            return original
+        return localized_archive_title(db, anime_id, "ja", original) or original
+    if ui_base == original_base:
+        return original
+    return original
 
 
 def migrate_catalog_features(db: sqlite3.Connection) -> None:
@@ -1742,6 +1811,7 @@ def migrate_catalog_features(db: sqlite3.Connection) -> None:
             if original_language:
                 cast_updates.append((cast_language(str(person_name), original_language), int(rowid), int(anime_id)))
         db.executemany("UPDATE anime_cast SET language=? WHERE rowid=? AND anime_id=?", cast_updates)
+        _refresh_display_english_titles_db(db)
         rebuild_studio_clusters(db)
         relation_graph.rebuild(db)
         rebuild_physical_layout(db)
@@ -1835,8 +1905,12 @@ def ensure_catalog_features(db_path: Path) -> None:
     def ready(db: sqlite3.Connection) -> bool:
         columns = {row[1] for row in db.execute("PRAGMA table_info(anime_work)")}
         version = db.execute("SELECT value FROM metadata WHERE key='feature_schema_version'").fetchone()
+        title_policy = db.execute("SELECT value FROM metadata WHERE key='english_display_title_policy'").fetchone()
         relation_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_relation_edge'").fetchone()
-        return "media_code" in columns and "physical_role" in columns and bool(version and version[0] == "14") and bool(relation_table)
+        return ("media_code" in columns and "physical_role" in columns
+                and bool(version and version[0] == "14")
+                and bool(title_policy and title_policy[0] == "quality-v4")
+                and bool(relation_table))
 
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
         if ready(db):
@@ -1845,6 +1919,26 @@ def ensure_catalog_features(db_path: Path) -> None:
         if not ready(db):
             migrate_catalog_features(db)
 
+
+
+def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
+    """Return runtime watches with canonical work titles localized for the active UI."""
+    items = runtime_catalog.watches(db_path)
+    if not items:
+        return items
+    with contextlib.closing(sqlite3.connect(
+            f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        for item in items:
+            row = db.execute(
+                "SELECT title_ja,title_zh_hans,title_en,original_language FROM anime_work WHERE id=?",
+                (int(item["animeId"]),),
+            ).fetchone()
+            if row:
+                item["title"] = localized_display_title(
+                    db, int(item["animeId"]), language, str(row[0] or ""),
+                    str(row[3] or "ja"), row[1], row[2],
+                )
+    return items
 
 def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_catalog_features(db_path)
@@ -2130,9 +2224,10 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                 usable_counts[anime_id] = sum(1 for item in runtime_catalog.torrents_for_anime(db, anime_id, config) if item["eligible"])
         for row in rows:
             anime_id = row["id"]
-            row["title_ja_localized"] = localized_archive_title(
-                db, int(anime_id), "ja", str(row.get("title_ja") or "")
-            )
+            original_title = str(row.get("title_ja") or "")
+            row["title_ja_localized"] = localized_archive_title(db, int(anime_id), "ja", original_title)
+            row["title_zh_hans_localized"] = localized_archive_title(db, int(anime_id), "zh-Hans", original_title)
+            row["title_en_localized"] = localized_archive_title(db, int(anime_id), "en", original_title)
             row["global_search_only"] = bool(
                 search_expanded
                 and int(row.get("filter_match_count") or 0) < filter_dimension_count
@@ -2292,6 +2387,12 @@ def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any])
                 "title_ja_localized": localized_archive_title(
                     db, int(node["id"]), "ja", str(node.get("title_ja") or "")
                 ),
+                "title_zh_hans_localized": localized_archive_title(
+                    db, int(node["id"]), "zh-Hans", str(node.get("title_ja") or "")
+                ),
+                "title_en_localized": localized_archive_title(
+                    db, int(node["id"]), "en", str(node.get("title_ja") or "")
+                ),
                 "torrent_count": len(candidates),
                 "usable_torrent_count": len(eligible),
                 "library_state": runtime_catalog.collection_state(db, node_id, include_ani_rss=ani_connection_ready),
@@ -2318,6 +2419,14 @@ def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any])
                     item["title"].casefold(), item["bgmId"],
                 )),
             })
+        strict_nodes = [node for node in payload["nodes"] if node.get("strict_member")]
+        if strict_nodes:
+            series_root = library_layout.choose_franchise_root(strict_nodes)
+            payload["seriesTitle"] = library_layout.strip_season_suffix(localized_display_title(
+                db, int(series_root["id"]), str(config.get("ui", {}).get("language") or "en"),
+                str(series_root.get("title_ja") or ""), str(series_root.get("original_language") or "ja"),
+                series_root.get("title_zh_hans"), series_root.get("title_en"),
+            ))
         return payload
 
 
@@ -2405,19 +2514,35 @@ def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None =
         if not row:
             return None
         result = dict(row)
-        result["title_ja_localized"] = localized_archive_title(
-            db, int(anime_id), "ja", str(result.get("title_ja") or "")
-        )
+        original_title = str(result.get("title_ja") or "")
+        result["title_ja_localized"] = localized_archive_title(db, int(anime_id), "ja", original_title)
+        result["title_zh_hans_localized"] = localized_archive_title(db, int(anime_id), "zh-Hans", original_title)
+        result["title_en_localized"] = localized_archive_title(db, int(anime_id), "en", original_title)
         result["titles"] = dict_rows(db.execute("SELECT language,title,title_type,source FROM anime_title WHERE anime_id=? ORDER BY language,title_type,title", (anime_id,)))
         result["staff"] = dict_rows(db.execute("SELECT name,role,role_type,source FROM anime_staff WHERE anime_id=? ORDER BY role_type,role,name", (anime_id,)))
         result["cast"] = dict_rows(db.execute("SELECT character_name,person_name,character_role,CASE WHEN language IS NULL OR language IN ('','und') THEN original_language ELSE language END language,source FROM anime_cast JOIN anime_work ON anime_work.id=anime_cast.anime_id WHERE anime_cast.anime_id=? ORDER BY CASE character_role WHEN '主角' THEN 0 WHEN '配角' THEN 1 ELSE 2 END, character_name LIMIT 30", (anime_id,)))
         result["relations"] = dict_rows(db.execute("""SELECT ar.related_bgm_id,ar.related_title,ar.relation_type,
             ar.relation_code,ar.strict_group,ar.source,ar.related_subject_type,ar.related_subject_kind,
             ar.related_subject_meta_json,
-            related.id AS related_anime_id
+            related.id AS related_anime_id,related.title_ja AS related_title_ja,
+            related.title_zh_hans AS related_title_zh_hans,related.title_en AS related_title_en,
+            related.original_language AS related_original_language
             FROM anime_relation ar LEFT JOIN anime_work related ON related.bgm_id=ar.related_bgm_id
             WHERE ar.anime_id=? AND ar.relation_code<>'other'
             ORDER BY ar.relation_type,ar.related_title""", (anime_id,)))
+        ui_language = str(config.get("ui", {}).get("language") or "en")
+        for relation in result["relations"]:
+            related_anime_id = relation.get("related_anime_id")
+            relation["related_display_title"] = (
+                localized_display_title(
+                    db, int(related_anime_id), ui_language,
+                    str(relation.get("related_title_ja") or relation.get("related_title") or ""),
+                    str(relation.get("related_original_language") or "ja"),
+                    relation.get("related_title_zh_hans"), relation.get("related_title_en"),
+                )
+                if related_anime_id is not None
+                else str(relation.get("related_title") or "")
+            )
         result["original_name"], result["original_authors"] = original_source_summary(
             result["relations"], result.get("source_code"),
             (str(result.get("title_ja") or ""), str(result.get("title_zh_hans") or "")),
@@ -2507,7 +2632,10 @@ def _image_refresh_due_values(raw_date: str | None, start_month: str | None, fet
             fetched = fetched.replace(tzinfo=dt.timezone.utc)
     except ValueError:
         return True
-    return (current - fetched.astimezone(dt.timezone.utc)).total_seconds() >= interval_seconds
+    fetched = fetched.astimezone(dt.timezone.utc)
+    if fetched > current.astimezone(dt.timezone.utc) + dt.timedelta(minutes=1):
+        return True
+    return (current - fetched).total_seconds() >= interval_seconds
 
 
 def get_cached_anime_image(db_path: Path, anime_id: int) -> tuple[tuple[bytes, str] | None, str]:
@@ -2530,8 +2658,12 @@ def get_cached_anime_image(db_path: Path, anime_id: int) -> tuple[tuple[bytes, s
             error = str(row["error"])
             if error == "no_cover":
                 with contextlib.suppress(ValueError):
-                    age = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(str(row["fetched_at"]))
-                    if age.total_seconds() < 86400:
+                    fetched = dt.datetime.fromisoformat(str(row["fetched_at"]))
+                    if fetched.tzinfo is None:
+                        fetched = fetched.replace(tzinfo=dt.timezone.utc)
+                    now = dt.datetime.now(dt.timezone.utc)
+                    fetched = fetched.astimezone(dt.timezone.utc)
+                    if fetched <= now + dt.timedelta(minutes=1) and (now - fetched).total_seconds() < 86400:
                         return None, "no_cover"
             else:
                 return None, "transient_error"
@@ -2698,9 +2830,13 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
         with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db, db:
             db.execute("PRAGMA busy_timeout=30000")
             if cached is not None:
+                # Keep the last successful fetch timestamp. The cached cover is
+                # still usable, but a failed refresh must remain due so the
+                # low-priority maintenance pass can retry after connectivity
+                # recovers instead of suppressing checks for another 24/72 h.
                 db.execute(
-                    "UPDATE anime_image SET fetched_at=?,error=NULL WHERE anime_id=?",
-                    (checked_at, anime_id),
+                    "UPDATE anime_image SET error=? WHERE anime_id=?",
+                    (f"refresh_failed:{error}", anime_id),
                 )
             else:
                 db.execute("INSERT INTO anime_image(anime_id,fetched_at,error) VALUES(?,?,?) ON CONFLICT(anime_id) DO UPDATE SET fetched_at=excluded.fetched_at,error=excluded.error",
@@ -3067,7 +3203,7 @@ class CatalogWarmup:
                     "SELECT w.id,w.raw_date,w.start_month,i.fetched_at FROM anime_work w "
                     "JOIN anime_image i ON i.anime_id=w.id "
                     "WHERE w.start_month>=? AND w.start_month<=? AND i.fetched_at IS NOT NULL "
-                    "AND ((i.image_blob IS NOT NULL AND COALESCE(i.error,'')='') "
+                    "AND ((i.image_blob IS NOT NULL AND (COALESCE(i.error,'')='' OR i.error LIKE 'refresh_failed:%')) "
                     "OR (i.image_blob IS NULL AND i.error='no_cover')) "
                     "ORDER BY i.fetched_at ASC,w.id ASC",
                     (lower_month, upper_month),
@@ -3223,17 +3359,41 @@ class CatalogWarmup:
         if values:
             anime_id = values[0]
             title = f"#{anime_id}"
+            title_fields: dict[str, Any] = {}
             try:
                 with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
-                    row = db.execute(
-                        "SELECT COALESCE(NULLIF(title_zh_hans,''),NULLIF(title_en,''),NULLIF(title_ja,''),?) "
-                        "FROM anime_work WHERE id=?", (title, anime_id),
-                    ).fetchone()
-                if row and row[0]:
-                    title = str(row[0])
+                    columns = {str(row[1]) for row in db.execute("PRAGMA table_info(anime_work)")}
+                    if {"title_ja", "title_zh_hans", "title_en", "original_language"}.issubset(columns):
+                        row = db.execute(
+                            "SELECT title_ja,title_zh_hans,title_en,original_language FROM anime_work WHERE id=?",
+                            (anime_id,),
+                        ).fetchone()
+                        if row and row[0]:
+                            title = str(row[0])
+                            original_language = str(row[3] or "ja")
+                            title_fields = {
+                                "title_ja": title,
+                                "title_zh_hans": str(row[1] or ""),
+                                "title_en": str(row[2] or ""),
+                                "original_language": original_language,
+                                "title_zh_hans_localized": localized_archive_title(db, anime_id, "zh-Hans", title) or "",
+                                "title_en_localized": localized_archive_title(db, anime_id, "en", title) or "",
+                                "title_ja_localized": localized_archive_title(db, anime_id, "ja", title) or "",
+                            }
+                    else:
+                        available = [name for name in ("title_zh_hans", "title_en", "title_ja") if name in columns]
+                        if available:
+                            expression = ",".join(f"NULLIF({name},'')" for name in available)
+                            row = db.execute(
+                                f"SELECT COALESCE({expression},?) FROM anime_work WHERE id=?",
+                                (title, anime_id),
+                            ).fetchone()
+                            if row and row[0]:
+                                title = str(row[0])
             except (OSError, sqlite3.Error):
                 pass
-            current = {"animeId": anime_id, "title": title, "batchSize": len(values), "stage": stage}
+            current = {"animeId": anime_id, "title": title, **title_fields,
+                       "batchSize": len(values), "stage": stage}
         with self.lock:
             self.state["current"] = current
             self.state["updatedAt"] = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
@@ -4037,7 +4197,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                       "detail": preload_detail, "info": {"state": preload_state,
                       "stage": str(preload.get("stage") or ""),
                       "estimatedRemaining": int(preload.get("estimatedRemaining") or 0),
-                      "current": str((preload.get("current") or {}).get("title") or "")}})
+                      "current": dict(preload.get("current") or {})}})
 
         playback_config = current.get("playback", {})
         sessions = playback_diagnostics.snapshot()
@@ -4875,7 +5035,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/watches":
-                self.json_response({"items": runtime_catalog.watches(db_path)})
+                params = urllib.parse.parse_qs(parsed.query)
+                cfg = config_store.read()
+                language = (params.get("language") or [cfg.get("ui", {}).get("language", "en")])[0]
+                self.json_response({"items": localized_watches(db_path, language)})
                 return
             if parsed.path == "/api/archive/update":
                 self.json_response(archive_updater.status())
@@ -5973,6 +6136,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
         media_scan_thread: threading.Thread | None = None
         resource_scan_thread: threading.Thread | None = None
         next_resource_scan_at = 0.0
+        resource_scan_epoch = 0
 
         def start_media_scan(source: dict[str, Any]) -> None:
             nonlocal media_scan_thread
@@ -5991,6 +6155,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
             nonlocal resource_scan_thread, next_resource_scan_at
             if resource_scan_thread is not None and resource_scan_thread.is_alive():
                 return False
+            scan_epoch = resource_scan_epoch
 
             def run() -> None:
                 nonlocal next_resource_scan_at
@@ -6002,10 +6167,11 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                     # shared lease is busy, keep this pass due so the scheduler
                     # retries after the previous scan finishes instead of losing a
                     # whole poll interval.
-                    if result.get("started"):
+                    if result.get("started") and scan_epoch == resource_scan_epoch:
                         poll_minutes = max(5, int(
                             current.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
-                        next_resource_scan_at = scan_started_at + poll_minutes * 60.0
+                        retry_minutes = min(poll_minutes, 5) if result.get("failed") else poll_minutes
+                        next_resource_scan_at = scan_started_at + retry_minutes * 60.0
                     if result.get("started") and (result.get("refreshed") or result.get("failed")):
                         log_event("INFO" if not result.get("failed") else "WARNING",
                                   "ani_rss_resource_refresh_complete",
@@ -6038,6 +6204,15 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                                 result = ani_rss.sync(db_path, current, abort_event=ANI_RSS_USER_ACTIVITY)
                         finally:
                             ANI_RSS_OPERATION_LOCK.release()
+                if result and result.get("resourceRefreshRequired"):
+                    # Endpoint/API-key changes invalidate the search overlay. Keep
+                    # discovery due until the replacement Ani-RSS generation is
+                    # healthy, then repopulate it immediately rather than waiting
+                    # for a stale cadence deadline from the previous instance. An
+                    # older in-flight scan cannot advance this new generation's
+                    # deadline when it eventually returns.
+                    resource_scan_epoch += 1
+                    next_resource_scan_at = 0.0
                 if result and result.get("state") == "ready":
                     log_event("INFO", "ani_rss_sync_complete",
                               subscriptions=int(result.get("subscriptions", 0)),
@@ -6174,14 +6349,14 @@ def parser() -> argparse.ArgumentParser:
     build_args(build_parser)
     serve_parser = sub.add_parser("serve", help="serve the interactive catalog")
     serve_parser.add_argument("--db", type=Path, default=DEFAULT_DB)
-    serve_parser.add_argument("--host", default="127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--host", default="0.0.0.0")
+    serve_parser.add_argument("--port", type=int, default=8787)
     serve_parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     serve_parser.add_argument("--submission-enabled", action=argparse.BooleanOptionalAction, default=True)
     demo_parser = sub.add_parser("demo", help="build the sample and serve it")
     build_args(demo_parser)
-    demo_parser.add_argument("--host", default="127.0.0.1")
-    demo_parser.add_argument("--port", type=int, default=8765)
+    demo_parser.add_argument("--host", default="0.0.0.0")
+    demo_parser.add_argument("--port", type=int, default=8787)
     demo_parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     return root
 

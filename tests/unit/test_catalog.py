@@ -23,6 +23,15 @@ DB = Path(__file__).resolve().parents[1] / "fixtures" / "anime-catalog.sqlite3"
 
 
 class CatalogTests(unittest.TestCase):
+    def test_legacy_serve_and_demo_use_current_web_defaults(self):
+        parser = catalog.parser()
+        serve = parser.parse_args(["serve"])
+        demo = parser.parse_args(["demo"])
+        self.assertEqual("0.0.0.0", serve.host)
+        self.assertEqual("0.0.0.0", demo.host)
+        self.assertEqual(8787, serve.port)
+        self.assertEqual(8787, demo.port)
+
     @classmethod
     def setUpClass(cls):
         if not DB.exists():
@@ -67,8 +76,13 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(all(item["start_month"].startswith("202") for item in result["items"]))
         eva = catalog.query_catalog(DB, {"q": ["エヴァンゲリオン"]})
         self.assertEqual(eva["total"], 1)
-        detail = catalog.catalog_detail(DB, eva["items"][0]["id"])
+        item = eva["items"][0]
+        self.assertIn("title_zh_hans_localized", item)
+        self.assertIn("title_en_localized", item)
+        detail = catalog.catalog_detail(DB, item["id"])
         self.assertTrue(detail and detail["relations"] and detail["cast"])
+        self.assertIn("title_zh_hans_localized", detail)
+        self.assertIn("title_en_localized", detail)
         self.assertTrue(all("relation_code" in relation and "strict_group" in relation for relation in detail["relations"]))
         strict_codes = {relation["relation_code"] for relation in detail["relations"] if relation["strict_group"]}
         self.assertTrue(strict_codes.issubset(catalog.STRICT_SERIES_RELATIONS))
@@ -77,6 +91,27 @@ class CatalogTests(unittest.TestCase):
         parsed = catalog.parse_archive_infobox("{{Infobox\n|别名={\n[英文名|Example]\n[简称|EX]\n}\n|动画制作=Studio A\n}}")
         self.assertEqual(parsed["别名"], ["Example", "EX"])
         self.assertEqual(parsed["动画制作"], ["Studio A"])
+
+    def test_localized_display_title_follows_ui_language(self):
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.execute("CREATE TABLE anime_title(anime_id INTEGER,language TEXT,title TEXT,title_type TEXT,source TEXT)")
+            db.executemany("INSERT INTO anime_title VALUES(?,?,?,?,?)", [
+                (1, "en", "English Title", "primary", "bangumi-archive"),
+                (1, "ja", "日本語タイトル", "label", "bangumi-archive"),
+                (2, "zh-Hans", "简体标题", "primary", "bangumi-archive"),
+            ])
+            self.assertEqual(
+                "English Title",
+                catalog.localized_display_title(db, 1, "en", "原題", "ja"),
+            )
+            self.assertEqual(
+                "日本語タイトル",
+                catalog.localized_display_title(db, 1, "ja", "원제", "ko"),
+            )
+            self.assertEqual(
+                "简体标题",
+                catalog.localized_display_title(db, 2, "zh-Hans", "繁體標題", "zh"),
+            )
 
     def test_non_japanese_archive_title_language_and_labelled_aliases(self):
         raw = """{{Infobox animanga/TVAnime
@@ -228,6 +263,93 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(cast[(1, "张伟")], "zh")
         self.assertEqual(cast[(2, "김철수")], "ko")
         self.assertEqual(cast[(2, "山田太郎")], "ja")
+
+    def test_migration_fills_missing_english_display_title_from_existing_alias(self):
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.executescript(catalog.SCHEMA)
+            db.execute(
+                """INSERT INTO anime_work(
+                    id,bgm_id,title_ja,title_en,start_month,directory_date,original_language,source_url,fetched_at
+                ) VALUES(1,123,'日本語題',NULL,'2026-07','2026-07','ja','https://bgm.tv/subject/123','2026-01-01T00:00:00Z')"""
+            )
+            db.execute(
+                "INSERT INTO anime_title(anime_id,language,title,title_type,source) VALUES(1,'en','Readable English Title','alias','bangumi-archive')"
+            )
+            catalog.migrate_catalog_features(db)
+            title = db.execute("SELECT title_en FROM anime_work WHERE id=1").fetchone()[0]
+            policy = db.execute(
+                "SELECT value FROM metadata WHERE key='english_display_title_policy'"
+            ).fetchone()[0]
+        self.assertEqual("Readable English Title", title)
+        self.assertEqual("quality-v4", policy)
+
+    def test_english_display_title_rejects_mixed_non_english_scripts(self):
+        self.assertEqual(catalog.infer_language("Re：从零开始的异世界生活 Memory Snow"), "zh")
+        self.assertIsNone(catalog.choose_display_english_title([
+            {"language": "en", "title": "Re：从零开始的异世界生活 Memory Snow"},
+            {"language": "en", "title": "Re:ゼロから始める異世界生活 4th season 奪還編"},
+        ]))
+        self.assertEqual(
+            catalog.choose_display_english_title([
+                {"language": "en", "title": "Re：从零开始的异世界生活 Memory Snow"},
+                {"language": "en", "title": "Re:ZERO -Starting Life in Another World- Memory Snow"},
+            ]),
+            "Re:ZERO -Starting Life in Another World- Memory Snow",
+        )
+
+    def test_english_display_title_rejects_any_non_latin_alphabetic_script(self):
+        self.assertIsNone(catalog.choose_display_english_title([
+            {"language": "en", "title": "Ελληνικός τίτλος"},
+            {"language": "en", "title": "عنوان عربي"},
+            {"language": "en", "title": "हिन्दी शीर्षक"},
+        ]))
+        self.assertEqual("86 -Eighty Six-", catalog.choose_display_english_title([
+            {"language": "en", "title": "86 -Eighty Six-"},
+        ]))
+        self.assertEqual("Pokémon", catalog.choose_display_english_title([
+            {"language": "en", "title": "Pokémon"},
+        ]))
+
+    def test_migration_clears_polluted_english_display_title(self):
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.executescript(catalog.SCHEMA)
+            db.execute(
+                """INSERT INTO anime_work(
+                    id,bgm_id,title_ja,title_en,start_month,directory_date,original_language,source_url,fetched_at
+                ) VALUES(1,123,'日本語題','Re：从零开始的异世界生活 Memory Snow','2026-07','2026-07','ja','https://bgm.tv/subject/123','2026-01-01T00:00:00Z')"""
+            )
+            db.execute(
+                "INSERT INTO anime_title(anime_id,language,title,title_type,source) VALUES(1,'en','Re：从零开始的异世界生活 Memory Snow','alias','bangumi-archive')"
+            )
+            catalog.migrate_catalog_features(db)
+            title = db.execute("SELECT title_en FROM anime_work WHERE id=1").fetchone()[0]
+        self.assertIsNone(title)
+
+    def test_localized_english_title_falls_back_to_original_when_translation_missing(self):
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.executescript(catalog.SCHEMA)
+            db.execute(
+                """INSERT INTO anime_work(
+                    id,bgm_id,title_ja,title_en,start_month,directory_date,original_language,source_url,fetched_at
+                ) VALUES(1,607340,'透明な夜に駆ける君と、目に見えない恋をした。',NULL,'2026-07','2026-07','ja','https://bgm.tv/subject/607340','2026-01-01T00:00:00Z')"""
+            )
+            title = catalog.localized_display_title(
+                db, 1, "en", "透明な夜に駆ける君と、目に見えない恋をした。", "ja"
+            )
+        self.assertEqual(title, "透明な夜に駆ける君と、目に見えない恋をした。")
+
+    def test_localized_english_title_falls_back_to_romanized_original_without_marking_it_english(self):
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:
+            db.executescript(catalog.SCHEMA)
+            db.execute(
+                """INSERT INTO anime_work(
+                    id,bgm_id,title_ja,title_en,start_month,directory_date,original_language,source_url,fetched_at
+                ) VALUES(1,999,'Shingeki no Kyojin',NULL,'2026-07','2026-07','ja','https://bgm.tv/subject/999','2026-01-01T00:00:00Z')"""
+            )
+            title = catalog.localized_display_title(db, 1, "en", "Shingeki no Kyojin", "ja")
+            stored_english = db.execute("SELECT title_en FROM anime_work WHERE id=1").fetchone()[0]
+        self.assertEqual(title, "Shingeki no Kyojin")
+        self.assertIsNone(stored_english)
 
     def test_english_display_title_rejects_truncation_and_short_codes(self):
         self.assertEqual(
@@ -422,6 +544,7 @@ class CatalogTests(unittest.TestCase):
                     (6, "2027-02-20", "2027-02"),
                     (7, "2027-04-01", "2027-04"),
                     (8, "2026-10-15", "2026-10"),
+                    (9, "2026-08-20", "2026-08"),
                 ])
                 db.executemany("INSERT INTO anime_image VALUES(?,?)", [
                     (1, "2026-08-31T00:00:00+00:00"),
@@ -432,6 +555,7 @@ class CatalogTests(unittest.TestCase):
                     (6, "2026-08-29T00:00:00+00:00"),
                     (7, "2026-08-20T00:00:00+00:00"),
                     (8, "2026-08-31T00:00:00+00:00"),
+                    (9, "2026-09-10T00:00:00+00:00"),
                 ])
             with contextlib.closing(sqlite3.connect(db_path)) as db, db:
                 rows = db.execute(
@@ -442,7 +566,39 @@ class CatalogTests(unittest.TestCase):
                 int(anime_id) for anime_id, raw_date, start_month, fetched_at in rows
                 if catalog._image_refresh_due_values(raw_date, start_month, fetched_at, now=now)
             }
-            self.assertEqual({1, 4, 6, 8}, due)
+            self.assertEqual({1, 4, 6, 8, 9}, due)
+
+    def test_future_no_cover_timestamp_is_retried_after_clock_correction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "catalog.sqlite3"
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("CREATE TABLE anime_work(id INTEGER PRIMARY KEY)")
+                db.execute("CREATE TABLE anime_image(anime_id INTEGER PRIMARY KEY,mime_type TEXT,image_blob BLOB,source_url TEXT,fetched_at TEXT,error TEXT)")
+                db.execute("INSERT INTO anime_work VALUES(1)")
+                db.execute("INSERT INTO anime_image VALUES(1,NULL,NULL,NULL,'2099-01-01T00:00:00+00:00','no_cover')")
+            self.assertEqual((None, "missing"), catalog.get_cached_anime_image(db_path, 1))
+
+    def test_failed_cover_refresh_keeps_cached_image_due_for_retry(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "catalog.sqlite3"
+            image = io.BytesIO()
+            Image.new("RGB", (4, 4), "white").save(image, "WEBP")
+            cached = image.getvalue()
+            previous = "2026-08-29T00:00:00+00:00"
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("CREATE TABLE anime_work(id INTEGER PRIMARY KEY,bgm_id INTEGER)")
+                db.execute("CREATE TABLE anime_image(anime_id INTEGER PRIMARY KEY,mime_type TEXT,image_blob BLOB,source_url TEXT,etag TEXT,fetched_at TEXT,error TEXT)")
+                db.execute("INSERT INTO anime_work VALUES(1,123)")
+                db.execute("INSERT INTO anime_image VALUES(1,'image/webp',?,'old',NULL,?,NULL)", (cached, previous))
+            with mock.patch.object(catalog.ani_rss, "cached_cover", return_value=None), \
+                    mock.patch.object(catalog.network_sources, "fetch_json", side_effect=TimeoutError("offline")):
+                result = catalog.get_anime_image(db_path, 1, refresh=True, network={"probeTimeoutSeconds": 1})
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                fetched_at, error = db.execute("SELECT fetched_at,error FROM anime_image WHERE anime_id=1").fetchone()
+            self.assertEqual((cached, "image/webp"), result)
+            self.assertEqual(previous, fetched_at)
+            self.assertTrue(str(error).startswith("refresh_failed:TimeoutError:"), error)
 
     def test_image_maintenance_waits_for_warm_state_and_is_due_after_restart(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -488,6 +644,7 @@ class CatalogTests(unittest.TestCase):
                     (3, recent_date, recent_date[:7]),
                     (4, recent_date, recent_date[:7]),
                     (5, recent_date, recent_date[:7]),
+                    (6, recent_date, recent_date[:7]),
                 ])
                 db.executemany("INSERT INTO anime_image VALUES(?,?,?,?)", [
                     (1, b"cover", (now - dt.timedelta(days=2)).isoformat(), None),
@@ -495,10 +652,11 @@ class CatalogTests(unittest.TestCase):
                     (3, None, (now - dt.timedelta(days=2)).isoformat(), None),
                     (4, b"cover", (now - dt.timedelta(days=2)).isoformat(), "ReadTimeout"),
                     (5, None, (now - dt.timedelta(days=2)).isoformat(), "no_cover"),
+                    (6, b"cover", (now - dt.timedelta(days=2)).isoformat(), "refresh_failed:TimeoutError: offline"),
                 ])
             warmup = object.__new__(catalog.CatalogWarmup)
             warmup.db_path = db_path
-            self.assertEqual([1, 5], warmup._maintenance_due_ids())
+            self.assertEqual([1, 5, 6], warmup._maintenance_due_ids())
 
     def test_image_maintenance_limit_is_applied_after_due_filtering(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -581,6 +739,42 @@ class CatalogTests(unittest.TestCase):
                 first.mark("catalogReady")
             second = catalog.PerformanceBaseline(200.0, path)
             self.assertEqual(1000, second.snapshot()["previous"]["catalogReadyMs"])
+
+    def test_runtime_watch_titles_follow_requested_ui_language(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "catalog.sqlite3"
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("""CREATE TABLE anime_work(
+                    id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,original_language TEXT)""")
+                db.execute("""CREATE TABLE anime_title(
+                    anime_id INTEGER,language TEXT,title TEXT,title_type TEXT,source TEXT)""")
+                db.execute("INSERT INTO anime_work VALUES(1,'日本語題','中文题','English Title','ja')")
+            watch = {"watchId": 1, "animeId": 1, "title": "日本語題"}
+            with mock.patch.object(catalog.runtime_catalog, "watches", return_value=[dict(watch)]):
+                self.assertEqual("English Title", catalog.localized_watches(db_path, "en")[0]["title"])
+                self.assertEqual("中文题", catalog.localized_watches(db_path, "zh-Hans")[0]["title"])
+                self.assertEqual("日本語題", catalog.localized_watches(db_path, "ja")[0]["title"])
+
+    def test_image_preload_current_keeps_all_localized_title_candidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "catalog.sqlite3"
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("""CREATE TABLE anime_work(
+                    id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,original_language TEXT)""")
+                db.execute("""CREATE TABLE anime_title(
+                    anime_id INTEGER,language TEXT,title TEXT,title_type TEXT,source TEXT)""")
+                db.execute("INSERT INTO anime_work VALUES(1,'日本語題','中文题','English Title','ja')")
+            warmup = object.__new__(catalog.CatalogWarmup)
+            warmup.db_path = db_path
+            warmup.lock = threading.RLock()
+            warmup.state = {}
+            with mock.patch.object(catalog.CatalogWarmup, "_persist"):
+                warmup._set_current([1, 2], "recent")
+            current = warmup.state["current"]
+            self.assertEqual("日本語題", current["title_ja"])
+            self.assertEqual("中文题", current["title_zh_hans"])
+            self.assertEqual("English Title", current["title_en"])
+            self.assertEqual(2, current["batchSize"])
 
     def test_image_preload_controls_and_cached_progress_persist(self):
         class FakeFetcher:

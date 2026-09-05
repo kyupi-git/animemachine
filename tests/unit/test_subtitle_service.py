@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -12,6 +13,28 @@ from animemachine.integrations import subtitle_service
 
 
 class SubtitleServiceTests(unittest.TestCase):
+    def test_titles_reads_current_catalog_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            db_path = Path(raw) / "catalog.sqlite3"
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.executescript(
+                    """CREATE TABLE anime_work(
+                        id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,start_month TEXT
+                    );
+                    CREATE TABLE anime_title(anime_id INTEGER,language TEXT,title TEXT,title_type TEXT,source TEXT);
+                    """
+                )
+                db.execute(
+                    "INSERT INTO anime_work VALUES(1,'日本語題','中文题','English Title','2026-07')"
+                )
+                db.execute(
+                    "INSERT INTO anime_title VALUES(1,'en','English Alias','alias','bangumi-archive')"
+                )
+            titles, year = subtitle_service._titles(db_path, 1)
+        self.assertEqual(year, 2026)
+        self.assertEqual(titles[:3], ["日本語題", "中文题", "English Title"])
+        self.assertIn("English Alias", titles)
+
     def test_title_normalization_keeps_non_japanese_scripts(self) -> None:
         self.assertEqual(subtitle_service._normalized("도굴왕 - 01"), "도굴왕01")
         self.assertEqual(subtitle_service._normalized("Смешарики - 01"), "смешарики01")

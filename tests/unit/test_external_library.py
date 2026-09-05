@@ -2,6 +2,7 @@ import sqlite3
 import contextlib
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from animemachine.library import external as external_library
@@ -77,6 +78,79 @@ class ExternalLibraryTests(unittest.TestCase):
             self.assertEqual(result["verified"], 1)
             with contextlib.closing(sqlite3.connect(db_path)) as db:
                 self.assertEqual(2, db.execute("SELECT anime_id FROM external_media_file").fetchone()[0])
+
+    def test_scan_interval_defers_before_probing_storage(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_path = root / "catalog.sqlite3"
+            media = root / "media" / "作品名"
+            media.mkdir(parents=True)
+            (media / "作品名 - EP01.mkv").write_bytes(b"media")
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                db.executescript("""CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,start_month TEXT,media_code TEXT);
+                    CREATE TABLE anime_title(anime_id INTEGER,title TEXT);""")
+                db.execute("INSERT INTO anime_work VALUES(1,'作品名',NULL,NULL,'2026-01','tv')")
+                db.execute("INSERT INTO anime_title VALUES(1,'作品名')")
+                db.commit()
+            source = {"id":"ani-rss","kind":"ani-rss","enabled":True,
+                      "path":str(root / "media"),"readOnly":True,"scanMinutes":60}
+            first = external_library.scan(db_path, [source])
+            self.assertEqual(1, first["sources"])
+            with mock.patch.object(external_library, "status_for_path", side_effect=AssertionError("storage probe should be deferred")):
+                second = external_library.scan(db_path, [source])
+            self.assertEqual(0, second["sources"])
+            self.assertEqual(1, second["deferred"])
+
+    def test_changed_source_path_bypasses_scan_interval(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_path = root / "catalog.sqlite3"
+            first_media = root / "media-a" / "作品一"
+            second_media = root / "media-b" / "作品二"
+            first_media.mkdir(parents=True)
+            second_media.mkdir(parents=True)
+            (first_media / "作品一 - EP01.mkv").write_bytes(b"first")
+            (second_media / "作品二 - EP01.mkv").write_bytes(b"second")
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                db.executescript("""CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,start_month TEXT,media_code TEXT);
+                    CREATE TABLE anime_title(anime_id INTEGER,title TEXT);""")
+                db.executemany("INSERT INTO anime_work VALUES(?,?,NULL,NULL,'2026-01','tv')", [(1, '作品一'), (2, '作品二')])
+                db.executemany("INSERT INTO anime_title VALUES(?,?)", [(1, '作品一'), (2, '作品二')])
+                db.commit()
+            source = {"id":"ani-rss","kind":"ani-rss","enabled":True,
+                      "path":str(root / "media-a"),"readOnly":True,"scanMinutes":60}
+            self.assertEqual(1, external_library.scan(db_path, [source])["sources"])
+            source["path"] = str(root / "media-b")
+            second = external_library.scan(db_path, [source])
+            self.assertEqual(1, second["sources"])
+            self.assertEqual(0, second["deferred"])
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                rows = db.execute("SELECT anime_id,absolute_path FROM external_media_file WHERE source_id='ani-rss'").fetchall()
+            self.assertEqual([(2, str((second_media / '作品二 - EP01.mkv').absolute()))], rows)
+
+    def test_future_scan_timestamp_does_not_defer_indefinitely(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_path = root / "catalog.sqlite3"
+            media = root / "media" / "作品名"
+            media.mkdir(parents=True)
+            (media / "作品名 - EP01.mkv").write_bytes(b"media")
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                db.executescript("""CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,start_month TEXT,media_code TEXT);
+                    CREATE TABLE anime_title(anime_id INTEGER,title TEXT);""")
+                db.execute("INSERT INTO anime_work VALUES(1,'作品名',NULL,NULL,'2026-01','tv')")
+                db.execute("INSERT INTO anime_title VALUES(1,'作品名')")
+                db.commit()
+            source = {"id":"ani-rss","kind":"ani-rss","enabled":True,
+                      "path":str(root / "media"),"readOnly":True,"scanMinutes":60}
+            external_library.scan(db_path, [source])
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("UPDATE external_library_source SET last_scan_at='2099-01-01T00:00:00+00:00' WHERE source_id='ani-rss'")
+            original = external_library.status_for_path
+            with mock.patch.object(external_library, "status_for_path", wraps=original) as probe:
+                second = external_library.scan(db_path, [source])
+            self.assertEqual(1, second["sources"])
+            probe.assert_called_once()
 
     def test_overlapping_external_scan_is_skipped_instead_of_queued(self):
         source = {"id": "ani-rss", "kind": "ani-rss", "enabled": True,

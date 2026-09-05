@@ -5,12 +5,20 @@ include:
 
 services:
   qbt-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
-    user: "${PUID:-1000}:${PGID:-1000}"
-    env_file: ${ANM_ENV_FILE:-.env}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
+      ANM_QBT_WEB_USERNAME: "${ANM_QBT_WEB_USERNAME:-admin}"
+      ANM_QBT_WEB_PASSWORD: "${ANM_QBT_WEB_PASSWORD:-}"
+      ANM_QBT_LIBRARY_DIR: /Library
+      ANM_INCOMPLETE_DIR: /downloads/incomplete
     command: ["qbt-bootstrap", "--config-dir", "/QbtConfig"]
     volumes:
       - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig
+      - ${ANM_LIBRARY_DIR:-./library}:/Library
+      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
     restart: "no"
     security_opt: [no-new-privileges:true]
 
@@ -28,7 +36,7 @@ services:
       TORRENTING_PORT: ${QBT_LISTEN_PORT:-6881}
     volumes:
       - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/config
-      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_LIBRARY_DIR:-./library}:/Library
       - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
     ports:
       - ${QBT_BIND_ADDRESS:-127.0.0.1}:${QBT_WEB_PORT:-8080}:8080
@@ -37,12 +45,17 @@ services:
     security_opt: [no-new-privileges:true]
 
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
+    depends_on:
+      qbt-bootstrap:
+        condition: service_completed_successfully
+      qbittorrent:
+        condition: service_started
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
     restart: unless-stopped
     init: true
-    user: "${PUID:-1000}:${PGID:-1000}"
-    env_file: ${ANM_ENV_FILE:-.env}
     environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
       ANM_CONFIG_PATH: /Config/config.json
       ANM_STATE_DIR: /Data/state
       ANM_IMPORTS_DIR: /Imports
@@ -51,6 +64,8 @@ services:
       ANM_QBT_LIBRARY_DIR: /Library
       ANM_INCOMPLETE_DIR: /downloads/incomplete
       ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
+      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
+      ANM_QBT_API_KEY_FILE: /QbtConfig/.animemachine/api-key
       ANM_EXTERNAL_LIBRARY_DIR: /External
       ANM_ANI_RSS_MEDIA_DIR: /Media
       ANM_MANAGED_QBT: "true"
@@ -58,13 +73,26 @@ services:
       ANM_SUBMISSION_ENABLED: "true"
       ANM_WEB_PORT: "8787"
       ANM_BIND_ADDRESS: "0.0.0.0"
+      ANM_ADMIN_USERNAME: "${ANM_ADMIN_USERNAME:-}"
+      ANM_ADMIN_PASSWORD: "${ANM_ADMIN_PASSWORD:-}"
+      ANM_AUTH_ENABLED: "${ANM_AUTH_ENABLED:-}"
+      ANM_SYNC_INTERVAL_MINUTES: "${ANM_SYNC_INTERVAL_MINUTES:-30}"
+      ANM_PUBLIC_URL: "${ANM_PUBLIC_URL:-}"
+      ANM_CA_BUNDLE: "${ANM_CA_BUNDLE:-}"
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      ALL_PROXY: "${ALL_PROXY:-}"
+      ANM_ANI_RSS_URL: "${ANM_ANI_RSS_URL:-}"
+      ANM_ANI_RSS_API_KEY: "${ANM_ANI_RSS_API_KEY:-}"
+      ANM_ANI_RSS_MODE: "${ANM_ANI_RSS_MODE:-prefer}"
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,qbittorrent,host.docker.internal}
     volumes:
       - ${ANM_CONFIG_DIR:-./config}:/Config
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig:ro
       - ${ANM_DATA_DIR:-./data}:/Data
       - ${ANM_IMPORTS_DIR:-./imports}:/Imports:ro
-      - ${ANM_TORRENT_POOL_DIR:?set ANM_TORRENT_POOL_DIR}:/Torrents:ro
-      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_TORRENT_POOL_DIR:-./torrents}:/Torrents:ro
+      - ${ANM_LIBRARY_DIR:-./library}:/Library
       - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
       - ${ANM_EXTERNAL_LIBRARY_DIR:-./external/read-only}:/External:ro
       - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media:ro

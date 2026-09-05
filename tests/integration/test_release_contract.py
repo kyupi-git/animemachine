@@ -48,6 +48,10 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('ENTRYPOINT ["python", "/opt/animemachine/docker-entrypoint.py"]', dockerfile)
         self.assertIn("ANM_DOCKER_UPDATE_RUNTIME=1", dockerfile)
         self.assertIn("COPY packaging/docker/entrypoint.py", dockerfile)
+        self.assertNotIn("USER anm", dockerfile)
+        entrypoint = (ROOT / "packaging" / "docker" / "entrypoint.py").read_text(encoding="utf-8")
+        self.assertIn("_drop_privileges(arguments)", entrypoint)
+        self.assertIn('os.setuid(uid)', entrypoint)
         self.assertNotIn("COPY scripts/", dockerfile)
         self.assertNotIn("COPY deploy/", dockerfile)
         self.assertIn("COPY pyproject.toml VERSION", dockerfile)
@@ -98,13 +102,46 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn('ANM_WEB_PORT: "8787"', compose)
             self.assertIn('ANM_BIND_ADDRESS: "0.0.0.0"', compose)
             self.assertIn('${ANM_BIND_ADDRESS:-0.0.0.0}:${ANM_WEB_PORT:-8787}:8787', compose)
-            self.assertNotIn("env_file: .env", compose)
-            self.assertIn("env_file: ${ANM_ENV_FILE:-.env}", compose)
-            material = compose + (collector if directory.name.startswith(("03-", "04-")) else "")
+            self.assertNotIn("env_file:", compose)
+            self.assertIn('ANM_ADMIN_PASSWORD: "${ANM_ADMIN_PASSWORD:-}"', compose)
+            self.assertIn('ANM_SYNC_INTERVAL_MINUTES: "${ANM_SYNC_INTERVAL_MINUTES:-30}"', compose)
+            self.assertIn("ANM_SYNC_INTERVAL_MINUTES=30", template)
+            self.assertNotIn('user: "${PUID:-1000}:${PGID:-1000}"', compose)
+            self.assertIn('PUID: "${PUID:-1000}"', compose)
+            self.assertIn('PGID: "${PGID:-1000}"', compose)
+            material = compose + (collector if directory.name.startswith("03-") else "")
             placeholders = re.findall(r"\$\{([A-Z][A-Z0-9_]*)([^}]*)\}", material)
             required = {name for name, modifier in placeholders if not modifier.startswith(":-")}
             declared = set(re.findall(r"^(?:#\s*)?([A-Z][A-Z0-9_]*)=", template, re.MULTILINE))
             self.assertEqual(set(), required - declared, directory.name)
+
+    def test_compose_defaults_do_not_require_env_or_preseeded_service_secrets(self):
+        root = ROOT / "deploy" / "compose"
+        for name in ("01-animemachine-standalone", "02-animemachine-external-qbt",
+                     "03-animemachine-managed-qbt", "04-full-stack"):
+            compose = (root / name / "compose.yaml").read_text(encoding="utf-8")
+            self.assertNotIn(":?set ", compose)
+            self.assertNotIn("env_file:", compose)
+            self.assertIn("${ANM_TORRENT_POOL_DIR:-./torrents}", compose)
+            self.assertIn("${ANM_LIBRARY_DIR:-./library}", compose)
+        managed = (root / "03-animemachine-managed-qbt" / "compose.yaml").read_text(encoding="utf-8")
+        full = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
+        collector = (root / "torrent-collector.yaml").read_text(encoding="utf-8")
+        self.assertNotIn('user: "${PUID:-1000}:${PGID:-1000}"', collector)
+        self.assertIn('PUID: "${PUID:-1000}"', collector)
+        self.assertIn("/QbtConfig/.animemachine/api-key", managed)
+        managed_bootstrap = managed.split("  qbt-bootstrap:", 1)[1].split("\n  qbittorrent:", 1)[0]
+        self.assertIn("${ANM_LIBRARY_DIR:-./library}:/Library", managed_bootstrap)
+        self.assertIn("${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete", managed_bootstrap)
+        self.assertIn("/QbtConfig/.animemachine/api-key", full)
+        self.assertIn("/AniRssConfig/.animemachine/api-key", full)
+        self.assertIn("service_completed_successfully", full)
+        external = (root / "02-animemachine-external-qbt" / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("ANM_QBT_API_KEY=\n", external)
+        self.assertIn("ANM_QBT_LIBRARY_DIR=\n", external)
+        self.assertIn("ANM_INCOMPLETE_DIR=\n", external)
+        self.assertNotIn("replace_me", external)
+        self.assertNotIn("/path/visible/to/qbittorrent", external)
 
     def test_managed_images_are_pinned_and_tuning_is_separate(self):
         root = ROOT / "deploy" / "compose"
@@ -112,7 +149,7 @@ class ReleaseContractTests(unittest.TestCase):
         fourth = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", third)
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", fourth)
-        self.assertIn("wushuo894/ani-rss@sha256:f064a4ff7816fc5ec9cd1cea1044e5c3b790e22b7adb3ad638e49590e9b88571", fourth)
+        self.assertIn("wushuo894/ani-rss:v3.2.28", fourth)
         self.assertNotIn(":latest", third + fourth)
         advanced = (root / "torrent-collector.advanced.env.example").read_text(encoding="utf-8")
         self.assertIn("TORRENT_COLLECTOR_HISTORY_ENABLED", advanced)
@@ -133,7 +170,42 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("ani-rss-bootstrap:", fourth)
         self.assertNotIn("torrent-collector.yaml", first)
         self.assertIn("../torrent-collector.yaml", third)
-        self.assertIn("../torrent-collector.yaml", fourth)
+        self.assertNotIn("include:", fourth)
+        self.assertNotIn("../torrent-collector.yaml", fourth)
+        self.assertIn("\n  torrent-collector:", fourth)
+
+    def test_full_stack_is_single_file_zero_config_and_bootstrap_prepares_media_mounts(self):
+        root = ROOT / "deploy" / "compose"
+        full = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("include:", full)
+        self.assertIn("\n  torrent-collector:", full)
+        bootstrap = full.split("  qbt-bootstrap:", 1)[1].split("\n  ani-rss-bootstrap:", 1)[0]
+        self.assertIn("ANM_QBT_LIBRARY_DIR: /Library", bootstrap)
+        self.assertIn("ANM_ANI_RSS_MEDIA_DIR: /Media", bootstrap)
+        self.assertIn("ANM_INCOMPLETE_DIR: /downloads/incomplete", bootstrap)
+        self.assertIn("${ANM_LIBRARY_DIR:-./library}:/Library", bootstrap)
+        self.assertIn("${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media", bootstrap)
+        self.assertIn("${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete", bootstrap)
+        self.assertIn("volumes:\n  torrent-collector-state:", full)
+
+    def test_full_stack_zero_config_ani_rss_download_and_playback_share_media_mount(self):
+        full = (ROOT / "deploy" / "compose" / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
+        qbt = full.split("  qbittorrent:", 1)[1].split("\n  ani-rss:", 1)[0]
+        ani = full.split("  ani-rss:", 1)[1].split("\n  animemachine:", 1)[0]
+        anm = full.split("  animemachine:", 1)[1].split("\n  torrent-collector:", 1)[0]
+        shared = "${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media"
+        self.assertIn(shared, qbt)
+        self.assertIn(shared, ani)
+        self.assertIn(shared + ":ro", anm)
+        self.assertIn("ANM_ANI_RSS_MEDIA_DIR: /Media", anm)
+        self.assertIn("ANM_INCOMPLETE_DIR: /downloads/incomplete", anm)
+        self.assertIn("/downloads/incomplete", qbt)
+        self.assertIn('ANM_ANI_RSS_URL: \"${ANM_ANI_RSS_URL:-http://ani-rss:7789}\"', anm)
+        self.assertIn("ANM_ANI_RSS_API_KEY_FILE: /AniRssConfig/.animemachine/api-key", anm)
+        self.assertIn("qbt-bootstrap:\n        condition: service_completed_successfully", anm)
+        self.assertIn("ani-rss-bootstrap:\n        condition: service_completed_successfully", anm)
+        self.assertIn("qbittorrent:\n        condition: service_started", anm)
+        self.assertIn("ani-rss:\n        condition: service_started", anm)
 
     def test_anirss_is_optional_outside_the_full_stack(self):
         root = ROOT / "deploy" / "compose"
@@ -150,7 +222,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('command: ["torrent-collector"]', collector)
         self.assertNotIn("python - <<", collector)
         self.assertNotIn("python -c", collector)
-        self.assertIn("${ANM_TORRENT_POOL_DIR:?set ANM_TORRENT_POOL_DIR}:/torrents", collector)
+        self.assertIn("${ANM_TORRENT_POOL_DIR:-./torrents}:/torrents", collector)
         self.assertIn("TORRENT_COLLECTOR_PROXY_ENABLED:-false", collector)
         self.assertNotIn("192.168.", collector)
 
@@ -239,6 +311,10 @@ class ReleaseContractTests(unittest.TestCase):
         for script in (unix, windows):
             self.assertIn("Docker Compose 2.20.3 or newer is required", script)
             self.assertIn("Existing credentials preserved", script)
+        self.assertIn("managed_qbt=0", unix)
+        self.assertIn("managed_ani=0", unix)
+        self.assertIn("$managedQbt = $false", windows)
+        self.assertIn("$managedAni = $false", windows)
         self.assertIn("had_admin=$(value ANM_ADMIN_PASSWORD)", unix)
         self.assertIn('[ -z "$had_admin" ]', unix)
         self.assertIn("$generated.ContainsKey('ANM_ADMIN_PASSWORD')", windows)
@@ -247,6 +323,10 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("Protect-AnmCredentialFile", windows)
         launcher = (ROOT / "scripts" / "windows" / "AnimeMachine.ps1").read_text(encoding="utf-8")
         self.assertIn("Protect-AnmCredentialFile $environmentFile", launcher)
+        self.assertIn("Get-AnmProbeHost $BindAddress", launcher)
+        self.assertIn('$probeUri = "http://${probeHost}:$Port/api/health/live"', launcher)
+        self.assertIn("Invoke-RestMethod -Uri $probeUri", launcher)
+        self.assertNotIn('Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health/live"', launcher)
         self.assertIn("/inheritance:r", launcher + windows)
 
     def test_runtime_dependencies_are_release_pinned(self):
@@ -269,7 +349,8 @@ class ReleaseContractTests(unittest.TestCase):
         guides = [(ROOT / name).read_text(encoding="utf-8") for name in
                   ("docs/guide.md", "docs/guide.en.md", "docs/guide.ja.md")]
         for text in guides:
-            self.assertIn("http://127.0.0.1:8877", text)
+            self.assertIn("8787", text)
+            self.assertNotIn("127.0.0.1:8877", text)
             self.assertIn("2.20.3", text)
             self.assertIn("deploy/compose/torrent-collector.advanced.env.example", text)
             self.assertIn("ANM_CA_BUNDLE", text)

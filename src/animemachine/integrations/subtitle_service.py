@@ -112,7 +112,7 @@ def inspect_target(path: str, *, ffprobe: str = "ffprobe", config: dict[str, Any
 
 def _titles(db_path: Path, anime_id: int) -> tuple[list[str], int | None]:
     with contextlib.closing(sqlite3.connect(db_path)) as db:
-        row = db.execute("SELECT title_original,title_zh,title_en,start_month FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+        row = db.execute("SELECT title_ja,title_zh_hans,title_en,start_month FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if not row:
             raise ValueError("anime not found")
         aliases = [str(x[0]) for x in db.execute("SELECT title FROM anime_title WHERE anime_id=?", (anime_id,))]

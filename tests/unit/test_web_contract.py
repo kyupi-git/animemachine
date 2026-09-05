@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -10,6 +11,24 @@ STATIC = PROJECT / "src" / "animemachine" / "web" / "static"
 
 
 class WebContractTests(unittest.TestCase):
+    def test_three_language_dictionary_keys_are_identical(self):
+        script = (STATIC / "app.js").read_text(encoding="utf-8")
+        starts = {
+            "zh-Hans": script.index('  "zh-Hans": {'),
+            "en": script.index("  en: {"),
+            "ja": script.index("  ja: {"),
+        }
+        content_starts = {language: script.index("\n", offset) + 1 for language, offset in starts.items()}
+        blocks = {
+            "zh-Hans": script[content_starts["zh-Hans"]:starts["en"]],
+            "en": script[content_starts["en"]:starts["ja"]],
+            "ja": script[content_starts["ja"]:script.index("\n};", starts["ja"])],
+        }
+        key_pattern = re.compile(r"(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*):", re.MULTILINE)
+        keys = {language: set(key_pattern.findall(block)) for language, block in blocks.items()}
+        self.assertEqual(keys["zh-Hans"], keys["en"])
+        self.assertEqual(keys["zh-Hans"], keys["ja"])
+
 
     def test_capability_policy_blocks_admin_side_effects_before_execution(self):
         for path in (
@@ -118,6 +137,19 @@ class WebContractTests(unittest.TestCase):
         self.assertNotIn('data-player=\"potplayer\"${disabledDirect}', script)
         self.assertIn('playbackHtml(playbackState)', script)
         self.assertNotIn('data-i18n="acceptedContentHint"', html)
+
+    def test_three_language_static_and_relation_title_contract(self):
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        script = (STATIC / "app.js").read_text(encoding="utf-8")
+        for key in ("catalogTagline", "languageControl", "closeDialog", "sortDirectionLabel", "settingsSectionsLabel"):
+            self.assertEqual(3, script.count(f"{key}:"), key)
+        for attribute in ("data-i18n-aria-label", "data-i18n-title"):
+            self.assertIn(attribute, html)
+        self.assertIn('querySelectorAll("[data-i18n-aria-label]")', script)
+        self.assertIn('querySelectorAll("[data-i18n-title]")', script)
+        self.assertIn("y.related_display_title || y.related_title", script)
+        self.assertNotIn("AnimeMachine · Automated Anime Library", html)
+        self.assertNotIn("AnimeMachine · Automated Anime Library", script)
 
     def test_settings_and_filters_are_product_features(self):
         html = (STATIC / "index.html").read_text(encoding="utf-8")
@@ -252,7 +284,7 @@ class WebContractTests(unittest.TestCase):
         self.assertIn("return preferred(node) || node.title_ja", script)
         self.assertIn("function relationMonth(v)", script)
         self.assertIn('month: "short"', script)
-        self.assertIn('graph.seriesTitle || graphTitle', script)
+        self.assertIn('graphTitle(nodesById.get(graph.rootAnimeId)) || graph.seriesTitle', script)
         self.assertIn('class="relation-node-foot"', script)
         self.assertIn(".relation-subject-popover", (STATIC / "styles.css").read_text(encoding="utf-8"))
         self.assertIn('y.relation_code !== "other"', script)
@@ -260,6 +292,15 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('id="detailRelations"', script)
         self.assertIn("localizedSummary(x)", script)
         self.assertIn("x.title_ja_localized || x.title_ja", script)
+        self.assertIn("x.title_zh_hans || x.title_zh_hans_localized || x.title_ja", script)
+        self.assertIn("englishReadableTitle(x.title_en)", script)
+        self.assertIn("englishReadableTitle(x.title_en_localized)", script)
+        self.assertNotIn("englishReadableTitle(x.title_ja)", script)
+        self.assertIn("englishReadableTitle(x.title_en_localized) || x.title_ja", script)
+        self.assertNotIn("missingEnglishTitle", script)
+        self.assertIn('data-i18n="${id === "era" ? "custom" : "all"}"', script)
+        self.assertIn("${esc(graphTitle(node))}", script)
+        self.assertIn('["合集", "Collection", "コレクション"]', script)
         self.assertIn('return "ko"', script)
         self.assertIn('return "ru"', script)
         self.assertIn('t("externalSource")} · ${t("readOnlyMapping")}', script)
@@ -394,6 +435,9 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('searchPlaceholder: "中文、英文、日语或简称"', script)
         self.assertIn('searchPlaceholder: "English, Japanese, Chinese or abbreviation"', script)
         self.assertIn('searchPlaceholder: "日本語・英語・中国語・略称"', script)
+        self.assertIn('\\p{Script=Latin}', script)
+        self.assertIn('/api/watches?language=${encodeURIComponent(language)}', script)
+        self.assertIn('preferred(current) || current.title', script)
         self.assertIn("endMonth - 1 - 5", script)
         self.assertIn('$("start_to").value = monthValue(endYear, endMonth)', script)
         self.assertIn("function localizeStaticUi()", script)
@@ -450,7 +494,7 @@ class WebContractTests(unittest.TestCase):
         script = (STATIC / "app.js").read_text(encoding="utf-8")
         styles = (STATIC / "styles.css").read_text(encoding="utf-8")
         boot = (STATIC / "boot.js").read_text(encoding="utf-8")
-        self.assertIn('<p class="eyebrow">Automated Anime Library</p>', html)
+        self.assertIn('<p class="eyebrow" data-i18n="catalogTagline">全自动动画收藏库</p>', html)
         self.assertIn('<h1 data-i18n="catalog">AnimeMachine</h1>', html)
         self.assertNotIn("AnimeMachine·Automated Anime Library", html + script)
         self.assertIn('id="themeToggle"', html)

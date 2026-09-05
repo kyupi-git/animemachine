@@ -1,10 +1,11 @@
 services:
   torrent-collector:
-    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
     restart: unless-stopped
     init: true
-    user: "${PUID:-1000}:${PGID:-1000}"
     environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
       TZ: ${TZ:-Asia/Shanghai}
       ANM_TORRENT_POOL_DIR: /torrents
       TORRENT_COLLECTOR_STATE_DIR: /CollectorState
@@ -30,12 +31,10 @@ services:
       NATIVE_PROXY_ENABLED: "${TORRENT_COLLECTOR_PROXY_ENABLED:-false}"
       NATIVE_PROXY_HOST: "${TORRENT_COLLECTOR_PROXY_HOST:-host.docker.internal}"
       NATIVE_PROXY_PORT: "${TORRENT_COLLECTOR_PROXY_PORT:-1080}"
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
     volumes:
       - ${TORRENT_COLLECTOR_STATE_DIR:-torrent-collector-state}:/CollectorState
       - ${ANM_DATA_DIR:-./data}:/Data:ro
-      - ${ANM_TORRENT_POOL_DIR:?set ANM_TORRENT_POOL_DIR}:/torrents
+      - ${ANM_TORRENT_POOL_DIR:-./torrents}:/torrents
     stop_grace_period: 30s
     command: ["torrent-collector"]
     extra_hosts:

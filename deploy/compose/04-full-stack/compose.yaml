@@ -1,28 +1,42 @@
 name: animemachine
 
-include:
-  - ../torrent-collector.yaml
-
 services:
   qbt-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
-    user: "${PUID:-1000}:${PGID:-1000}"
-    env_file: ${ANM_ENV_FILE:-.env}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
+      ANM_QBT_WEB_USERNAME: "${ANM_QBT_WEB_USERNAME:-admin}"
+      ANM_QBT_WEB_PASSWORD: "${ANM_QBT_WEB_PASSWORD:-}"
+      ANM_QBT_LIBRARY_DIR: /Library
+      ANM_ANI_RSS_MEDIA_DIR: /Media
+      ANM_INCOMPLETE_DIR: /downloads/incomplete
     command: ["qbt-bootstrap", "--config-dir", "/QbtConfig"]
     volumes:
       - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig
+      - ${ANM_LIBRARY_DIR:-./library}:/Library
+      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media
+      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
     restart: "no"
     security_opt: [no-new-privileges:true]
 
   ani-rss-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
-    user: "${PUID:-1000}:${PGID:-1000}"
-    env_file: ${ANM_ENV_FILE:-.env}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    depends_on:
+      qbt-bootstrap:
+        condition: service_completed_successfully
     environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
       ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
+      ANM_ANI_RSS_API_KEY: "${ANM_ANI_RSS_API_KEY:-}"
+      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
+      ANM_QBT_API_KEY_FILE: /QbtConfig/.animemachine/api-key
     command: ["ani-rss-bootstrap", "--config-dir", "/AniRssConfig"]
     volumes:
       - ${ANM_CONFIG_DIR:-./config}/ani-rss:/AniRssConfig
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig:ro
     restart: "no"
     security_opt: [no-new-privileges:true]
 
@@ -40,7 +54,7 @@ services:
       TORRENTING_PORT: ${QBT_LISTEN_PORT:-6881}
     volumes:
       - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/config
-      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_LIBRARY_DIR:-./library}:/Library
       - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media
       - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
     ports:
@@ -50,7 +64,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   ani-rss:
-    image: ${ANI_RSS_IMAGE:-wushuo894/ani-rss@sha256:f064a4ff7816fc5ec9cd1cea1044e5c3b790e22b7adb3ad638e49590e9b88571}
+    image: ${ANI_RSS_IMAGE:-wushuo894/ani-rss:v3.2.28}
     restart: unless-stopped
     depends_on:
       ani-rss-bootstrap:
@@ -58,6 +72,9 @@ services:
       qbittorrent:
         condition: service_started
     environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      UMASK: "022"
       CONFIG: /config
       SERVER_PORT: 7789
       TZ: ${TZ:-Asia/Shanghai}
@@ -69,12 +86,21 @@ services:
     security_opt: [no-new-privileges:true]
 
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
+    depends_on:
+      qbt-bootstrap:
+        condition: service_completed_successfully
+      ani-rss-bootstrap:
+        condition: service_completed_successfully
+      qbittorrent:
+        condition: service_started
+      ani-rss:
+        condition: service_started
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
     restart: unless-stopped
     init: true
-    user: "${PUID:-1000}:${PGID:-1000}"
-    env_file: ${ANM_ENV_FILE:-.env}
     environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
       ANM_CONFIG_PATH: /Config/config.json
       ANM_STATE_DIR: /Data/state
       ANM_IMPORTS_DIR: /Imports
@@ -83,8 +109,8 @@ services:
       ANM_QBT_LIBRARY_DIR: /Library
       ANM_INCOMPLETE_DIR: /downloads/incomplete
       ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
-      ANM_ANI_RSS_URL: http://ani-rss:7789
-      ANM_ANI_RSS_MODE: prefer
+      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
+      ANM_QBT_API_KEY_FILE: /QbtConfig/.animemachine/api-key
       ANM_ANI_RSS_MEDIA_DIR: /Media
       ANM_EXTERNAL_LIBRARY_DIR: /External
       ANM_MANAGED_QBT: "true"
@@ -92,16 +118,76 @@ services:
       ANM_SUBMISSION_ENABLED: "true"
       ANM_WEB_PORT: "8787"
       ANM_BIND_ADDRESS: "0.0.0.0"
+      ANM_ADMIN_USERNAME: "${ANM_ADMIN_USERNAME:-}"
+      ANM_ADMIN_PASSWORD: "${ANM_ADMIN_PASSWORD:-}"
+      ANM_AUTH_ENABLED: "${ANM_AUTH_ENABLED:-}"
+      ANM_SYNC_INTERVAL_MINUTES: "${ANM_SYNC_INTERVAL_MINUTES:-30}"
+      ANM_PUBLIC_URL: "${ANM_PUBLIC_URL:-}"
+      ANM_CA_BUNDLE: "${ANM_CA_BUNDLE:-}"
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      ALL_PROXY: "${ALL_PROXY:-}"
+      ANM_ANI_RSS_URL: "${ANM_ANI_RSS_URL:-http://ani-rss:7789}"
+      ANM_ANI_RSS_API_KEY: "${ANM_ANI_RSS_API_KEY:-}"
+      ANM_ANI_RSS_API_KEY_FILE: /AniRssConfig/.animemachine/api-key
+      ANM_ANI_RSS_MODE: "${ANM_ANI_RSS_MODE:-prefer}"
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,qbittorrent,ani-rss}
     volumes:
       - ${ANM_CONFIG_DIR:-./config}:/Config
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig:ro
+      - ${ANM_CONFIG_DIR:-./config}/ani-rss:/AniRssConfig:ro
       - ${ANM_DATA_DIR:-./data}:/Data
       - ${ANM_IMPORTS_DIR:-./imports}:/Imports:ro
-      - ${ANM_TORRENT_POOL_DIR:?set ANM_TORRENT_POOL_DIR}:/Torrents:ro
-      - ${ANM_LIBRARY_DIR:?set ANM_LIBRARY_DIR}:/Library
+      - ${ANM_TORRENT_POOL_DIR:-./torrents}:/Torrents:ro
+      - ${ANM_LIBRARY_DIR:-./library}:/Library
       - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
       - ${ANM_EXTERNAL_LIBRARY_DIR:-./external/read-only}:/External:ro
       - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media:ro
     ports:
       - ${ANM_BIND_ADDRESS:-0.0.0.0}:${ANM_WEB_PORT:-8787}:8787
     security_opt: [no-new-privileges:true]
+
+  torrent-collector:
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    restart: unless-stopped
+    init: true
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: ${TZ:-Asia/Shanghai}
+      ANM_TORRENT_POOL_DIR: /torrents
+      TORRENT_COLLECTOR_STATE_DIR: /CollectorState
+      TORRENT_COLLECTOR_CATALOG_PATH: /Data/state/catalog/anime-catalog.sqlite3
+      TORRENT_COLLECTOR_EXISTING_AUDIT_MODE: "${TORRENT_COLLECTOR_EXISTING_AUDIT_MODE:-report}"
+      TORRENT_COLLECTOR_QUARANTINE_DIR: /CollectorState/quarantine
+      TORRENT_COLLECTOR_MAX_RETRY_ATTEMPTS: "${TORRENT_COLLECTOR_MAX_RETRY_ATTEMPTS:-6}"
+      TORRENT_COLLECTOR_HTML_MAX_BYTES: "${TORRENT_COLLECTOR_HTML_MAX_BYTES:-8388608}"
+      TORRENT_COLLECTOR_TORRENT_MAX_BYTES: "${TORRENT_COLLECTOR_TORRENT_MAX_BYTES:-16777216}"
+      NATIVE_FULL_HISTORY_ENABLED: "${TORRENT_COLLECTOR_FULL_HISTORY_ENABLED:-true}"
+      NATIVE_HISTORY_ENABLED: "${TORRENT_COLLECTOR_HISTORY_ENABLED:-true}"
+      FULL_HISTORY_PAGES_PER_SOURCE_PER_CYCLE: "${TORRENT_COLLECTOR_FULL_HISTORY_PAGES_PER_CYCLE:-10}"
+      HISTORY_PAGES_PER_JOB_PER_CYCLE: "${TORRENT_COLLECTOR_HISTORY_PAGES_PER_JOB_PER_CYCLE:-5}"
+      HISTORY_JOBS_PER_CYCLE: "${TORRENT_COLLECTOR_HISTORY_JOBS_PER_CYCLE:-10}"
+      HISTORY_PAGE_DELAY_SECONDS: "${TORRENT_COLLECTOR_PAGE_DELAY_SECONDS:-1.5}"
+      HISTORY_RETRY_SECONDS: "${TORRENT_COLLECTOR_HISTORY_RETRY_SECONDS:-60}"
+      REQUEST_TIMEOUT_SECONDS: "${TORRENT_COLLECTOR_REQUEST_TIMEOUT_SECONDS:-60}"
+      HTTP_MAX_RETRIES: "${TORRENT_COLLECTOR_HTTP_MAX_RETRIES:-5}"
+      POLL_INTERVAL_SECONDS: "${TORRENT_COLLECTOR_POLL_INTERVAL_SECONDS:-3000}"
+      NATIVE_INCREMENTAL_ENABLED: "${TORRENT_COLLECTOR_INCREMENTAL_ENABLED:-true}"
+      NATIVE_INCREMENTAL_PAGES: "${TORRENT_COLLECTOR_INCREMENTAL_PAGES:-2}"
+      RETRY_BATCH_SIZE: "${TORRENT_COLLECTOR_RETRY_BATCH_SIZE:-100}"
+      NATIVE_PROXY_ENABLED: "${TORRENT_COLLECTOR_PROXY_ENABLED:-false}"
+      NATIVE_PROXY_HOST: "${TORRENT_COLLECTOR_PROXY_HOST:-host.docker.internal}"
+      NATIVE_PROXY_PORT: "${TORRENT_COLLECTOR_PROXY_PORT:-1080}"
+    volumes:
+      - ${TORRENT_COLLECTOR_STATE_DIR:-torrent-collector-state}:/CollectorState
+      - ${ANM_DATA_DIR:-./data}:/Data:ro
+      - ${ANM_TORRENT_POOL_DIR:-./torrents}:/torrents
+    stop_grace_period: 30s
+    command: ["torrent-collector"]
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  torrent-collector-state:

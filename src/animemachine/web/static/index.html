@@ -12,17 +12,17 @@
     <header class="hero">
       <div class="hero-brand">
         <h1 data-i18n="catalog">AnimeMachine</h1>
-        <p class="eyebrow">Automated Anime Library</p>
+        <p class="eyebrow" data-i18n="catalogTagline">全自动动画收藏库</p>
       </div>
       <div class="hero-tools">
         <div class="toolbar">
-          <button id="themeToggle" class="tool theme-toggle" type="button" aria-label="Theme" title="Theme">◐</button>
-          <select id="language" aria-label="Language">
+          <button id="themeToggle" class="tool theme-toggle" type="button" aria-label="Theme" title="Theme" data-i18n-aria-label="themeSystem" data-i18n-title="themeSystem">◐</button>
+          <select id="language" aria-label="Language" data-i18n-aria-label="languageControl">
             <option value="zh-Hans">中文</option>
             <option value="en">English</option>
             <option value="ja">日本語</option>
           </select>
-          <button id="viewToggle" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格">表格</button>
+          <button id="viewToggle" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格" data-i18n-aria-label="table" data-i18n-title="table">表格</button>
           <button id="settingsButton" class="tool" data-i18n="settings" hidden>设置</button>
           <button id="authButton" class="tool" data-i18n="logout" hidden>退出</button>
         </div>
@@ -210,7 +210,7 @@
             <button
               id="sortDirection"
               class="text-button"
-              aria-label="Sort direction"
+              aria-label="Sort direction" data-i18n-aria-label="sortDirectionLabel"
             >
               ↑
             </button>
@@ -256,21 +256,21 @@
     </div>
 
     <dialog id="detailDialog">
-      <button class="close" aria-label="Close">×</button>
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div id="detail"></div>
     </dialog>
     <dialog id="relationDialog" class="relation-dialog">
-      <button class="close" aria-label="Close">×</button>
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div id="relationGraph"></div>
       <aside id="relationSubjectPopover" class="relation-subject-popover" hidden></aside>
     </dialog>
     <dialog id="planDialog">
-      <button class="close" aria-label="Close">×</button>
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div id="plan"></div>
     </dialog>
     <dialog id="loginDialog" class="login-dialog">
       <form id="loginForm">
-        <p class="login-eyebrow">AnimeMachine · Automated Anime Library</p>
+        <p class="login-eyebrow">AnimeMachine · <span data-i18n="catalogTagline">全自动动画收藏库</span></p>
         <h2 data-i18n="loginTitle">登录 AnimeMachine</h2>
         <label><span data-i18n="username">用户名</span><input id="loginUsername" autocomplete="username" required /></label>
         <label><span data-i18n="password">密码</span><input id="loginPassword" type="password" autocomplete="current-password" required /></label>
@@ -279,9 +279,9 @@
       </form>
     </dialog>
     <dialog id="settingsDialog">
-      <button class="close" aria-label="Close">×</button>
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="settingsForm">
-        <nav class="settings-tabs" aria-label="Settings sections">
+        <nav class="settings-tabs" aria-label="Settings sections" data-i18n-aria-label="settingsSectionsLabel">
           <button
             type="button"
             class="tab active"
@@ -655,7 +655,6 @@
             <ul class="about-sources">
               <li><a href="https://github.com/bangumi/Archive" target="_blank" rel="noreferrer">Bangumi Archive</a><span data-i18n="aboutArchiveSource">提供本地动画元数据底包与作品关系基础。</span></li>
               <li><a href="https://bangumi.github.io/api/" target="_blank" rel="noreferrer">Bangumi API</a><span data-i18n="aboutBangumiSource">用于补全底包中缺失或明显异常的公开元数据。</span></li>
-              <li><a href="https://myanimelist.net/" target="_blank" rel="noreferrer">MyAnimeList</a><span data-i18n="aboutMalSource">在本地证据不足时作为作品身份和前后作关系的辅助来源。</span></li>
               <li><a href="https://github.com/wushuo894/ani-rss" target="_blank" rel="noreferrer">ani-rss</a><span data-i18n="aboutAniRssSource">提供可选的新番订阅、状态同步与远程播放能力；AnimeMachine 通过其 HTTP API 连接。</span></li>
               <li><a href="https://2.assrt.net/api/doc" target="_blank" rel="noreferrer">ASSRT</a><span data-i18n="aboutSubtitleSources">是用户可选的外部字幕 API；字幕版权及使用条件由对应服务说明。</span></li>
               <li><a href="https://opensubtitles.stoplight.io/docs/opensubtitles-api" target="_blank" rel="noreferrer">OpenSubtitles</a><span data-i18n="aboutSubtitleSources">是用户可选的外部字幕 API；字幕版权及使用条件由对应服务说明。</span></li>

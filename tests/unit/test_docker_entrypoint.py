@@ -44,6 +44,57 @@ class DockerEntrypointTests(unittest.TestCase):
             self.assertTrue(entrypoint._healthy(8787, "1.2.4", "192.168.1.50"))
         self.assertEqual("http://192.168.1.50:8787/api/health/live", urlopen.call_args.args[0])
 
+    def test_writable_paths_are_command_specific(self):
+        with mock.patch.dict(os.environ, {
+                "ANM_CONFIG_PATH": "/config/config.json", "ANM_STATE_DIR": "/data/state",
+                "ANM_LIBRARY_DIR": "/library", "ANM_QBT_LIBRARY_DIR": "/qbt-library",
+                "ANM_ANI_RSS_MEDIA_DIR": "/media", "ANM_INCOMPLETE_DIR": "/incomplete",
+                "TORRENT_COLLECTOR_STATE_DIR": "/collector", "ANM_TORRENT_POOL_DIR": "/torrents"}, clear=False):
+            expected_app_paths = [Path("/config"), Path("/data/state"), Path("/library"), Path("/incomplete")]
+            for command in ("run", "init", "serve", "healthcheck", "validate-config", "sync"):
+                self.assertEqual(expected_app_paths, entrypoint._writable_paths([command]))
+            self.assertEqual([], entrypoint._writable_paths(["storage-preflight"]))
+            self.assertEqual([Path("/bootstrap"), Path("/qbt-library"), Path("/media"), Path("/incomplete")],
+                             entrypoint._writable_paths(["qbt-bootstrap", "--config-dir", "/bootstrap"]))
+            self.assertEqual([Path("/bootstrap")], entrypoint._writable_paths(
+                ["ani-rss-bootstrap", "--config-dir", "/bootstrap"]
+            ))
+            self.assertEqual([Path("/collector"), Path("/torrents")],
+                             entrypoint._writable_paths(["torrent-collector"]))
+
+    @unittest.skipUnless(os.name == "posix", "Docker identity switching is POSIX-only")
+    def test_root_entrypoint_prepares_mounts_then_drops_privileges(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {
+                "PUID": "1234", "PGID": "2345", "HOME": "/root",
+                "ANM_CONFIG_PATH": str(root / "config" / "config.json"),
+                "ANM_STATE_DIR": str(root / "data" / "state"),
+                "ANM_LIBRARY_DIR": str(root / "library"),
+                "ANM_INCOMPLETE_DIR": str(root / "incomplete"),
+            }
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch.object(entrypoint.os, "geteuid", return_value=0), \
+                    mock.patch.object(entrypoint.os, "chown") as chown, \
+                    mock.patch.object(entrypoint.os, "setgroups") as setgroups, \
+                    mock.patch.object(entrypoint.os, "setgid") as setgid, \
+                    mock.patch.object(entrypoint.os, "setuid") as setuid:
+                entrypoint._drop_privileges(["run"])
+                self.assertEqual("/tmp", os.environ["HOME"])
+            for path in (root / "config", root / "data" / "state", root / "library", root / "incomplete"):
+                self.assertTrue(path.is_dir())
+                self.assertIn(mock.call(path, 1234, 2345), chown.call_args_list)
+            setgroups.assert_called_once_with([])
+            setgid.assert_called_once_with(2345)
+            setuid.assert_called_once_with(1234)
+
+    @unittest.skipUnless(os.name == "posix", "Docker identity switching is POSIX-only")
+    def test_non_root_entrypoint_does_not_change_identity(self):
+        with mock.patch.object(entrypoint.os, "geteuid", return_value=1000), \
+                mock.patch.object(entrypoint.os, "setuid") as setuid:
+            entrypoint._drop_privileges(["run"])
+        setuid.assert_not_called()
+
     def test_newer_persistent_release_is_selected(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp) / "base"; state = Path(temp) / "state"

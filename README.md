@@ -31,15 +31,17 @@ AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据�
 - 下载规划支持完整合集、单集/单卷拼接、差分补完，以及同一 infohash 追加文件选择。AnimeMachine 管理的 qBittorrent 任务会先生成计划，并始终以停止状态提交；确认内容后再由用户在 qBittorrent 中启动。
 - 收藏库既可以是本地媒体目录，也可以是可读写 UNC/NAS 目录；已有媒体还可以作为外部只读媒体库映射进来，不要求搬迁或重新命名。
 - qBittorrent、Ani-RSS 和 Torrent Collector 都是可选组件。可以只使用其中一部分，也可以在 Compose 中组成完整自动收藏链路。
+- 0.2.1 对远程 Ani-RSS 采用“当前凭据 + 端点 + 实际代理/直连路由”健康门控：代理或 `NO_PROXY` 变化后旧 `ready` 快照立即暂时退出当前资源/播放来源，并触发补偿同步；重新验证成功后自动恢复。Ani-RSS 不可用期间 Torrent、Bangumi 图片、本地收藏与独立挂载的只读媒体仍继续工作，本地/LAN Ani-RSS 始终直连。成功同步若发现 Ani-RSS 已为作品提供明确封面，还会解除此前由自有图片源留下的 `no_cover` 负缓存，使下一次正常图片请求即可转用 Ani-RSS，而无需等待图片维护周期。 切换 Ani-RSS 端点或 API Key 时，上一实例的资源搜索缓存会立即失效；旧实例仍在执行的搜索即使晚到也会因来源代次不匹配而丢弃，新实例重新验证后资源扫描立即重新到期，避免旧候选短暂重新出现。远程资源搜索还会固定其开始时的有效代理路由代次；若代理或 `NO_PROXY` 在搜索途中换代，本轮结果会在写入前被丢弃，避免慢请求跨网络环境回灌。
+- Ani-RSS 的“资源调用模式”只控制资源发现与规划；即使选择“手动调用”，已连接的订阅与 API 可播放媒体仍按同步间隔更新。localhost/LAN 的封面故障冷却与无关代理切换解耦，避免频繁开关代理导致本地 `/api/file` 提前重试。
 - 播放功能生成 M3U 播放列表，再交给系统播放器、VLC 或 PotPlayer；服务器路径与客户端路径不一致时，可以单独配置播放器可访问的映射。
 - 对归档类资源，程序可以检查内嵌/外挂字幕，并连接用户自行配置的字幕服务；外部只读媒体不会因为字幕处理被改写。
-- 支持生成作品关系图，呈现动画在所属系列的位置，系列中各作品的逻辑关系。在作品关系图中，可以点击跳转其它关联作品。
+- 支持生成作品关系图，呈现动画在所属系列的位置，系列中各作品的逻辑关系。在作品关系图中，可以点击跳转其它关联作品；节点标题与卡片、详情页使用同一套当前界面语言规则。0.2.1 会在升级现有 Catalog 时重新核对已保存的英文别名，剔除任何含非拉丁字母、却被误标为英文的别名（包括中/日/韩、西里尔、希腊、阿拉伯等文字）并补齐可验证的英文显示标题；上游确实没有英文名时，英语界面会临时回退显示作品原标题，但不会把该原标题写入或标记为英文标题；一旦后续取得可靠英文名会自动优先使用，无需重建 Catalog。
 
 ## 快速开始
 
 ### 本地运行
 
-Windows 用户运行 `scripts/windows/AnimeMachine.cmd`；Linux 用户运行 `scripts/unix/AnimeMachine-Linux.sh`；macOS 用户运行 `scripts/unix/AnimeMachine-macOS.command`。从源码首次启动时，需要预先安装 Python 3.11 或更高版本；启动脚本会建立隔离环境并安装当前项目。
+Windows 用户运行 `scripts/windows/AnimeMachine.cmd`；Linux 用户运行 `scripts/unix/AnimeMachine-Linux.sh`；macOS 用户运行 `scripts/unix/AnimeMachine-macOS.command`。从源码首次启动时，需要预先安装 Python 3.11 或更高版本；启动脚本会建立隔离环境并安装当前项目。无需预先填写 `.env.local`：默认监听 `0.0.0.0:8787`，本机使用 `http://127.0.0.1:8787`，局域网其它设备使用 `http://<主机IP>:8787`；零配置首次启动会自动生成管理员账号和密码并保存到受限凭据文件，只要该初始管理员仍有效，后续启动也会在控制台再次显示这组登录信息。
 
 详细步骤见 [部署与使用指南](docs/guide.md#本地部署)。Release 同时保留 Windows、Linux 和 macOS 三套启动入口，但只有构建平台的运行时或依赖会随包直接提供；换到其它系统运行时，需要预装 Python 3.11 或更高版本，首次启动也可能联网补充当前平台的兼容依赖。
 
@@ -47,9 +49,9 @@ Windows 用户运行 `scripts/windows/AnimeMachine.cmd`；Linux 用户运行 `sc
 
 `deploy/compose` 提供四种预设方案：(1)AnimeMachine 独立运行；(2)连接外部 qBittorrent；(3)启用 Torrent Collector 和内置 qBittorrent；(4)把 Torrent Collector、qBittorrent 与 Ani-RSS 一并纳入同一 Compose 项目。前三种方案均可按需连接外部 Ani-RSS，未配置时不影响动画底库、目录、Torrent Pool 与本地收藏管理。
 
-0.2.0 的预设方案默认固定公开镜像 `ghcr.io/kyupi-git/animemachine:0.2.0`。如自行改为 `latest`，Compose 会跟随后续发布；生产环境建议继续固定具体版本标签。
+0.2.1 的预设方案默认固定公开镜像 `ghcr.io/kyupi-git/animemachine:0.2.1`。完整 Compose 同时固定 Ani-RSS `v3.2.28` 与 qBittorrent `5.2.3`，当前适配层已按这两版接口核验；外接 qBittorrent 继续要求 5.2.0 或更新版本。若自行改为 `latest`，Compose 会跟随后续发布；生产环境建议继续固定具体版本标签。
 
-进入对应目录后，将 `.env.example` 复制为 `.env`，填写宿主机路径和所需密钥，再运行 `docker compose up -d`。四种方案按组件边界区分；具体选择主要取决于现有 qBittorrent、Ani-RSS 和媒体目录是否已经在其它位置运行。完整配置见 [部署与使用指南](docs/guide.md#docker-compose)。
+进入对应目录后可直接运行 `docker compose up -d`，不要求先创建 `.env`；默认公开 `0.0.0.0:8787` 并自动生成 AnimeMachine 管理员密码，第 3/4 套方案还会自动生成并持久复用内置 qBittorrent/Ani-RSS 的随机 API 密钥，并让 AnimeMachine 等待密钥 bootstrap 成功、托管服务容器开始运行后再进入首次应用启动，避免首次零配置部署的启动竞态。`04-full-stack/compose.yaml` 本身是完整的单文件部署定义，即使只把这一个 YAML 复制到空目录、同目录没有 `.env`，也能按默认相对目录完成首次部署；Ani-RSS 的最终下载位置默认落在共享 `/Media`（宿主机 `./external/ani-rss`），qBittorrent 的 `/downloads/incomplete` 仅用于未完成数据，因此下载完成后 AnimeMachine 无需追加路径配置即可识别并播放这些媒体；只有需要覆盖宿主机路径、凭据、PUID/PGID、代理或端口时才复制 `.env.example` 为 `.env`。完整配置见 [部署与使用指南](docs/guide.md#docker-compose)。
 
 ## 文档
 

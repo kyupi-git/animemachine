@@ -82,8 +82,8 @@ class ImageFallbackTests(unittest.TestCase):
                     "SELECT image_blob,fetched_at,error FROM anime_image WHERE anime_id=1"
                 ).fetchone()
             self.assertEqual(image, blob)
-            self.assertNotEqual("2026-08-01T00:00:00+00:00", fetched_at)
-            self.assertIsNone(error)
+            self.assertEqual("2026-08-01T00:00:00+00:00", fetched_at)
+            self.assertTrue(str(error).startswith("refresh_failed:RuntimeError:"), error)
 
     def test_corrupt_persistent_cache_is_replaced_atomically(self):
         buffer=io.BytesIO(); Image.new("RGB",(20,30),"blue").save(buffer,"PNG")

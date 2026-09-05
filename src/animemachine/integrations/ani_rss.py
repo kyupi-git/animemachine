@@ -46,7 +46,7 @@ SOURCE_CLASS = re.compile(r"(?i)\b(BD(?:Rip)?|DVD(?:Rip)?|WEB[ ._-]?(?:DL|Rip)|H
 
 _BACKGROUND_RESOURCE_SCAN_LOCK = threading.Lock()
 _COVER_FAILURE_LOCK = threading.Lock()
-_COVER_FAILURES: dict[str, tuple[int, float]] = {}
+_COVER_FAILURES: dict[tuple[str, str], tuple[int | None, float]] = {}
 _COVER_FAILURE_COOLDOWN_SECONDS = 30.0
 
 
@@ -132,6 +132,30 @@ def _settings(config: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _route_revision(settings: dict[str, Any]) -> int | None:
+    """Return the live proxy-route revision when it can affect this Ani-RSS endpoint."""
+    try:
+        route = network_transport.proxy_route(str(settings.get("endpoint") or ""))
+        if str(route.get("reason") or "") == "local":
+            return None
+        return int(route.get("revision") or 0)
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _record_route_revision(db: sqlite3.Connection, revision: int | None) -> None:
+    """Persist the route generation that was actually used for the sync attempt."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone():
+        return
+    if revision is None:
+        db.execute("DELETE FROM metadata WHERE key='ani_rss_route_revision'")
+    else:
+        db.execute(
+            "INSERT OR REPLACE INTO metadata(key,value) VALUES('ani_rss_route_revision',?)",
+            (str(revision),),
+        )
+
+
 def _month_index(value: str) -> int | None:
     match = re.fullmatch(r"(\d{4})-(\d{2})", str(value or ""))
     if not match:
@@ -167,7 +191,7 @@ def background_search_due(db_path: Path, anime_id: int, config: dict[str, Any], 
             return False
         if not _work_region_enabled(db, anime_id, config):
             return False
-        row = db.execute("SELECT last_attempt_at FROM ani_rss_search_state WHERE anime_id=?", (anime_id,)).fetchone()
+        row = db.execute("SELECT last_attempt_at,error_text FROM ani_rss_search_state WHERE anime_id=?", (anime_id,)).fetchone()
     if not row or not row[0]:
         return True
     try:
@@ -176,8 +200,11 @@ def background_search_due(db_path: Path, anime_id: int, config: dict[str, Any], 
             last = last.replace(tzinfo=dt.timezone.utc)
     except ValueError:
         return True
+    if last > current + dt.timedelta(minutes=1):
+        return True
     poll = max(5, int(config.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
-    return current - last >= dt.timedelta(minutes=poll)
+    retry_minutes = min(poll, 5) if len(row) > 1 and row[1] else poll
+    return current - last >= dt.timedelta(minutes=retry_minutes)
 
 
 def automatic_search_ids(db_path: Path, *, today: dt.date | None = None) -> list[int]:
@@ -232,7 +259,9 @@ def refresh_background_resources(db_path: Path, config: dict[str, Any], *,
             if not background_search_due(db_path, anime_id, config):
                 continue
             try:
-                search(db_path, anime_id, config)
+                search_result = search(db_path, anime_id, config)
+                if search_result.get("stale"):
+                    break
                 refreshed += 1
             except (OSError, RuntimeError, urllib.error.URLError, httpx.RequestError):
                 failed += 1
@@ -249,6 +278,15 @@ def _secret() -> str:
     secret_file = os.getenv("ANM_ANI_RSS_API_KEY_FILE", "").strip()
     if not value and secret_file and Path(secret_file).is_file():
         value = Path(secret_file).read_text(encoding="utf-8").strip()
+    return value
+
+
+def _strict_mapping_list(value: Any, label: str) -> list[dict[str, Any]]:
+    """Accept an optional JSON array of objects, but never coerce malformed data to empty."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise RuntimeError(f"Ani-RSS {label} returned an unsupported payload")
     return value
 
 
@@ -288,29 +326,44 @@ class Client:
         return payload.get("data") if "data" in payload else payload
 
     def probe(self) -> dict[str, Any]:
-        about = self.call("about") or {}
-        listing = self.call("listAni") or {}
-        return {"version": str(about.get("version") or ""), "subscriptions": int(listing.get("total") or 0),
+        about = self.call("about")
+        about = {} if about is None else about
+        if not isinstance(about, dict):
+            raise RuntimeError("Ani-RSS probe returned an unsupported payload")
+        subscriptions, advertised_total = self.subscription_snapshot()
+        return {"version": str(about.get("version") or ""),
+                "subscriptions": advertised_total if advertised_total is not None else len(subscriptions),
                 "capabilities": {"list": True, "search": True, "subscribe": True,
                                  "collection": True, "delete": True}}
 
     def subscription_snapshot(self) -> tuple[list[dict[str, Any]], int | None]:
         """Return the de-duplicated listAni rows and its advertised total, when present."""
-        data = self.call("listAni") or {}
+        data = self.call("listAni")
+        if not isinstance(data, dict):
+            raise RuntimeError("Ani-RSS listAni returned an unsupported payload")
+        if "weekList" not in data or data.get("weekList") is None:
+            raise RuntimeError("Ani-RSS listAni.weekList returned an unsupported payload")
         result: list[dict[str, Any]] = []
-        for week in data.get("weekList") or []:
-            result.extend(item for item in (week.get("items") or []) if isinstance(item, dict))
+        for week in _strict_mapping_list(data.get("weekList"), "listAni.weekList"):
+            if "items" not in week or week.get("items") is None:
+                raise RuntimeError("Ani-RSS listAni.weekList[].items returned an unsupported payload")
+            result.extend(_strict_mapping_list(week.get("items"), "listAni.weekList[].items"))
         unique: dict[str, dict[str, Any]] = {}
         for item in result:
             remote_id = str(item.get("id") or "").strip()
             if remote_id:
                 unique[remote_id] = item
         advertised_total: int | None = None
-        if isinstance(data, dict) and data.get("total") is not None:
+        if data.get("total") is not None:
+            raw_total = data.get("total")
             try:
-                advertised_total = max(0, int(data.get("total")))
-            except (TypeError, ValueError):
-                advertised_total = None
+                if isinstance(raw_total, bool) or (isinstance(raw_total, float) and not raw_total.is_integer()):
+                    raise ValueError
+                advertised_total = int(raw_total)
+                if advertised_total < 0:
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Ani-RSS listAni.total returned an unsupported payload") from exc
         return list(unique.values()), advertised_total
 
     def subscriptions(self) -> list[dict[str, Any]]:
@@ -321,14 +374,14 @@ class Client:
         value = str(subscription_url or "").strip()
         if not value:
             raise ValueError("Ani-RSS subscription URL is unavailable")
-        data = self.call("playList", body={"url": value}, timeout=max(2, int(timeout))) or []
+        data = self.call("playList", body={"url": value}, timeout=max(2, int(timeout)))
         if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
+            return _strict_mapping_list(data, "playList")
         if isinstance(data, dict):
             for key in ("items", "list", "files", "data"):
                 items = data.get(key)
-                if isinstance(items, list):
-                    return [item for item in items if isinstance(item, dict)]
+                if items is not None:
+                    return _strict_mapping_list(items, f"playList.{key}")
         raise RuntimeError("Ani-RSS playList returned an unsupported payload")
 
     def file_bytes(self, filename: str, *, limit: int = 12 * 1024 * 1024,
@@ -530,8 +583,8 @@ def stream_media(config: dict[str, Any], filename: str, range_header: str = ""):
     return _client(config).stream_file(filename, range_header)
 
 
-def _client(config: dict[str, Any]) -> Client:
-    key = _secret()
+def _client(config: dict[str, Any], api_key: str | None = None) -> Client:
+    key = str(api_key or "").strip() or _secret()
     if not key:
         raise ValueError("Ani-RSS API key is not configured")
     return Client(_settings(config)["endpoint"], key)
@@ -550,16 +603,28 @@ def sync_due(db_path: Path, config: dict[str, Any], *, now: dt.datetime | None =
     current = now or dt.datetime.now(dt.timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=dt.timezone.utc)
+    settings = _settings(config)
+    current_route_revision = _route_revision(settings)
     try:
         with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
             table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone()
             row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone() if table else None
             columns = [str(item[1]) for item in db.execute("PRAGMA table_info(ani_rss_state)")] if table else []
+            metadata_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone()
+            route_row = db.execute(
+                "SELECT value FROM metadata WHERE key='ani_rss_route_revision'"
+            ).fetchone() if metadata_table else None
     except sqlite3.Error:
         return True
-    settings = _settings(config)
     if not row:
         return True
+    if current_route_revision is not None:
+        try:
+            recorded_route_revision = int(route_row[0]) if route_row else None
+        except (TypeError, ValueError):
+            recorded_route_revision = None
+        if recorded_route_revision != current_route_revision:
+            return True
     values = dict(zip(columns, row))
     expected_fingerprint = _credential_fingerprint(key, settings["endpoint"])
     if (str(values.get("endpoint")) != settings["endpoint"]
@@ -592,27 +657,35 @@ def sync_due(db_path: Path, config: dict[str, Any], *, now: dt.datetime | None =
     return current - last_success >= dt.timedelta(minutes=settings["syncMinutes"])
 
 
-def _cover_endpoint_available(endpoint: str) -> bool:
-    revision = network_transport.proxy_revision()
+def _cover_endpoint_available(endpoint: str, credential_fingerprint: str) -> bool:
+    # Only route changes that can actually affect this Ani-RSS endpoint may
+    # invalidate its cooldown. Local/LAN endpoints stay direct, so unrelated
+    # environment-proxy toggles must not make every queued image retry them.
+    revision = _route_revision({"endpoint": endpoint})
     now = time.monotonic()
+    key = (endpoint, credential_fingerprint)
     with _COVER_FAILURE_LOCK:
-        failure = _COVER_FAILURES.get(endpoint)
+        failure = _COVER_FAILURES.get(key)
         if failure is None:
             return True
         failed_revision, retry_at = failure
         if failed_revision != revision or retry_at <= now:
-            _COVER_FAILURES.pop(endpoint, None)
+            _COVER_FAILURES.pop(key, None)
             return True
         return False
 
 
-def _cover_endpoint_result(endpoint: str, *, healthy: bool) -> None:
-    revision = network_transport.proxy_revision()
+def _cover_endpoint_result(endpoint: str, credential_fingerprint: str, *, healthy: bool) -> None:
+    revision = _route_revision({"endpoint": endpoint})
+    key = (endpoint, credential_fingerprint)
     with _COVER_FAILURE_LOCK:
         if healthy:
-            _COVER_FAILURES.pop(endpoint, None)
+            # A successful authenticated read proves the endpoint healthy. Clear
+            # stale failures from older credentials for the same endpoint too.
+            for cached_key in [value for value in _COVER_FAILURES if value[0] == endpoint]:
+                _COVER_FAILURES.pop(cached_key, None)
         else:
-            _COVER_FAILURES[endpoint] = (revision, time.monotonic() + _COVER_FAILURE_COOLDOWN_SECONDS)
+            _COVER_FAILURES[key] = (revision, time.monotonic() + _COVER_FAILURE_COOLDOWN_SECONDS)
 
 
 def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = None, *,
@@ -620,6 +693,8 @@ def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = N
     """Copy a mapped Ani-RSS cached cover without replacing an existing AnimeMachine cache implicitly."""
     key = str(api_key or "").strip() or _secret()
     if not key:
+        return None
+    if config is not None and not state_available(state(db_path, config)):
         return None
     try:
         with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
@@ -641,10 +716,11 @@ def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = N
             rows = db.execute("""SELECT remote_id,evidence_json FROM ani_rss_subscription
                 WHERE anime_id=? AND deleted_at IS NULL ORDER BY enabled DESC,last_seen_at DESC""", (anime_id,)).fetchall()
         endpoint = _settings(config or {})["endpoint"] if config is not None else str(state_row["endpoint"])
+        credential_fingerprint = _credential_fingerprint(key, endpoint)
         # The file endpoint is an optional fast path. After a transport/server
-        # failure, briefly bypass it for the remaining image queue. A live proxy
-        # configuration change invalidates the cooldown immediately.
-        if not _cover_endpoint_available(endpoint):
+        # failure, briefly bypass it for the remaining image queue. A route
+        # change that can actually affect this endpoint invalidates the cooldown.
+        if not _cover_endpoint_available(endpoint, credential_fingerprint):
             return None
         client = Client(endpoint, key, timeout=4)
         for row in rows:
@@ -656,19 +732,19 @@ def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = N
                 # Cover reuse is only an optimization. One failed attempt is
                 # enough to fall back immediately to AnimeMachine image sources.
                 data, mime = client.file_bytes(cover, retries=1)
-                _cover_endpoint_result(endpoint, healthy=True)
                 data, mime = network_validators.cached_image_bytes(data, mime)
+                _cover_endpoint_result(endpoint, credential_fingerprint, healthy=True)
                 return data, mime, f"ani-rss://{row['remote_id']}/cover"
             except RemoteFileError as exc:
                 # 404/400/422 are file-specific evidence and must not disable
                 # other covers. Transport/retryable/server failures are endpoint
                 # evidence and should make subsequent images fall back at once.
                 if exc.status not in {400, 404, 422}:
-                    _cover_endpoint_result(endpoint, healthy=False)
+                    _cover_endpoint_result(endpoint, credential_fingerprint, healthy=False)
                     return None
                 continue
             except (OSError, RuntimeError, httpx.RequestError):
-                _cover_endpoint_result(endpoint, healthy=False)
+                _cover_endpoint_result(endpoint, credential_fingerprint, healthy=False)
                 return None
             except ValueError:
                 continue
@@ -735,17 +811,34 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
     settings = _settings(config); stamp = utcnow()
     key = _secret()
     fingerprint = _credential_fingerprint(key, settings["endpoint"]) if key else None
+    route_revision = _route_revision(settings)
+    resource_refresh_required = False
     try:
         if not key:
             raise ValueError("Ani-RSS API key is not configured")
         client = Client(settings["endpoint"], key, timeout=8)
-        about = client.call("about") or {}
+        about = client.call("about")
+        about = {} if about is None else about
+        if not isinstance(about, dict):
+            raise RuntimeError("Ani-RSS about returned an unsupported payload")
         subscriptions, advertised_total = client.subscription_snapshot()
         listing_complete = advertised_total is None or advertised_total == len(subscriptions)
+        deletion_snapshot_complete = advertised_total is not None and advertised_total == len(subscriptions)
         capability = {"version": str(about.get("version") or "")}
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as exc:
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
             migrate(db)
+            previous_state = db.execute(
+                "SELECT endpoint,credential_fingerprint FROM ani_rss_state WHERE singleton=1"
+            ).fetchone()
+            resource_refresh_required = bool(previous_state and (
+                str(previous_state[0]) != settings["endpoint"]
+                or str(previous_state[1] or "") != str(fingerprint or "")
+            ))
+            if resource_refresh_required:
+                db.execute("DELETE FROM ani_rss_resource")
+                db.execute("DELETE FROM ani_rss_search_state")
+            _record_route_revision(db, route_revision)
             db.execute("""INSERT INTO ani_rss_state
                 (singleton,endpoint,version,connection_state,configured_mode,effective_mode,last_attempt_at,
                  last_success_at,last_error,successful_generation,credential_fingerprint)
@@ -755,15 +848,27 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
                 last_error=excluded.last_error,credential_fingerprint=excluded.credential_fingerprint""",
                 (settings["endpoint"], None, "error", settings["mode"], stamp, None,
                  f"{type(exc).__name__}: {exc}", fingerprint))
-        return {"state": "error", "effectiveMode": "manual", "errorType": type(exc).__name__}
+        return {"state": "error", "effectiveMode": "manual", "errorType": type(exc).__name__,
+                "resourceRefreshRequired": resource_refresh_required}
 
     mapped_subscriptions: list[tuple[str, int, str]] = []
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
         db.row_factory = sqlite3.Row; db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA busy_timeout=60000")
         migrate(db)
-        state = db.execute("SELECT successful_generation FROM ani_rss_state WHERE singleton=1").fetchone()
-        generation = int(state[0] if state else 0) + 1
+        previous_state = db.execute(
+            "SELECT successful_generation,endpoint,credential_fingerprint FROM ani_rss_state WHERE singleton=1"
+        ).fetchone()
+        generation = int(previous_state[0] if previous_state else 0) + 1
+        resource_refresh_required = bool(previous_state and (
+            str(previous_state[1]) != settings["endpoint"]
+            or str(previous_state[2] or "") != str(fingerprint or "")
+        ))
+        if resource_refresh_required:
+            db.execute("DELETE FROM ani_rss_resource")
+            db.execute("DELETE FROM ani_rss_search_state")
+        _record_route_revision(db, route_revision)
         seen: set[str] = set(); mapped = 0
+        cover_candidates: set[int] = set()
         for item in subscriptions:
             remote_id = str(item.get("id") or "").strip()
             if not remote_id:
@@ -789,11 +894,17 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             if anime_id is not None:
                 mapped += 1
 
-            def evidence_value(name: str) -> Any:
-                value = item.get(name)
-                if value is None or (isinstance(value, str) and not value.strip()):
-                    return previous_evidence.get(name)
-                return value
+            def evidence_value(name: str, *aliases: str) -> Any:
+                candidates = (name, *aliases)
+                for candidate in candidates:
+                    value = item.get(candidate)
+                    if value is not None and not (isinstance(value, str) and not value.strip()):
+                        return value
+                for candidate in candidates:
+                    value = previous_evidence.get(candidate)
+                    if value is not None and not (isinstance(value, str) and not value.strip()):
+                        return value
+                return None
 
             subscription_url = str(evidence_value("url") or "").strip()
             bgm_id = _bgm_id(evidence_value("bgmUrl") or subscription_url)
@@ -812,14 +923,16 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             enabled = bool(item.get("enable")) if "enable" in item else bool(previous["enabled"] if previous else False)
             current_episode = integer_value("currentEpisodeNumber", previous["current_episode"] if previous else 0)
             total_episode = integer_value("totalEpisodeNumber", previous["total_episode"] if previous else 0)
-            remote_media_path = str(evidence_value("downloadPath") or (previous["remote_media_path"] if previous else "") or "").strip() or None
+            remote_media_path = str(evidence_value("customDownloadPathTemplate", "downloadPath") or (previous["remote_media_path"] if previous else "") or "").strip() or None
             evidence = {"identity": identity, "generation": generation,
                         "url": subscription_url or None, "bgmUrl": evidence_value("bgmUrl"),
                         "subgroup": evidence_value("subgroup"), "season": evidence_value("season"),
                         "cover": evidence_value("cover"), "image": evidence_value("image"),
                         "mikanTitle": evidence_value("mikanTitle"), "jpTitle": evidence_value("jpTitle"),
-                        "type": evidence_value("type"), "downloadPath": remote_media_path,
+                        "type": evidence_value("type"), "customDownloadPathTemplate": remote_media_path, "downloadPath": remote_media_path,
                         "score": evidence_value("score"), "completed": evidence_value("completed")}
+            if anime_id is not None and str(evidence.get("cover") or "").strip():
+                cover_candidates.add(anime_id)
             title = str(item.get("title") or item.get("jpTitle") or (previous["title"] if previous else "") or remote_id)
             db.execute("""INSERT INTO ani_rss_subscription VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(remote_id) DO UPDATE SET anime_id=excluded.anime_id,title=excluded.title,
@@ -837,12 +950,25 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             # incomplete payload cannot freeze an otherwise healthy media snapshot.
             if anime_id is not None and subscription_url:
                 mapped_subscriptions.append((remote_id, anime_id, subscription_url))
+        # A prior Bangumi ``no_cover`` is only negative evidence for the
+        # sources available at that time. Once a healthy Ani-RSS snapshot maps
+        # an explicit cover to the work, release that negative cache so the next
+        # normal image request can use Ani-RSS immediately instead of waiting for
+        # the 24/72-hour cover-maintenance cadence (or forever outside its window).
+        if cover_candidates and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_image'").fetchone():
+            db.executemany(
+                "UPDATE anime_image SET fetched_at=NULL,error=NULL "
+                "WHERE anime_id=? AND image_blob IS NULL AND error='no_cover'",
+                [(anime_id,) for anime_id in sorted(cover_candidates)],
+            )
         missing = list(db.execute("SELECT remote_id,missed_successful_syncs FROM ani_rss_subscription WHERE deleted_at IS NULL"))
         deleted = 0
         # A truncated/paginated listAni response must never age unseen rows toward
-        # deletion. The advertised total gives a cheap completeness proof while
-        # still allowing older Ani-RSS versions without a total field to sync.
-        if listing_complete:
+        # deletion. Older Ani-RSS versions without ``total`` may still sync new or
+        # updated rows, but absence alone is not strong enough evidence to delete a
+        # previously verified subscription.
+        if deletion_snapshot_complete:
             for row in missing:
                 if str(row[0]) in seen:
                     continue
@@ -972,7 +1098,8 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             "mediaSubscriptions": len(media_results), "mediaFailures": media_failures,
             "mediaDeferred": media_deferred, "listingComplete": listing_complete,
             "snapshotComplete": snapshot_complete,
-            "mediaItems": sum(len(items) for items in media_results.values())}
+            "mediaItems": sum(len(items) for items in media_results.values()),
+            "resourceRefreshRequired": resource_refresh_required}
 
 
 def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -984,6 +1111,10 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
         db.row_factory = sqlite3.Row
         table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone()
         row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone() if table else None
+        metadata_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone()
+        route_row = db.execute(
+            "SELECT value FROM metadata WHERE key='ani_rss_route_revision'"
+        ).fetchone() if metadata_table else None
     if not row:
         return {"endpoint": settings["endpoint"],
                 "connection_state": "unconfigured" if not credential_configured else "unknown",
@@ -1003,6 +1134,16 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
           or str(row["credential_fingerprint"] or "") != expected_fingerprint):
         result.update(connection_state="unknown", configured_mode=settings["mode"],
                       effective_mode="manual", endpoint=settings["endpoint"], error=None)
+    else:
+        current_route_revision = _route_revision(settings)
+        if current_route_revision is not None:
+            try:
+                recorded_route_revision = int(route_row[0]) if route_row else None
+            except (TypeError, ValueError):
+                recorded_route_revision = None
+            if recorded_route_revision != current_route_revision:
+                result.update(connection_state="unknown", configured_mode=settings["mode"],
+                              effective_mode="manual", endpoint=settings["endpoint"], error=None)
     return result
 
 
@@ -1073,7 +1214,14 @@ def _resource_fields(title: str) -> tuple[str, int | None, int | None]:
 
 
 def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any]:
-    client = _client(config); stamp = utcnow()
+    settings = _settings(config)
+    key = _secret()
+    if not key:
+        raise ValueError("Ani-RSS API key is not configured")
+    provider_endpoint = settings["endpoint"]
+    provider_fingerprint = _credential_fingerprint(key, provider_endpoint)
+    provider_route_revision = _route_revision(settings)
+    client = _client(config, key); stamp = utcnow()
     poll_minutes = max(5, int(config.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
     expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=max(24, poll_minutes / 30))).replace(microsecond=0).isoformat()
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
@@ -1085,11 +1233,37 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             ON CONFLICT(anime_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,error_text=NULL""", (anime_id, stamp))
         names = [str(work[key] or "").strip() for key in ("title_zh_hans", "title_ja", "title_en")]
         names = list(dict.fromkeys(name for name in names if name))
+    def record_failure(exc: BaseException) -> None:
+        with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as failure_db, failure_db:
+            migrate(failure_db)
+            failure_db.execute(
+                "UPDATE ani_rss_search_state SET error_text=? WHERE anime_id=?",
+                (f"{type(exc).__name__}: {exc}", anime_id),
+            )
+
+    def remote_call(path: str, *, expected_type: type[Any] | None = None, **kwargs: Any) -> Any:
+        try:
+            result = client.call(path, **kwargs)
+            if expected_type is not None and result is not None and not isinstance(result, expected_type):
+                raise RuntimeError(f"Ani-RSS {path} returned an unsupported payload")
+            return result
+        except (OSError, ValueError, RuntimeError, urllib.error.URLError, httpx.RequestError) as exc:
+            record_failure(exc)
+            raise
+
+    def mapping_list(value: Any, label: str) -> list[dict[str, Any]]:
+        try:
+            return _strict_mapping_list(value, label)
+        except RuntimeError as exc:
+            record_failure(exc)
+            raise
+
     found: dict[str, dict[str, Any]] = {}
-    for name in names[:2]:
-        data = client.call("mikan", params={"text": name}, body=_season(str(work["start_month"] or "")), timeout=60) or {}
-        for week in data.get("weeks") or []:
-            for item in week.get("items") or []:
+    for name in names:
+        data = remote_call("mikan", expected_type=dict, params={"text": name},
+                           body=_season(str(work["start_month"] or "")), timeout=60) or {}
+        for week in mapping_list(data.get("weeks"), "mikan.weeks"):
+            for item in mapping_list(week.get("items"), "mikan.weeks[].items"):
                 url = str(item.get("url") or "")
                 if url:
                     found[url] = item
@@ -1097,11 +1271,14 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             break
     resources: list[dict[str, Any]] = []
     for item_url, item in found.items():
-        groups = client.call("mikanGroup", params={"url": item_url}, timeout=60) or []
+        groups = mapping_list(
+            remote_call("mikanGroup", expected_type=list, params={"url": item_url}, timeout=60) or [],
+            "mikanGroup",
+        )
         for group in groups:
             label = str(group.get("label") or "").strip() or "Other"
             rss = str(group.get("rss") or "").strip()
-            items = [entry for entry in (group.get("items") or []) if isinstance(entry, dict)]
+            items = mapping_list(group.get("items"), "mikanGroup[].items")
             if not rss:
                 continue
             episodes = [ep for entry in items for ep in [_resource_fields(str(entry.get("title") or ""))[2]] if ep is not None]
@@ -1136,7 +1313,16 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                 -(item["resolution"] or 0), -item["count"], item["title"])
     resources.sort(key=rank)
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
-        migrate(db); db.execute("DELETE FROM ani_rss_resource WHERE anime_id=?", (anime_id,))
+        migrate(db)
+        current_state = db.execute(
+            "SELECT endpoint,credential_fingerprint,connection_state FROM ani_rss_state WHERE singleton=1"
+        ).fetchone()
+        current_route_revision = _route_revision(settings)
+        if (current_state and (str(current_state[0]) != provider_endpoint
+                or str(current_state[1] or "") != provider_fingerprint)
+                or current_route_revision != provider_route_revision):
+            return {"animeId": anime_id, "found": 0, "eligible": 0, "stale": True}
+        db.execute("DELETE FROM ani_rss_resource WHERE anime_id=?", (anime_id,))
         for index, item in enumerate(resources):
             db.execute("INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (item["resource_id"], anime_id, "ani-rss", item["kind"], item["title"], item["group"],
@@ -1348,12 +1534,20 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
                                     (requested_id, owner, utcnow())).fetchone()
         if choose_remote and not remote:
             # Automatic queries are allowed only after a healthy connection
-            # has made the configured mode effective.
-            search(db_path, owner, config)
-            with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
-                db.row_factory = sqlite3.Row
-                remote = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id IN (?,?) AND eligible=1 AND expires_at>=? ORDER BY rank_key,resource_id LIMIT 1",
-                                    (requested_id, owner, utcnow())).fetchone()
+            # has made the configured mode effective. If Ani-RSS disappears
+            # between the last healthy snapshot and this user action, keep the
+            # request on AnimeMachine's own resource path instead of surfacing
+            # an optional-integration transport failure.
+            try:
+                search(db_path, owner, config)
+            except (OSError, RuntimeError, urllib.error.URLError, httpx.RequestError):
+                remote_available = False
+                choose_remote = False
+            if choose_remote:
+                with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
+                    db.row_factory = sqlite3.Row
+                    remote = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id IN (?,?) AND eligible=1 AND expires_at>=? ORDER BY rank_key,resource_id LIMIT 1",
+                                        (requested_id, owner, utcnow())).fetchone()
         if remote:
             remote_jobs.append(_remote_plan_job(remote))
         elif routing_mode == "ani-rss":

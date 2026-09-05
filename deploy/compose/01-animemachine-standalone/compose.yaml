@@ -2,12 +2,12 @@ name: animemachine
 
 services:
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.0}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
     restart: unless-stopped
     init: true
-    user: "${PUID:-1000}:${PGID:-1000}"
-    env_file: ${ANM_ENV_FILE:-.env}
     environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
       ANM_CONFIG_PATH: /Config/config.json
       ANM_STATE_DIR: /Data/state
       ANM_IMPORTS_DIR: /Imports
@@ -20,6 +20,19 @@ services:
       ANM_SUBMISSION_ENABLED: "true"
       ANM_WEB_PORT: "8787"
       ANM_BIND_ADDRESS: "0.0.0.0"
+      ANM_ADMIN_USERNAME: "${ANM_ADMIN_USERNAME:-}"
+      ANM_ADMIN_PASSWORD: "${ANM_ADMIN_PASSWORD:-}"
+      ANM_AUTH_ENABLED: "${ANM_AUTH_ENABLED:-}"
+      ANM_SYNC_INTERVAL_MINUTES: "${ANM_SYNC_INTERVAL_MINUTES:-30}"
+      ANM_PUBLIC_URL: "${ANM_PUBLIC_URL:-}"
+      ANM_CA_BUNDLE: "${ANM_CA_BUNDLE:-}"
+      HTTP_PROXY: "${HTTP_PROXY:-}"
+      HTTPS_PROXY: "${HTTPS_PROXY:-}"
+      ALL_PROXY: "${ALL_PROXY:-}"
+      ANM_ANI_RSS_URL: "${ANM_ANI_RSS_URL:-}"
+      ANM_ANI_RSS_API_KEY: "${ANM_ANI_RSS_API_KEY:-}"
+      ANM_ANI_RSS_MODE: "${ANM_ANI_RSS_MODE:-prefer}"
+      NO_PROXY: "${NO_PROXY:-localhost,127.0.0.1,host.docker.internal}"
     volumes:
       - ${ANM_CONFIG_DIR:-./config}:/Config
       - ${ANM_DATA_DIR:-./data}:/Data

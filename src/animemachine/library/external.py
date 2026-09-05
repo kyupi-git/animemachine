@@ -351,12 +351,23 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
             if source.get("readOnly") is not True:
                 raise ValueError(f"external library {source_id} must be explicitly read-only")
             previous = db.execute(
-                "SELECT last_scan_at,evidence_json,scan_state FROM external_library_source WHERE source_id=?",
+                "SELECT last_scan_at,evidence_json,scan_state,root_path,kind FROM external_library_source WHERE source_id=?",
                 (source_id,),
             ).fetchone()
             previous_evidence = json.loads(str(previous[1])) if previous and previous[1] else {}
-            force_remap = int(previous_evidence.get("matchRuleVersion", 0)) != MATCH_RULE_VERSION
+            source_changed = bool(previous and (str(previous[3]) != str(root) or str(previous[4]).casefold() != kind))
+            force_remap = source_changed or int(previous_evidence.get("matchRuleVersion", 0)) != MATCH_RULE_VERSION
             interval = max(5, int(source.get("scanMinutes", 60)))
+            if previous and str(previous[2]) == "ready" and not force_remap:
+                with contextlib.suppress(ValueError):
+                    last = dt.datetime.fromisoformat(str(previous[0]).replace("Z", "+00:00"))
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=dt.timezone.utc)
+                    now = dt.datetime.now(dt.timezone.utc)
+                    last = last.astimezone(dt.timezone.utc)
+                    if last <= now + dt.timedelta(minutes=1) and now - last < dt.timedelta(minutes=interval):
+                        stats["deferred"] += 1
+                        continue
             storage = status_for_path(root, timeout=4.0)
             if storage.state != AVAILABLE:
                 last_scan = str(previous[0]) if previous else "1970-01-01T00:00:00+00:00"
@@ -371,11 +382,6 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                 stats["unavailable"] += 1
                 if progress: progress(dict(stats))
                 continue
-            if previous and str(previous[2]) == "ready" and not force_remap:
-                last = dt.datetime.fromisoformat(str(previous[0]).replace("Z", "+00:00"))
-                if dt.datetime.now(dt.timezone.utc) - last < dt.timedelta(minutes=interval):
-                    stats["deferred"] += 1
-                    continue
             stats["sources"] += 1
             source_counters = {key: stats[key] for key in ("files", "unchanged", "verified", "ambiguous", "unmatched")}
             seen: set[str] = set()

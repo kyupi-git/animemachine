@@ -78,6 +78,84 @@ class CliBootstrapTests(unittest.TestCase):
         self.assertNotIn("Access:", text)
         self.assertNotIn("http://127.0.0.1:8787", text)
 
+
+    def test_remote_zero_config_generates_and_reports_initial_admin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            environment = {"ANM_AUTH_DB": str(state / "auth" / "auth.sqlite3")}
+            with mock.patch.object(anm_cli, "STATE", state), mock.patch.dict(os.environ, environment, clear=True):
+                values = anm_cli.configure_web_security("0.0.0.0", 8787)
+                self.assertIsNotNone(values)
+                assert values is not None
+                self.assertEqual("admin", values["username"])
+                self.assertTrue(values["password"].startswith("anm_"))
+                self.assertEqual("true", os.environ["ANM_AUTH_ENABLED"])
+                self.assertTrue((state / "auth" / "initial-admin.txt").is_file())
+
+    def test_remote_zero_config_reuses_and_reports_saved_admin_after_bootstrap(self):
+        from animemachine.api import auth
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            auth_db = state / "auth" / "auth.sqlite3"
+            environment = {"ANM_AUTH_DB": str(auth_db)}
+            with mock.patch.object(anm_cli, "STATE", state), mock.patch.dict(os.environ, environment, clear=True):
+                first = anm_cli.configure_web_security("0.0.0.0", 8787)
+                assert first is not None
+                auth.Store(auth_db, enabled=True, bootstrap_username=first["username"],
+                           bootstrap_password=first["password"])
+            with mock.patch.object(anm_cli, "STATE", state), mock.patch.dict(os.environ, environment, clear=True):
+                second = anm_cli.configure_web_security("0.0.0.0", 8787)
+            self.assertIsNotNone(second)
+            assert second is not None
+            self.assertEqual(first["username"], second["username"])
+            self.assertEqual(first["password"], second["password"])
+
+    def test_remote_first_start_reports_deployment_supplied_admin_password(self):
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw) / "state"
+            environment = {
+                "ANM_AUTH_DB": str(state / "auth" / "auth.sqlite3"),
+                "ANM_ADMIN_USERNAME": "operator",
+                "ANM_ADMIN_PASSWORD": "deployment-password-123",
+            }
+            with mock.patch.object(anm_cli, "STATE", state), mock.patch.dict(os.environ, environment, clear=True):
+                values = anm_cli.configure_web_security("0.0.0.0", 8787)
+            self.assertEqual("operator", values["username"] if values else None)
+            self.assertEqual("deployment-password-123", values["password"] if values else None)
+
+    def test_managed_qbt_bootstrap_generates_stable_zero_config_secrets(self):
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {}, clear=True):
+            root = Path(raw)
+            anm_cli.bootstrap_qbittorrent(root)
+            first_key = (root / ".animemachine" / "api-key").read_text(encoding="utf-8").strip()
+            first_password = (root / ".animemachine" / "web-password").read_text(encoding="utf-8").strip()
+            self.assertRegex(first_key, r"^qbt_[A-Za-z0-9]{28}$")
+            self.assertGreaterEqual(len(first_password), 12)
+            anm_cli.bootstrap_qbittorrent(root)
+            self.assertEqual(first_key, (root / ".animemachine" / "api-key").read_text().strip())
+            self.assertEqual(first_password, (root / ".animemachine" / "web-password").read_text().strip())
+
+    def test_managed_ani_rss_bootstrap_generates_stable_zero_config_api_key(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            qbt_key = root / "qbt-key"
+            qbt_key.write_text("qbt_0123456789abcdefghijklmnopqr", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"ANM_QBT_API_KEY_FILE": str(qbt_key)}, clear=True):
+                ani_root = root / "ani"
+                anm_cli.bootstrap_ani_rss(ani_root)
+                first = (ani_root / ".animemachine" / "api-key").read_text(encoding="utf-8").strip()
+                self.assertGreaterEqual(len(first), 24)
+                anm_cli.bootstrap_ani_rss(ani_root)
+                self.assertEqual(first, (ani_root / ".animemachine" / "api-key").read_text().strip())
+                data = __import__("json").loads((ani_root / "config.v2.json").read_text(encoding="utf-8"))
+                self.assertEqual(first, data["apiKey"])
+                self.assertEqual(qbt_key.read_text().strip(), data["downloadToolPassword"])
+                self.assertEqual("http://qbittorrent:8080", data["downloadToolHost"])
+                self.assertTrue(data["autoStart"])
+                self.assertTrue(data["qbUseDownloadPath"])
+                self.assertEqual("/Media/番剧/${title}/Season ${season}", data["downloadPathTemplate"])
+                self.assertEqual("/Media/剧场版/${title}", data["ovaDownloadPathTemplate"])
+
     def test_qbt_bootstrap_preserves_preferences_and_sets_api_key(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -129,7 +207,9 @@ class CliBootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             config = root / "config.v2.json"
-            config.write_text('{"customValue":true,"autoStart":false}\n', encoding="utf-8")
+            config.write_text(
+                '{"customValue":true,"autoStart":false,"qbUseDownloadPath":false,'
+                '"downloadPathTemplate":"/Media/custom"}\n', encoding="utf-8")
             environment = {
                 "ANM_ANI_RSS_API_KEY": "ani_unit-test-abcdefghijklmnopqrstuvwxyz",
                 "ANM_QBT_API_KEY": "qbt_unit-test-abcdefghijklmnopqrstuvwxyz",
@@ -139,9 +219,27 @@ class CliBootstrapTests(unittest.TestCase):
                 anm_cli.bootstrap_ani_rss(root)
             data = __import__("json").loads(config.read_text(encoding="utf-8"))
             self.assertTrue(data["customValue"])
-            self.assertTrue(data["autoStart"])
+            self.assertFalse(data["autoStart"])
+            self.assertFalse(data["qbUseDownloadPath"])
+            self.assertEqual("/Media/custom", data["downloadPathTemplate"])
             self.assertEqual("http://download-client:8080", data["downloadToolHost"])
             self.assertEqual(environment["ANM_ANI_RSS_API_KEY"], data["apiKey"])
+
+    def test_ani_rss_bootstrap_seeds_first_run_defaults(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            environment = {
+                "ANM_ANI_RSS_API_KEY": "ani_unit-test-abcdefghijklmnopqrstuvwxyz",
+                "ANM_QBT_API_KEY": "qbt_unit-test-abcdefghijklmnopqrstuvwxyz",
+            }
+            with mock.patch.dict(os.environ, environment):
+                anm_cli.bootstrap_ani_rss(root)
+            data = __import__("json").loads((root / "config.v2.json").read_text(encoding="utf-8"))
+            self.assertTrue(data["autoStart"])
+            self.assertTrue(data["qbUseDownloadPath"])
+            self.assertEqual("/Media/番剧/${title}/Season ${season}", data["downloadPathTemplate"])
+            self.assertEqual("/Media/剧场版/${title}", data["ovaDownloadPathTemplate"])
+
 
 
 if __name__ == "__main__":

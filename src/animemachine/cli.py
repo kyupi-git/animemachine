@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
-import concurrent.futures
 import hashlib
 import ipaddress
 import json
@@ -13,13 +12,14 @@ import os
 import re
 import shutil
 import secrets
+import string
 import sqlite3
 import subprocess
 import sys
 import threading
 import time
-import urllib.error
 from pathlib import Path
+from collections.abc import Callable
 
 from .catalog import service as catalog, metadata_repair
 from .torrents import runtime as runtime_catalog, mapper as torrent_mapper
@@ -58,6 +58,37 @@ def _secret_value(value_env: str, file_env: str, default_file: str = "") -> str:
     if not path.is_file():
         return ""
     return path.read_text(encoding="utf-8").strip()
+
+
+def _persist_bootstrap_secret(path: Path, value: str) -> None:
+    """Persist a generated/shared service secret without exposing it in logs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(temporary, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(value + "\n")
+    temporary.replace(path)
+    _restrict_credential_permissions(path)
+
+
+def _shared_bootstrap_secret(
+    config_dir: Path, name: str, value_env: str, file_env: str, default_file: str,
+    generator: Callable[[], str], validator: Callable[[str], bool], error_message: str,
+) -> str:
+    """Use deployment input when present, otherwise reuse or generate a stable secret."""
+    supplied = _secret_value(value_env, file_env, default_file)
+    shared_path = config_dir / ".animemachine" / name
+    persisted = ""
+    if shared_path.is_file():
+        with contextlib.suppress(OSError):
+            persisted = shared_path.read_text(encoding="utf-8").strip()
+    value = supplied or persisted or str(generator())
+    if not validator(value):
+        raise ValueError(error_message)
+    if value != persisted:
+        _persist_bootstrap_secret(shared_path, value)
+    return value
 
 
 class InstanceLock:
@@ -114,16 +145,24 @@ def bootstrap_qbittorrent(config_dir: Path) -> None:
     This runs as a one-shot Compose service before qBittorrent starts. Existing
     preferences are preserved and the secret is never printed.
     """
-    api_key = _secret_value("ANM_QBT_API_KEY", "ANM_QBT_API_KEY_FILE", "/run/secrets/qbittorrent_api_key")
-    if not re.fullmatch(r"qbt_[A-Za-z0-9]{28}", api_key):
-        raise ValueError("qBittorrent API key must use qbt_ followed by 28 alphanumeric characters")
+    alphabet = string.ascii_letters + string.digits
+    qbt_key = _shared_bootstrap_secret(
+        config_dir, "api-key", "ANM_QBT_API_KEY", "ANM_QBT_API_KEY_FILE",
+        "/run/secrets/qbittorrent_api_key",
+        lambda: "qbt_" + "".join(secrets.choice(alphabet) for _ in range(28)),
+        lambda value: re.fullmatch(r"qbt_[A-Za-z0-9]{28}", value) is not None,
+        "qBittorrent API key must use qbt_ followed by 28 alphanumeric characters",
+    )
     username = os.getenv("ANM_QBT_WEB_USERNAME", "admin").strip() or "admin"
-    password = _secret_value("ANM_QBT_WEB_PASSWORD", "ANM_QBT_WEB_PASSWORD_FILE",
-                             "/run/secrets/qbittorrent_web_password")
-    if len(password) < 12:
-        raise ValueError("qBittorrent Web password must contain at least 12 characters")
+    web_secret = _shared_bootstrap_secret(
+        config_dir, "web-password", "ANM_QBT_WEB_PASSWORD", "ANM_QBT_WEB_PASSWORD_FILE",
+        "/run/secrets/qbittorrent_web_password",
+        lambda: "qbt_" + secrets.token_urlsafe(24),
+        lambda value: len(value) >= 12,
+        "qBittorrent Web password must contain at least 12 characters",
+    )
     salt = secrets.token_bytes(16)
-    digest = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 100000, dklen=64)
+    digest = hashlib.pbkdf2_hmac("sha512", web_secret.encode(), salt, 100000, dklen=64)
     password_value = f'"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(digest).decode()})"'
     path = config_dir / "qBittorrent" / "qBittorrent.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,7 +176,7 @@ def bootstrap_qbittorrent(config_dir: Path) -> None:
             text = pattern.sub(lambda _match, k=key, v=value: f"{k}={v}", text)
         else:
             text = text.replace(f"[{section}]\n", f"[{section}]\n{key}={value}\n", 1)
-    for key, value in ((r"WebUI\APIKey", api_key), (r"WebUI\Username", username),
+    for key, value in ((r"WebUI\APIKey", qbt_key), (r"WebUI\Username", username),
                        (r"WebUI\Password_PBKDF2", password_value), (r"WebUI\Address", "0.0.0.0"),
                        (r"WebUI\ServerDomains", "*")):
         set_value("Preferences", key, value)
@@ -159,13 +198,16 @@ def bootstrap_ani_rss(config_dir: Path) -> None:
     connection are declared by Compose. External Ani-RSS instances are never
     modified by this command.
     """
-    ani_key = _secret_value("ANM_ANI_RSS_API_KEY", "ANM_ANI_RSS_API_KEY_FILE",
-                            "/run/secrets/ani_rss_api_key")
+    ani_key = _shared_bootstrap_secret(
+        config_dir, "api-key", "ANM_ANI_RSS_API_KEY", "ANM_ANI_RSS_API_KEY_FILE",
+        "/run/secrets/ani_rss_api_key", lambda: "ani_" + secrets.token_urlsafe(24),
+        lambda value: len(value) >= 24 and not any(character.isspace() for character in value),
+        "Ani-RSS API key must contain at least 24 non-space characters",
+    )
     qbt_key = _secret_value("ANM_QBT_API_KEY", "ANM_QBT_API_KEY_FILE",
                             "/run/secrets/qbittorrent_api_key")
-    for name, value in (("Ani-RSS", ani_key), ("qBittorrent", qbt_key)):
-        if len(value) < 24 or any(character.isspace() for character in value):
-            raise ValueError(f"{name} API key must contain at least 24 non-space characters")
+    if len(qbt_key) < 24 or any(character.isspace() for character in qbt_key):
+        raise ValueError("qBittorrent API key must contain at least 24 non-space characters")
     path = config_dir / "config.v2.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
@@ -175,11 +217,14 @@ def bootstrap_ani_rss(config_dir: Path) -> None:
         "downloadToolHost": os.getenv("ANM_MANAGED_QBITTORRENT_URL", "http://qbittorrent:8080").strip(),
         "downloadToolUsername": "",
         "downloadToolPassword": qbt_key,
-        "qbUseDownloadPath": True,
-        "downloadPathTemplate": "/Media/番剧/${title}/Season ${season}",
-        "ovaDownloadPathTemplate": "/Media/剧场版/${title}",
-        "autoStart": True,
     })
+    for key, value in (
+        ("qbUseDownloadPath", True),
+        ("downloadPathTemplate", "/Media/番剧/${title}/Season ${season}"),
+        ("ovaDownloadPathTemplate", "/Media/剧场版/${title}"),
+        ("autoStart", True),
+    ):
+        data.setdefault(key, value)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
@@ -226,6 +271,21 @@ def _auth_user_count() -> int:
             return int(db.execute("SELECT COUNT(*) FROM auth_user").fetchone()[0])
     except sqlite3.Error:
         return 0
+
+
+def _bootstrap_admin_active(username: str) -> bool:
+    path = Path(os.getenv("ANM_AUTH_DB", str(STATE / "auth" / "auth.sqlite3")))
+    if not path.is_file() or not username.strip():
+        return False
+    try:
+        with contextlib.closing(sqlite3.connect(path, timeout=2)) as db:
+            row = db.execute(
+                "SELECT enabled,role FROM auth_user WHERE username=? COLLATE NOCASE",
+                (username.strip(),),
+            ).fetchone()
+        return bool(row and int(row[0]) == 1 and str(row[1]) == "admin")
+    except sqlite3.Error:
+        return False
 
 
 def _bootstrap_credential_file() -> Path:
@@ -288,12 +348,17 @@ def configure_web_security(host: str, port: int) -> dict[str, str] | None:
     if remote and not enabled and os.getenv("ANM_ALLOW_REMOTE_NO_AUTH", "").strip().casefold() not in {"1", "true", "yes", "on"}:
         raise ValueError("remote binding requires authentication; use loopback or explicitly enable the advanced remote-no-auth override")
     os.environ["ANM_AUTH_ENABLED"] = "true" if enabled else "false"
-    if not enabled or _auth_user_count() > 0:
+    if not enabled:
+        return None
+    path = _bootstrap_credential_file()
+    if _auth_user_count() > 0:
+        saved = _read_bootstrap_credentials(path)
+        if saved and _bootstrap_admin_active(saved[0]):
+            return {"address": f"http://127.0.0.1:{port}" if remote else f"http://{host}:{port}",
+                    "username": saved[0], "password": saved[1], "path": str(path)}
         return None
     username = os.getenv("ANM_ADMIN_USERNAME", "").strip() or "admin"
     password = os.getenv("ANM_ADMIN_PASSWORD", "")
-    generated = False
-    path = _bootstrap_credential_file()
     if not password:
         saved = _read_bootstrap_credentials(path)
         if saved:
@@ -301,11 +366,8 @@ def configure_web_security(host: str, port: int) -> dict[str, str] | None:
         else:
             password = "anm_" + secrets.token_urlsafe(24)
             _write_bootstrap_credentials(path, username, password)
-            generated = True
     os.environ["ANM_ADMIN_USERNAME"] = username
     os.environ["ANM_ADMIN_PASSWORD"] = password
-    if not generated:
-        return None
     address = f"http://127.0.0.1:{port}" if remote else f"http://{host}:{port}"
     return {"address": address, "username": username, "password": password, "path": str(path)}
 
@@ -313,7 +375,7 @@ def configure_web_security(host: str, port: int) -> dict[str, str] | None:
 def _print_initial_credentials(values: dict[str, str] | None) -> None:
     if not values:
         return
-    print("\n========== AnimeMachine initial login ==========", flush=True)
+    print("\n========== AnimeMachine login =================", flush=True)
     print(f"Username: {values['username']}", flush=True)
     print(f"Password: {values['password']}", flush=True)
     print(f"Saved:    {values['path']}", flush=True)
@@ -551,52 +613,6 @@ def periodic_sync(stop: threading.Event, bootstrap_finished: threading.Event | N
             last_run = time.monotonic() - max(0, minutes * 60 - 300)
 
 
-def periodic_ani_rss_resource_refresh(stop: threading.Event, bootstrap_finished: threading.Event | None = None) -> None:
-    """Refresh Ani-RSS discovery on the Torrent-Pool cadence for the rolling latest 24 months."""
-    if bootstrap_finished is not None:
-        while not bootstrap_finished.wait(1):
-            if stop.is_set():
-                return
-    # Startup cover warmup already performs the first ordered discovery pass.
-    # Delay this maintenance pass until one configured pool interval has elapsed.
-    last_run = time.monotonic()
-    while not stop.wait(30):
-        current = ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read()
-        minutes = max(5, int(current.get("components", {}).get("discovery", {}).get("pollMinutes", 30)))
-        if time.monotonic() - last_run < minutes * 60:
-            continue
-        try:
-            # Never queue or overlap automatic discovery passes. If startup warmup
-            # (or another scheduled pass) is still active, this due tick is skipped
-            # and retried on the next scheduler check without advancing last_run.
-            with ani_rss.background_resource_scan_lease() as allowed:
-                if not allowed:
-                    continue
-                status = ani_rss.state(DB, current)
-                if status.get("connection_state") != "ready" or status.get("effective_mode") not in {"prefer", "fallback"}:
-                    last_run = time.monotonic()
-                    continue
-                ordered = ani_rss.automatic_search_ids(DB)
-                due = [anime_id for anime_id in ordered if ani_rss.background_search_due(DB, anime_id, current)]
-                if due:
-                    workers = max(1, min(4, int(os.getenv("ANM_ANI_RSS_REFRESH_WORKERS", "2"))))
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anm-ani-refresh") as pool:
-                        futures = {pool.submit(ani_rss.search, DB, anime_id, current): anime_id for anime_id in due}
-                        for future in concurrent.futures.as_completed(futures):
-                            if stop.is_set():
-                                for pending in futures:
-                                    pending.cancel()
-                                return
-                            try:
-                                future.result()
-                            except (OSError, ValueError, RuntimeError, sqlite3.Error, urllib.error.URLError):
-                                pass
-                last_run = time.monotonic()
-        except Exception as exc:
-            print(f"[Ani-RSS] Resource refresh deferred: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-            last_run = time.monotonic() - max(0, minutes * 60 - 300)
-
-
 def healthcheck() -> int:
     try:
         port = int(os.getenv("ANM_WEB_PORT", "8787"))
@@ -615,7 +631,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run")
     run_parser = sub.choices["run"]
-    run_parser.add_argument("--host", default=os.getenv("ANM_BIND_ADDRESS", "127.0.0.1"))
+    run_parser.add_argument("--host", default=os.getenv("ANM_BIND_ADDRESS", "0.0.0.0"))
     run_parser.add_argument("--port", type=int, default=int(os.getenv("ANM_WEB_PORT", "8787")))
     init = sub.add_parser("init")
     init.add_argument("--force", action="store_true")
@@ -687,8 +703,6 @@ def main() -> int:
                                  name="anm-bootstrap").start()
                 threading.Thread(target=periodic_sync, args=(stop, bootstrap_finished), daemon=True,
                                  name="anm-periodic-sync").start()
-                threading.Thread(target=periodic_ani_rss_resource_refresh, args=(stop, bootstrap_finished), daemon=True,
-                                 name="anm-ani-rss-resource-refresh").start()
             restart_requested = catalog.serve(
                 DB, args.host, args.port, CONFIG,
                 submission_enabled=os.getenv("ANM_SUBMISSION_ENABLED", "true").casefold() == "true",
@@ -703,7 +717,7 @@ def main() -> int:
     else:
         start_background_workers = None
         bootstrap_finished = None
-    legacy_host = os.getenv("ANM_BIND_ADDRESS", "127.0.0.1")
+    legacy_host = os.getenv("ANM_BIND_ADDRESS", "0.0.0.0")
     legacy_port = int(os.getenv("ANM_WEB_PORT", "8787"))
     _print_initial_credentials(configure_web_security(legacy_host, legacy_port))
     catalog.serve(DB, legacy_host, legacy_port, CONFIG,
