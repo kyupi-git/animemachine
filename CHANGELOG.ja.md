@@ -1,4 +1,4 @@
-[中文](CHANGELOG.md) | [English](CHANGELOG.en.md) | [日本語](CHANGELOG.ja.md)  
+[中文](CHANGELOG.md) | [English](CHANGELOG.en.md) | [日本語](CHANGELOG.ja.md)
 [README](README.ja.md) | [導入・利用ガイド](docs/guide.ja.md) | [アーキテクチャとデータベース](docs/architecture.ja.md) | [更新履歴](CHANGELOG.ja.md)
 
 # 更新履歴
