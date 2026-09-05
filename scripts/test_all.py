@@ -46,18 +46,20 @@ def main() -> int:
     env["PYTHONPATH"] = os.pathsep.join(
         value for value in (str(SRC), str(TESTS), env.get("PYTHONPATH", "")) if value
     )
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     with tempfile.TemporaryDirectory(prefix="anm-test-runtime-") as runtime_dir:
         env["ANM_STATE_DIR"] = str(Path(runtime_dir) / "state")
         env["ANM_CONFIG_CACHE"] = str(Path(runtime_dir) / "config-cache.json")
         for path in sorted(TESTS.rglob("test_*.py")):
             module = ".".join(path.relative_to(TESTS).with_suffix("").parts)
-            with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
+            with tempfile.TemporaryFile(mode="w+b") as output:
                 completed = subprocess.run(
                     [sys.executable, "-m", "unittest", module],
-                    cwd=ROOT, env=env, stdout=output, stderr=output, text=True, timeout=180, check=False,
+                    cwd=ROOT, env=env, stdout=output, stderr=output, timeout=180, check=False,
                 )
                 output.seek(0)
-                transcript = output.read()
+                transcript = output.read().decode("utf-8", errors="replace")
             if transcript:
                 sys.stdout.write(transcript)
             if completed.returncode != 0:

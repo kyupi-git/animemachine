@@ -300,6 +300,7 @@ class NetworkConnectivityStateTests(unittest.TestCase):
     def test_successful_opportunistic_remote_request_recovers_confirmed_offline(self):
         current = time.monotonic()
         first = current - connectivity.OFFLINE_AFTER_SECONDS
+        connectivity.note_environment("test-network", now=first)
         connectivity.note_probe(False, now=first)
         for offset in range(60, connectivity.OFFLINE_AFTER_SECONDS + 1, 60):
             connectivity.note_probe(False, now=first + offset)
@@ -310,6 +311,7 @@ class NetworkConnectivityStateTests(unittest.TestCase):
         try:
             with mock.patch.object(transport, "_route_candidates", return_value=[route]), \
                     mock.patch.object(transport, "client", return_value=client), \
+                    mock.patch.object(transport, "network_environment_id", return_value="test-network"), \
                     mock.patch.object(transport, "_remember_route"):
                 response = transport.request("GET", "https://reachable.example/health", timeout=.1)
             self.assertEqual(204, response.status_code)
