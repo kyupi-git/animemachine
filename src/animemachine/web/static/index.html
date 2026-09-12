@@ -148,7 +148,7 @@
                 >Ani-RSS 来源</span
               ></label
             ><label class="check"
-              ><input type="checkbox" value="unavailable" /><span
+              ><input type="checkbox" value="unavailable" checked /><span
                 data-i18n="unavailable"
                 >无可用来源</span
               ></label
@@ -197,9 +197,11 @@
             >
               重新随机
             </button>
+            <button id="radarButton" class="text-button radar-button" type="button" data-i18n="radar" hidden>新作雷达</button>
             <label class="inline"
               ><span data-i18n="sortBy">排序</span
               ><select id="sort">
+                <option value="recent_episode" data-i18n="recentEpisodeSort">新作追更</option>
                 <option value="random" data-i18n="random">随机</option>
                 <option value="date" data-i18n="sortDate">年月</option>
                 <option value="title" data-i18n="sortTitle">名称</option>
@@ -255,6 +257,33 @@
       </button>
     </div>
 
+    <form id="userCreateForm"></form>
+    <dialog id="radarDialog" aria-labelledby="radarTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <div class="radar-shell">
+        <h2 id="radarTitle" data-i18n="radar">新作雷达</h2>
+        <p class="muted" data-i18n="radarHint">TV 优先按新集更新时间，电影按本季度作品/发行事件日期排列；换季前七天自动滚动至下一季。</p>
+        <div id="radarTabs" class="radar-tabs" role="tablist" data-i18n-aria-label="season"></div>
+        <div id="radarPanel" class="radar-panel" role="tabpanel" tabindex="0">
+          <p id="radarStatus" class="muted" role="status"></p>
+          <div id="radarResults" class="table-wrap"></div>
+        </div>
+        <div class="pager">
+          <button id="radarPrev" class="text-button" type="button" data-i18n="previous">上一页</button>
+          <span id="radarPage" class="muted"></span>
+          <button id="radarNext" class="text-button" type="button" data-i18n="next">下一页</button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="radarSubscribeDialog" aria-labelledby="radarSubscribeTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <form id="radarSubscribeForm">
+        <h2 id="radarSubscribeTitle" data-i18n="radarSubscribe">订阅</h2>
+        <p id="radarSubscribeStatus" class="muted" role="status"></p>
+        <label><span data-i18n="radarChooseResource">选择订阅资源</span><select id="radarResource" required></select></label>
+        <button id="radarSubscribeSubmit" class="primary" type="submit" data-i18n="radarSubscribe" disabled>订阅</button>
+      </form>
+    </dialog>
     <dialog id="detailDialog">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div id="detail"></div>
@@ -524,7 +553,6 @@
           </fieldset>
           <fieldset>
             <legend data-i18n="playbackConnection">外部播放器交接</legend>
-            <label class="check"><input id="playbackEnabled" type="checkbox" /><span data-i18n="playbackEnabled">启用 M3U 播放清单</span></label>
             <label class="check"><input id="preferDirectPaths" type="checkbox" /><span data-i18n="preferDirectPaths">优先使用播放器可访问的 SMB / NFS 路径</span></label>
             <label><span data-i18n="playbackPublicUrl">外部设备访问 AnimeMachine 的地址（可留空）</span><input id="playbackPublicUrl" type="url" placeholder="https://anime.example.com" /></label>
             <label><span data-i18n="playlistTtl">播放会话空闲失效时间（秒）</span><input id="playlistTtl" type="number" min="900" max="172800" /></label>
@@ -585,9 +613,9 @@
               <span class="muted" data-i18n="userCreateHint">用户名为 3–64 个字母、数字、点、下划线或连字符；密码至少 10 位。</span>
             </div>
             <div class="user-create-row">
-              <label><span data-i18n="username">用户名</span><input id="newUsername" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" required data-i18n-placeholder="username" autocomplete="off" /></label>
-              <label><span data-i18n="password">密码</span><input id="newUserPassword" type="password" minlength="10" required data-i18n-placeholder="password" autocomplete="new-password" /></label>
-              <label><span data-i18n="userRole">角色</span><select id="newUserRole"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select></label>
+              <label><span data-i18n="username">用户名</span><input id="newUsername" form="userCreateForm" minlength="3" maxlength="64" pattern="[A-Za-z0-9._\-]+" required data-i18n-placeholder="username" autocomplete="off" /></label>
+              <label><span data-i18n="password">密码</span><input id="newUserPassword" form="userCreateForm" type="password" minlength="10" required data-i18n-placeholder="password" autocomplete="new-password" /></label>
+              <label><span data-i18n="userRole">角色</span><select id="newUserRole" form="userCreateForm"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select></label>
               <button id="createUser" type="button" class="primary user-create-button" data-i18n="createUser">创建用户</button>
             </div>
             <p id="userManagementStatus" class="muted user-management-status" aria-live="polite"></p>

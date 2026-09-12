@@ -41,6 +41,7 @@ from ..config.loader import (archive_group_enabled, canonical_resolution, option
 MODES = {"prefer": "prefer", "fallback": "fallback", "manual": "manual"}
 COLLECTION = re.compile(r"(?i)(?:\b(?:batch|complete|collection)\b|合集|全集|全卷|全话|全話|一括)")
 EPISODE = re.compile(r"(?i)(?:\b(?:ep(?:isode)?|e)[ ._-]*(\d{1,4})\b|第\s*(\d{1,4})\s*[话話集])")
+RELEASE_EPISODE = re.compile(r"(?i)(?:\bS\d{1,3}E(\d{1,4})(?:v\d+)?\b|\s-\s(\d{1,3})(?:v\d+)?(?=\s*(?:$|[\[(])))")
 RESOLUTION = re.compile(r"(?i)(2160|1080|720|576|540|480)[pi]")
 SOURCE_CLASS = re.compile(r"(?i)\b(BD(?:Rip)?|DVD(?:Rip)?|WEB[ ._-]?(?:DL|Rip)|HDTV[ ._-]?Rip|TV[ ._-]?Rip)\b")
 
@@ -75,6 +76,14 @@ CREATE TABLE IF NOT EXISTS ani_rss_subscription(
   missed_successful_syncs INTEGER NOT NULL DEFAULT 0,deleted_at TEXT,evidence_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_ani_rss_subscription_anime ON ani_rss_subscription(anime_id,remote_state);
+CREATE TABLE IF NOT EXISTS ani_rss_episode_state(
+  remote_id TEXT PRIMARY KEY,last_download_at TEXT,last_episode_update_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_ani_rss_episode_update ON ani_rss_episode_state(last_episode_update_at,remote_id);
+CREATE TABLE IF NOT EXISTS ani_rss_release_state(
+  anime_id INTEGER PRIMARY KEY,current_episode INTEGER NOT NULL,last_episode_update_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_ani_rss_release_update ON ani_rss_release_state(last_episode_update_at);
 CREATE TABLE IF NOT EXISTS ani_rss_media(
   remote_id TEXT NOT NULL,anime_id INTEGER NOT NULL,filename TEXT NOT NULL,episode REAL,title TEXT NOT NULL,
   name TEXT NOT NULL,size INTEGER NOT NULL,extension TEXT NOT NULL,last_seen_at TEXT NOT NULL,
@@ -109,6 +118,28 @@ def migrate(db: sqlite3.Connection) -> None:
     columns = {str(row[1]) for row in db.execute("PRAGMA table_info(ani_rss_state)")}
     if "credential_fingerprint" not in columns:
         db.execute("ALTER TABLE ani_rss_state ADD COLUMN credential_fingerprint TEXT")
+
+
+def _remote_timestamp(value: Any) -> str | None:
+    """Normalize Ani-RSS millisecond timestamps without trusting wall-clock outliers."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    seconds = numeric / 1000.0 if numeric >= 100_000_000_000 else numeric
+    try:
+        moment = dt.datetime.fromtimestamp(seconds, dt.timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    now = dt.datetime.now(dt.timezone.utc)
+    if moment > now + dt.timedelta(days=1):
+        return None
+    return moment.replace(microsecond=0).isoformat()
+
 
 
 def _credential_fingerprint(key: str, endpoint: str) -> str:
@@ -837,6 +868,7 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             ))
             if resource_refresh_required:
                 db.execute("DELETE FROM ani_rss_resource")
+                db.execute("DELETE FROM ani_rss_release_state")
                 db.execute("DELETE FROM ani_rss_search_state")
             _record_route_revision(db, route_revision)
             db.execute("""INSERT INTO ani_rss_state
@@ -865,6 +897,7 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
         ))
         if resource_refresh_required:
             db.execute("DELETE FROM ani_rss_resource")
+            db.execute("DELETE FROM ani_rss_release_state")
             db.execute("DELETE FROM ani_rss_search_state")
         _record_route_revision(db, route_revision)
         seen: set[str] = set(); mapped = 0
@@ -877,6 +910,10 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             previous = db.execute("""SELECT anime_id,bgm_id,title,enabled,current_episode,total_episode,
                 remote_media_path,evidence_json FROM ani_rss_subscription
                 WHERE remote_id=? AND deleted_at IS NULL""", (remote_id,)).fetchone()
+            previous_episode_state = (db.execute(
+                "SELECT last_download_at,last_episode_update_at FROM ani_rss_episode_state WHERE remote_id=?",
+                (remote_id,),
+            ).fetchone() if previous else None)
             previous_evidence: dict[str, Any] = {}
             if previous:
                 with contextlib.suppress(ValueError, TypeError, json.JSONDecodeError):
@@ -891,6 +928,17 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             if anime_id is None and previous and previous["anime_id"] is not None:
                 anime_id = int(previous["anime_id"])
                 identity = {"mode": "stable_remote_id", "previous": previous_evidence.get("identity")}
+            # A stable remote id normally identifies one subscription, but an
+            # upstream metadata correction can remap that subscription to a
+            # different work without a delete/recreate cycle.  Do not carry
+            # episode/download evidence or optional fields across that identity
+            # boundary; the corrected mapping starts a fresh evidence baseline.
+            if (previous and previous["anime_id"] is not None and anime_id is not None
+                    and int(previous["anime_id"]) != int(anime_id)):
+                previous = None
+                previous_episode_state = None
+                previous_evidence = {}
+                db.execute("DELETE FROM ani_rss_media WHERE remote_id=?", (remote_id,))
             if anime_id is not None:
                 mapped += 1
 
@@ -923,6 +971,19 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             enabled = bool(item.get("enable")) if "enable" in item else bool(previous["enabled"] if previous else False)
             current_episode = integer_value("currentEpisodeNumber", previous["current_episode"] if previous else 0)
             total_episode = integer_value("totalEpisodeNumber", previous["total_episode"] if previous else 0)
+            remote_download_at = _remote_timestamp(item.get("lastDownloadTime"))
+            if remote_download_at is None and previous_episode_state:
+                remote_download_at = str(previous_episode_state["last_download_at"] or "") or None
+            previous_update_at = str(previous_episode_state["last_episode_update_at"] or "") if previous_episode_state else ""
+            episode_update_at = previous_update_at or None
+            previous_current = int(previous["current_episode"] or 0) if previous else 0
+            episode_high_water = max(previous_current, int(previous_evidence.get("episodeHighWater") or 0))
+            if previous:
+                previous_download_at = str(previous_episode_state["last_download_at"] or "") if previous_episode_state else ""
+                if (current_episode > episode_high_water and remote_download_at
+                        and (not previous_download_at or remote_download_at > previous_download_at)):
+                    episode_update_at = remote_download_at
+                remote_download_at = max(remote_download_at or "", previous_download_at) or None
             remote_media_path = str(evidence_value("customDownloadPathTemplate", "downloadPath") or (previous["remote_media_path"] if previous else "") or "").strip() or None
             evidence = {"identity": identity, "generation": generation,
                         "url": subscription_url or None, "bgmUrl": evidence_value("bgmUrl"),
@@ -930,11 +991,16 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
                         "cover": evidence_value("cover"), "image": evidence_value("image"),
                         "mikanTitle": evidence_value("mikanTitle"), "jpTitle": evidence_value("jpTitle"),
                         "type": evidence_value("type"), "customDownloadPathTemplate": remote_media_path, "downloadPath": remote_media_path,
-                        "score": evidence_value("score"), "completed": evidence_value("completed")}
+                        "score": evidence_value("score"), "completed": evidence_value("completed"),
+                        "lastDownloadTime": evidence_value("lastDownloadTime"),
+                        "episodeHighWater": max(episode_high_water, current_episode)}
             if anime_id is not None and str(evidence.get("cover") or "").strip():
                 cover_candidates.add(anime_id)
             title = str(item.get("title") or item.get("jpTitle") or (previous["title"] if previous else "") or remote_id)
-            db.execute("""INSERT INTO ani_rss_subscription VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            db.execute("""INSERT INTO ani_rss_subscription
+                (remote_id,anime_id,title,bgm_id,enabled,subscription_kind,current_episode,total_episode,
+                 remote_media_path,remote_state,first_seen_at,last_seen_at,missed_successful_syncs,deleted_at,evidence_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(remote_id) DO UPDATE SET anime_id=excluded.anime_id,title=excluded.title,
                 bgm_id=excluded.bgm_id,enabled=excluded.enabled,subscription_kind=excluded.subscription_kind,
                 current_episode=excluded.current_episode,total_episode=excluded.total_episode,
@@ -943,6 +1009,10 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
                 (remote_id, anime_id, title, bgm_id, enabled, "follow", current_episode,
                  total_episode, remote_media_path, "enabled" if enabled else "disabled", stamp, stamp, 0, None,
                  json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))))
+            db.execute("""INSERT INTO ani_rss_episode_state(remote_id,last_download_at,last_episode_update_at)
+                VALUES(?,?,?) ON CONFLICT(remote_id) DO UPDATE SET
+                last_download_at=excluded.last_download_at,last_episode_update_at=excluded.last_episode_update_at""",
+                (remote_id, remote_download_at, episode_update_at))
             # playList reflects downloaded media, not subscription scheduling.
             # Keep disabled subscriptions refreshable because their existing files
             # remain valid external read-only media and may still change remotely.
@@ -975,7 +1045,9 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
                 misses = int(row[1]) + 1
                 if misses >= settings["deleteGraceSyncs"]:
                     db.execute("UPDATE ani_rss_subscription SET remote_state='deleted',missed_successful_syncs=?,deleted_at=? WHERE remote_id=?",
-                               (misses, stamp, row[0])); deleted += 1
+                               (misses, stamp, row[0]))
+                    db.execute("DELETE FROM ani_rss_episode_state WHERE remote_id=?", (row[0],))
+                    deleted += 1
                 else:
                     db.execute("UPDATE ani_rss_subscription SET remote_state='missing_unconfirmed',missed_successful_syncs=? WHERE remote_id=?",
                                (misses, row[0]))
@@ -1115,6 +1187,8 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
         route_row = db.execute(
             "SELECT value FROM metadata WHERE key='ani_rss_route_revision'"
         ).fetchone() if metadata_table else None
+        release_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_release_state'").fetchone()
+        release_update = db.execute("SELECT MAX(last_episode_update_at) FROM ani_rss_release_state").fetchone()[0] if release_table else None
     if not row:
         return {"endpoint": settings["endpoint"],
                 "connection_state": "unconfigured" if not credential_configured else "unknown",
@@ -1122,6 +1196,7 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
                 "credentialConfigured": credential_configured, "error": None}
     result = {k: row[k] for k in row.keys() if k not in {"last_error", "credential_fingerprint"}}
     result["credentialConfigured"] = credential_configured
+    result["last_release_update_at"] = release_update
     result["error"] = row["last_error"] and row["last_error"].split(":", 1)[0]
     # A previously healthy endpoint must not keep Ani-RSS logically enabled
     # after its credential is removed or the configured endpoint/mode changes.
@@ -1208,9 +1283,20 @@ def _resource_fields(title: str) -> tuple[str, int | None, int | None]:
     source_class = {"bd": "bdrip", "bdrip": "bdrip", "dvd": "dvdrip", "dvdrip": "dvdrip",
                     "webdl": "webrip", "webrip": "webrip", "hdtvrip": "tvrip", "tvrip": "tvrip"}.get(raw, "webrip")
     resolution = RESOLUTION.search(title)
-    episode = EPISODE.search(title)
+    episode = EPISODE.search(title) or RELEASE_EPISODE.search(title)
     number = int(next(value for value in episode.groups() if value)) if episode else None
     return source_class, int(resolution.group(1)) if resolution else None, number
+
+
+def record_release_progress(db: sqlite3.Connection, anime_id: int, episode: int, stamp: str) -> None:
+    """Keep a monotonic observed frontier; the first scan establishes a baseline."""
+    if episode <= 0:
+        return
+    db.execute("""INSERT INTO ani_rss_release_state VALUES(?,?,NULL)
+        ON CONFLICT(anime_id) DO UPDATE SET
+        current_episode=MAX(current_episode,excluded.current_episode),
+        last_episode_update_at=CASE WHEN excluded.current_episode>current_episode
+            THEN ? ELSE last_episode_update_at END""", (anime_id, episode, stamp))
 
 
 def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any]:
@@ -1323,6 +1409,9 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                 or current_route_revision != provider_route_revision):
             return {"animeId": anime_id, "found": 0, "eligible": 0, "stale": True}
         db.execute("DELETE FROM ani_rss_resource WHERE anime_id=?", (anime_id,))
+        frontier = max((int(item["last"] or 0) for item in resources
+                        if item["kind"] == "follow" and item["eligible"]), default=0)
+        record_release_progress(db, anime_id, frontier, stamp)
         for index, item in enumerate(resources):
             db.execute("INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (item["resource_id"], anime_id, "ani-rss", item["kind"], item["title"], item["group"],
@@ -1373,9 +1462,18 @@ def subscriptions_for_anime(db_path: Path, anime_id: int) -> list[dict[str, Any]
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_subscription'").fetchone():
             return []
-        rows = db.execute("""SELECT remote_id,title,enabled,subscription_kind,current_episode,total_episode,
-            remote_state,last_seen_at FROM ani_rss_subscription WHERE anime_id=? AND deleted_at IS NULL
-            ORDER BY enabled DESC,title""", (anime_id,)).fetchall()
+        has_episode_state = bool(db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_episode_state'").fetchone())
+        if has_episode_state:
+            rows = db.execute("""SELECT s.remote_id,s.title,s.enabled,s.subscription_kind,s.current_episode,s.total_episode,
+                s.remote_state,s.last_seen_at,e.last_download_at,e.last_episode_update_at
+                FROM ani_rss_subscription s LEFT JOIN ani_rss_episode_state e ON e.remote_id=s.remote_id
+                WHERE s.anime_id=? AND s.deleted_at IS NULL ORDER BY s.enabled DESC,s.title""", (anime_id,)).fetchall()
+        else:
+            rows = db.execute("""SELECT remote_id,title,enabled,subscription_kind,current_episode,total_episode,
+                remote_state,last_seen_at,NULL last_download_at,NULL last_episode_update_at
+                FROM ani_rss_subscription WHERE anime_id=? AND deleted_at IS NULL
+                ORDER BY enabled DESC,title""", (anime_id,)).fetchall()
         media_counts: dict[str, int] = {}
         media_episodes: dict[str, list[float]] = {}
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_media'").fetchone():
@@ -1390,7 +1488,8 @@ def subscriptions_for_anime(db_path: Path, anime_id: int) -> list[dict[str, Any]
                  "totalEpisode": row["total_episode"], "state": row["remote_state"],
                  "playableCount": media_counts.get(str(row["remote_id"]), 0),
                  "playableEpisodes": media_episodes.get(str(row["remote_id"]), []),
-                 "lastSeenAt": row["last_seen_at"]} for row in rows]
+                 "lastSeenAt": row["last_seen_at"], "lastDownloadAt": row["last_download_at"],
+                 "lastEpisodeUpdateAt": row["last_episode_update_at"]} for row in rows]
 
 
 def _load_resource(db_path: Path, resource_id: str) -> tuple[sqlite3.Row, dict[str, Any]]:
@@ -1477,6 +1576,7 @@ def delete_subscription(db_path: Path, remote_id: str, config: dict[str, Any], *
         migrate(db)
         db.execute("UPDATE ani_rss_subscription SET remote_state='deleted',deleted_at=?,missed_successful_syncs=0 WHERE remote_id=?",
                    (stamp, remote_id))
+        db.execute("DELETE FROM ani_rss_episode_state WHERE remote_id=?", (remote_id,))
     return {**result, "deleted": True, "remoteId": remote_id, "deleteFiles": bool(delete_files)}
 
 

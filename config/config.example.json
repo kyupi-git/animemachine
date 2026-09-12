@@ -113,7 +113,7 @@
     "catalogView": "cards",
     "imagesEnabled": true,
     "pageSize": 12,
-    "sort": "random",
+    "sort": "recent_episode",
     "sortDirection": "asc",
     "filterDefaults": {
       "mediaTypes": [
@@ -122,7 +122,8 @@
       ],
       "availability": [
         "torrent",
-        "ani-rss"
+        "ani-rss",
+        "unavailable"
       ],
       "libraryStates": [
         "local",

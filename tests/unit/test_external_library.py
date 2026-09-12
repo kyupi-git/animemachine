@@ -96,10 +96,24 @@ class ExternalLibraryTests(unittest.TestCase):
                       "path":str(root / "media"),"readOnly":True,"scanMinutes":60}
             first = external_library.scan(db_path, [source])
             self.assertEqual(1, first["sources"])
-            with mock.patch.object(external_library, "status_for_path", side_effect=AssertionError("storage probe should be deferred")):
+            with mock.patch.object(external_library, "status_for_path", side_effect=AssertionError("storage probe should be deferred")), \
+                    mock.patch.object(external_library, "_title_index", side_effect=AssertionError("title index should be deferred")):
                 second = external_library.scan(db_path, [source])
             self.assertEqual(0, second["sources"])
             self.assertEqual(1, second["deferred"])
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("UPDATE external_library_source SET last_scan_at='2000-01-01T00:00:00+00:00'")
+            with mock.patch.object(external_library, "_title_index", side_effect=AssertionError("unchanged files need no index")):
+                unchanged = external_library.scan(db_path, [source])
+            self.assertEqual(1, unchanged["unchanged"])
+            (media / "作品名 - EP01.mkv").unlink()
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("UPDATE external_library_source SET last_scan_at='2000-01-01T00:00:00+00:00'")
+            with mock.patch.object(external_library, "_title_index", side_effect=AssertionError("empty sources need no index")):
+                empty = external_library.scan(db_path, [source])
+            self.assertEqual(0, empty["files"])
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                self.assertEqual(0, db.execute("SELECT COUNT(*) FROM external_media_file").fetchone()[0])
 
     def test_changed_source_path_bypasses_scan_interval(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -257,4 +271,3 @@ class ExternalLibraryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

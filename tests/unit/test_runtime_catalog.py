@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from animemachine.torrents import runtime as runtime_catalog
@@ -59,6 +60,24 @@ class RuntimeCatalogTests(unittest.TestCase):
             before = runtime_catalog._work_state_signal(db)
             db.execute("UPDATE anime_work SET library_state='existing'")
             self.assertNotEqual(before, runtime_catalog._work_state_signal(db))
+
+    def test_overlay_failure_closes_both_database_connections(self) -> None:
+        opened = []
+        connect = sqlite3.connect
+        class TrackedConnection(sqlite3.Connection):
+            closed = False
+            def close(self):
+                self.closed = True
+                super().close()
+        def tracked(*args, **kwargs):
+            db = connect(*args, **kwargs, factory=TrackedConnection)
+            opened.append(db)
+            return db
+        with mock.patch.object(runtime_catalog.sqlite3, "connect", side_effect=tracked):
+            with self.assertRaisesRegex(RuntimeError, "operational catalog is not migrated"):
+                runtime_catalog.sync_overlay(self.db_path, Path(self.temp.name) / "empty-runtime.sqlite3")
+        self.assertEqual(2, len(opened))
+        self.assertTrue(all(db.closed for db in opened))
 
     def test_verified_torrent_and_stopped_preview_plan(self) -> None:
         with contextlib.closing(sqlite3.connect(self.db_path)) as db:

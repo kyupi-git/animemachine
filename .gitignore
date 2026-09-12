@@ -6,6 +6,7 @@
 /audit/
 /.codex/
 /config.json
+/config.json.*
 /state/
 /deploy/private/
 /deploy/compose/*/.env

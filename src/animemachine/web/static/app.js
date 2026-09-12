@@ -38,7 +38,11 @@ let config = {},
   language = storedLanguage() || detectSystemLanguage(),
   view = "cards",
   pageSize = "12",
-  sort = "random",
+  sort = "recent_episode",
+  configuredSort = "recent_episode",
+  recentEpisodeSortAvailable = false,
+  recentEpisodeSortDeferred = false,
+  lastAniRssGeneration = null,
   direction = "asc",
   imagesEnabled = true,
   coverVersion = 0,
@@ -351,6 +355,9 @@ const i18n = {
     sortDirectionLabel: "排序方向",
     settingsSectionsLabel: "设置分区",
     remotePlaybackSource: "Ani-RSS 远程播放",
+    playbackSource: "播放来源",
+    aniRssRemoteOnlyLibrary: "媒体由 Ani-RSS 远程提供，请在“播放”中选择来源。",
+    subtitleActions: "字幕",
     playbackStartFile: "起始媒体文件",
     managed: "AnimeMachine 管理",
     preexisting: "本地既有",
@@ -374,6 +381,17 @@ const i18n = {
     submitAccepted: "任务已提交，正在后台处理。",
     submissionDisabled: "当前部署未启用实际提交",
     sortBy: "排序",
+    recentEpisodeSort: "新作追更",
+    radar: "新作雷达", radarHint: "TV 优先按新集更新时间，电影按本季度作品/发行事件日期排列；换季前七天自动滚动至下一季。月份范围与“季”筛选一致。",
+    radarPrevious: "上季度", radarCurrent: "本季度", radarNext: "下季度",
+    radarTitleColumn: "标题", radarMediaType: "媒介类型", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间", radarNoUpdate: "暂无新集记录",
+    radarSubscription: "订阅状态", radarSubscribed: "已订阅", radarPaused: "已暂停",
+    radarSubscribe: "订阅", radarChooseResource: "选择订阅资源",
+    radarNoResources: "暂未找到可订阅资源，请稍后重试。", radarSubscribeHint: "选择资源组后订阅，下载由 Ani-RSS 按其配置执行。",
+    radarEmpty: "这一季暂无作品。", radarLoading: "正在加载…",
+    radarSubscriptionDone: "订阅已提交；状态将在同步后更新。", radarSubscriptionPending: "等待同步",
+    radarSearchTimeout: "资源检索仍在后台运行，请稍后重新打开。",
+    recentEpisodeRequiresAniRss: "连接 Ani-RSS 后可用",
     random: "随机",
     sortDate: "年月",
     sortTitle: "作品名",
@@ -577,7 +595,6 @@ const i18n = {
     externalLibraryHint:
       "只读取文件名、路径、大小和修改时间，不写入外部媒体库；ani-rss 是常见的兼容来源之一。",
     playbackConnection: "外部播放器交接",
-    playbackEnabled: "启用 M3U 播放清单",
     preferDirectPaths: "优先使用播放器可访问的 SMB / NFS 路径",
     playbackPublicUrl: "外部设备访问 AnimeMachine 的地址（可留空）",
     playlistTtl: "播放会话空闲失效时间（秒）",
@@ -900,6 +917,9 @@ const i18n = {
     sortDirectionLabel: "Sort direction",
     settingsSectionsLabel: "Settings sections",
     remotePlaybackSource: "Ani-RSS remote playback",
+    playbackSource: "Playback source",
+    aniRssRemoteOnlyLibrary: "Media is provided remotely by Ani-RSS. Choose it under Playback.",
+    subtitleActions: "Subtitles",
     playbackStartFile: "Starting media file",
     managed: "Managed by AnimeMachine",
     preexisting: "Pre-existing",
@@ -923,6 +943,17 @@ const i18n = {
     submitAccepted: "The job was submitted and is being processed in the background.",
     submissionDisabled: "Live submission is disabled",
     sortBy: "Sort",
+    recentEpisodeSort: "New Episode Follow-up",
+    radar: "Release radar", radarHint: "TV follow-up prioritizes newest episode updates; films use their current-quarter work/release-event date. Seasons roll forward seven days early, using the same month ranges as the Season filter.",
+    radarPrevious: "Previous season", radarCurrent: "Current season", radarNext: "Next season",
+    radarTitleColumn: "Title", radarMediaType: "Media type", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated", radarNoUpdate: "No episode update yet",
+    radarSubscription: "Subscription", radarSubscribed: "Subscribed", radarPaused: "Paused",
+    radarSubscribe: "Subscribe", radarChooseResource: "Choose a release",
+    radarNoResources: "No subscription releases found yet. Try again later.", radarSubscribeHint: "Choose a release group. Ani-RSS downloads using its own settings.",
+    radarEmpty: "No works in this season yet.", radarLoading: "Loading…",
+    radarSubscriptionDone: "Subscription submitted; status will update after synchronization.", radarSubscriptionPending: "Awaiting sync",
+    radarSearchTimeout: "Release search is still running in the background. Reopen this window later.",
+    recentEpisodeRequiresAniRss: "Available when Ani-RSS is connected",
     random: "Random",
     sortDate: "Date",
     sortTitle: "Title",
@@ -1126,7 +1157,6 @@ const i18n = {
     externalLibraryHint:
         "Reads names, paths, sizes and modification times without writing to the external library. ani-rss is one common compatible source.",
     playbackConnection: "External player handoff",
-    playbackEnabled: "Enable M3U playlists",
     preferDirectPaths: "Prefer player-accessible SMB / NFS paths",
     playbackPublicUrl: "AnimeMachine URL reachable by external devices (optional)",
     playlistTtl: "Playback idle timeout (seconds)",
@@ -1450,6 +1480,9 @@ const i18n = {
     sortDirectionLabel: "並び順",
     settingsSectionsLabel: "設定セクション",
     remotePlaybackSource: "Ani-RSS リモート再生",
+    playbackSource: "再生元",
+    aniRssRemoteOnlyLibrary: "メディアは Ani-RSS からリモート提供されます。「再生」で再生元を選択してください。",
+    subtitleActions: "字幕",
     playbackStartFile: "開始メディアファイル",
     managed: "AnimeMachine管理",
     preexisting: "既存ファイル",
@@ -1473,6 +1506,17 @@ const i18n = {
     submitAccepted: "タスクを登録し、バックグラウンドで処理しています。",
     submissionDisabled: "実送信は無効",
     sortBy: "並び順",
+    recentEpisodeSort: "新作追従",
+    radar: "新作レーダー", radarHint: "TV は新話更新を優先し、映画は当該四半期の作品日付／リリースイベント日で並べます。季節フィルターと同じ月範囲を使い、改編の7日前に次の季節へ切り替えます。",
+    radarPrevious: "前シーズン", radarCurrent: "今シーズン", radarNext: "次シーズン",
+    radarTitleColumn: "タイトル", radarMediaType: "メディア種別", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時", radarNoUpdate: "新話の更新記録なし",
+    radarSubscription: "購読状態", radarSubscribed: "購読中", radarPaused: "一時停止中",
+    radarSubscribe: "購読", radarChooseResource: "購読リリースを選択",
+    radarNoResources: "購読できるリリースがありません。後でもう一度お試しください。", radarSubscribeHint: "リリースグループを選択してください。Ani-RSS の設定に従ってダウンロードします。",
+    radarEmpty: "このシーズンの作品はまだありません。", radarLoading: "読み込み中…",
+    radarSubscriptionDone: "購読を送信しました。同期後に状態が更新されます。", radarSubscriptionPending: "同期待ち",
+    radarSearchTimeout: "バックグラウンドで検索中です。後でこの画面を開き直してください。",
+    recentEpisodeRequiresAniRss: "Ani-RSS 接続時に利用できます",
     random: "ランダム",
     sortDate: "年月",
     sortTitle: "作品名",
@@ -1676,7 +1720,6 @@ const i18n = {
     externalLibraryHint:
         "名前・パス・サイズ・更新時刻だけを読み取り、外部ライブラリへは書き込みません。ani-rss は一般的な互換元の一つです。",
     playbackConnection: "外部プレーヤー連携",
-    playbackEnabled: "M3Uプレイリストを有効にする",
     preferDirectPaths: "プレーヤーから到達できるSMB / NFSパスを優先",
     playbackPublicUrl: "外部端末から到達できるAnimeMachine URL（任意）",
     playlistTtl: "再生セッションのアイドル期限（秒）",
@@ -2074,7 +2117,7 @@ function applyLanguage() {
         (x.textContent =
           x.parentElement.id === "era"
             ? eraLabel(x.dataset.code)
-            : label(x.dataset.group, x.dataset.code)),
+            : x.dataset.code === "__other__" ? t("other") : label(x.dataset.group, x.dataset.code)),
     );
   updateSeasonControl();
   updateViewToggle();
@@ -2083,14 +2126,48 @@ function applyLanguage() {
   render();
   updateSelection();
   updateSortControls();
+  if ($("radarDialog").open) loadRadar();
   if (catalogStats.record_count)
     $("buildInfo").textContent = archiveSummary(catalogStats);
   if (catalogStats.sync || startupState) renderScanProgress(catalogStats, startupState);
 }
 function updateSortControls() {
-  const random = sort === "random";
+  const random = sort === "random",
+    recent = sort === "recent_episode",
+    option = $("sort")?.querySelector('option[value="recent_episode"]');
+  if (option) {
+    option.disabled = !recentEpisodeSortAvailable;
+    option.title = recentEpisodeSortAvailable ? "" : t("recentEpisodeRequiresAniRss");
+  }
   $("reshuffle").hidden = !random || authSession?.role !== "admin";
-  $("sortDirection").hidden = random;
+  $("sortDirection").hidden = random || recent;
+  $("radarButton").hidden = !recent;
+}
+
+function aniRssReady(state) {
+  return state?.connection_state === "ready" && Boolean(state?.credentialConfigured);
+}
+
+function applyRecentEpisodeSortAvailability(state, { refresh = false } = {}) {
+  const previousSort = sort,
+    available = aniRssReady(state),
+    changed = available !== recentEpisodeSortAvailable;
+  recentEpisodeSortAvailable = available;
+  if (!available && sort === "recent_episode") {
+    recentEpisodeSortDeferred = true;
+    sort = "random";
+    if ($("sort")) $("sort").value = sort;
+  } else if (available && recentEpisodeSortDeferred) {
+    sort = "recent_episode";
+    configuredSort = "recent_episode";
+    recentEpisodeSortDeferred = false;
+    if ($("sort")) $("sort").value = sort;
+  }
+  updateSortControls();
+  if (refresh && changed && sort !== previousSort) {
+    page = 0;
+    search().catch(() => {});
+  }
 }
 function eraLabel(x) {
   if (x === "before1980")
@@ -2115,7 +2192,7 @@ function fill(id, rows, g) {
     rows
       .map(
         (x) =>
-          `<option value="${esc(x)}" data-group="${g || ""}" data-code="${esc(x)}">${esc(id === "era" ? eraLabel(x) : g ? label(g, x) : x)}</option>`,
+          `<option value="${esc(x)}" data-group="${g || ""}" data-code="${esc(x)}">${esc(id === "era" ? eraLabel(x) : x === "__other__" ? t("other") : g ? label(g, x) : x)}</option>`,
       )
       .join("");
 }
@@ -2185,9 +2262,7 @@ function checked(box) {
 }
 function applyStatusDefaults() {
   const defaults = {
-    availability: Number(catalogStats.runtime?.torrents || 0) === 0
-      ? ["torrent", "ani-rss", "unavailable"]
-      : (config.ui?.filterDefaults?.availability || ["torrent", "ani-rss"]),
+    availability: config.ui?.filterDefaults?.availability || ["torrent", "ani-rss", "unavailable"],
     library_state: config.ui?.filterDefaults?.libraryStates || [
       "local",
       "external",
@@ -2195,6 +2270,7 @@ function applyStatusDefaults() {
       "not_in_library",
     ],
   };
+  if (defaults.availability.includes("available")) defaults.availability = ["torrent", "ani-rss", "unavailable"];
   Object.entries(statusGroups).forEach(([name, box]) => {
     const selectedValues = new Set(defaults[name]);
     box
@@ -2625,27 +2701,37 @@ const suffix = (c) =>
         mixed: "mixed",
       }[mode] || "noneMode",
     ),
-  libraryHtml = (x, animeId) =>
-    x.targets?.length
-      ? x.targets
-          .map(
-            (y) => {
-              const inspection = y.state === "absent" ? t("absentInspection") : inspectionLabel(y.inspectionMode),
-                status = y.state === "external"
-                  ? `${t("externalSource")} · ${t("readOnlyMapping")}`
-                  : `${esc(humanCode(y.state))} · ${inspection}`,
-                mappedPath = clientVisiblePath(y.path),
-                count = y.fileCount != null
-                  ? ` · ${y.fileCount} ${t("files")}`
-                  : y.expectedFiles != null ? ` · ${y.observedFiles}/${y.expectedFiles} ${t("files")}` : "";
-              const needsAudit = y.state === "existing" && ["not_inspected_preexisting", "catalog_state_only", "none"].includes(y.inspectionMode);
-              const playable = y.state !== "absent" && Number(y.fileCount || y.observedFiles || 0) > 0,
-                selectedSource = playbackSources.get(animeId) === y.path;
-              return `<div class="library-resource"><div class="inventory selectable"><input type="radio" aria-label="${esc(y.path)}" name="library-source-${animeId}" value="${esc(y.path)}" ${playable ? "" : "disabled"} ${playable && selectedSource ? "checked" : ""}><span><b>${esc(y.path)}</b><div class="inventory-foot"><small>${status}${count}${needsAudit ? ` <button type="button" class="text-button audit-work" data-anime-id="${animeId}">${t("verifyWork")}</button>` : ""}</small><button type="button" class="text-button copy-library-path" data-copy-path="${esc(mappedPath || "")}" ${mappedPath ? "" : "disabled"}>${t("copyPath")}</button></div></span></div>${playable && y.subtitleApplicable !== false ? `<div class="subtitle-tools" data-subtitle-target="${esc(y.path)}"><button type="button" class="tool dark-tool search-subtitles">${t("searchSubtitles")}</button><select class="subtitle-candidates" disabled><option>${t("subtitleNotFound")}</option></select><button type="button" class="tool dark-tool apply-subtitle" disabled>${t("useSubtitle")}</button><small class="muted subtitle-state"></small></div>` : ""}</div>`;
-            },
-          )
-          .join("")
-      : "",
+  libraryHtml = (x, animeId) => {
+    const targets = (x.targets || []).filter((item) => item.origin !== "ani-rss_api");
+    return targets.length
+      ? targets.map((y) => {
+          const inspection = y.state === "absent" ? t("absentInspection") : inspectionLabel(y.inspectionMode),
+            status = y.state === "external"
+              ? `${t("externalSource")} · ${t("readOnlyMapping")}`
+              : `${esc(humanCode(y.state))} · ${inspection}`,
+            mappedPath = clientVisiblePath(y.path),
+            count = y.fileCount != null
+              ? ` · ${y.fileCount} ${t("files")}`
+              : y.expectedFiles != null ? ` · ${y.observedFiles}/${y.expectedFiles} ${t("files")}` : "",
+            needsAudit = y.state === "existing" && ["not_inspected_preexisting", "catalog_state_only", "none"].includes(y.inspectionMode);
+          return `<div class="library-resource"><div class="inventory"><span><b>${esc(mappedPath || y.path)}</b><div class="inventory-foot"><small>${status}${count}${needsAudit ? ` <button type="button" class="text-button audit-work" data-anime-id="${animeId}">${t("verifyWork")}</button>` : ""}</small><button type="button" class="text-button copy-library-path" data-copy-path="${esc(mappedPath || "")}" ${mappedPath ? "" : "disabled"}>${t("copyPath")}</button></div></span></div></div>`;
+        }).join("")
+      : "";
+  },
+  subtitleToolsHtml = (target) => target
+    ? `<div class="subtitle-tools detail-subtitle-tools" data-subtitle-target="${esc(target.path)}"><b>${t("subtitleActions")}</b><button type="button" class="tool dark-tool search-subtitles">${t("searchSubtitles")}</button><select class="subtitle-candidates" disabled><option>${t("subtitleNotFound")}</option></select><button type="button" class="tool dark-tool apply-subtitle" disabled>${t("useSubtitle")}</button><small class="muted subtitle-state"></small></div>`
+    : "",
+  playbackSourceHtml = (targets, subscriptions, selected) => {
+    const choices = [
+      ...targets.map((item) => ({ value: item.path, label: clientVisiblePath(item.path) || item.path })),
+      ...subscriptions.filter((item) => Number(item.playableCount || 0) > 0).map((item) => ({
+        value: `ani-rss:${item.remoteId}`,
+        label: `${t("remotePlaybackSource")} · ${item.title}`,
+      })),
+    ];
+    if (!choices.length) return "";
+    return `<label class="playback-source-picker"><span>${t("playbackSource")}</span><select id="playbackSource">${choices.map((item) => `<option value="${esc(item.value)}" ${item.value === selected ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></label>`;
+  },
   sequenceText = (values, prefix) => {
     const numbers = [...new Set((values || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
     if (!numbers.length) return "";
@@ -4761,16 +4847,33 @@ async function handoffPlayback(kind, animeId, button) {
   location.href = handoff.protocolUrl;
 }
 
+function aniSubscriptionManagementHtml(subscription) {
+  const progress = subscription.episodeProgress || {},
+    state = t(subscription.enabled ? "radarSubscribed" : "radarPaused");
+  return `<div class="ani-rss-playback-management"><small>${esc(subscription.title)} · ${state} · ${progress.current ? fmt(progress.current) : "?"} / ${progress.total ? fmt(progress.total) : "?"}</small><button type="button" class="text-button ani-rss-delete" data-ani-rss-delete="${esc(subscription.remoteId)}">${t("aniRssDelete")}</button></div>`;
+}
+
+let detailGeneration = 0;
 async function showDetail(id) {
-  const x = await api(`/api/anime/${id}?language=${encodeURIComponent(language)}`),
-    playableTargets = (x.library?.targets || []).filter((target) => target.state !== "absent" && Number(target.fileCount || target.observedFiles || 0) > 0),
-    aniSubscriptions = x.ani_rss?.subscriptions || [];
+  const generation = ++detailGeneration;
+  const x = await api(`/api/anime/${id}?language=${encodeURIComponent(language)}`);
+  if (generation !== detailGeneration) return;
+  const
+    libraryTargets = (x.library?.targets || []).filter((target) => target.origin !== "ani-rss_api"),
+    playableTargets = libraryTargets.filter((target) => target.state !== "absent" && Number(target.fileCount || target.observedFiles || 0) > 0),
+    aniSubscriptions = x.ani_rss?.subscriptions || [],
+    playableAniSubscriptions = aniSubscriptions.filter((item) => Number(item.playableCount || 0) > 0),
+    sourceValues = new Set([
+      ...playableTargets.map((target) => target.path),
+      ...playableAniSubscriptions.map((item) => `ani-rss:${item.remoteId}`),
+    ]);
+  if (playbackSources.has(id) && !sourceValues.has(playbackSources.get(id))) playbackSources.delete(id);
   if (!playbackSources.has(id)) {
     if (playableTargets.length) {
       const preferredTarget = playableTargets.find((target) => target.state === x.library?.preferredOrigin) || playableTargets[0];
       playbackSources.set(id, preferredTarget.path);
-    } else if (aniSubscriptions.length) {
-      const remote = aniSubscriptions.find((item) => item.enabled) || aniSubscriptions[0];
+    } else if (playableAniSubscriptions.length) {
+      const remote = playableAniSubscriptions.find((item) => item.enabled) || playableAniSubscriptions[0];
       playbackSources.set(id, `ani-rss:${remote.remoteId}`);
     }
   }
@@ -4844,17 +4947,23 @@ async function showDetail(id) {
     originalName = String(x.original_name || "").trim(),
     originalAuthors = (x.original_authors || []).filter(Boolean).join(" / "),
     studios = (x.studios || []).filter(Boolean).join(" × "),
-    episodes = Number(x.episode_count || 0) > 0 ? fmt(x.episode_count) : "",
+    currentEpisode = Number(x.episode_progress?.current || 0),
+    totalEpisode = Number(x.episode_progress?.total || 0),
+    episodes = currentEpisode || totalEpisode ? `${currentEpisode ? fmt(currentEpisode) : "?"} / ${totalEpisode ? fmt(totalEpisode) : "?"}` : "",
     factHtml = (className, labelText, value) => `<div class="fact ${className}"><b>${esc(labelText)}</b><span class="fact-value" title="${esc(value)}">${esc(value)}</span></div>`,
     summary = localizedSummary(x),
     aniResources = x.ani_rss?.resources || [],
-    managedByAniRss = aniSubscriptions.length
-      ? `<div class="ani-rss-library">${aniSubscriptions.map((item) => { const value = `ani-rss:${item.remoteId}`, playable = Number(item.playableCount || 0), episodeText = playable ? ` · ${fmt(playable)} ${t("playlistEntries")}` : "", deleteAction = Number(item.currentEpisode || 0) > 0 ? `<button type="button" class="text-button ani-rss-delete" data-ani-rss-delete="${esc(item.remoteId)}">${t("aniRssDelete")}</button>` : ""; return `<div class="inventory selectable ani-rss-inventory"><input type="radio" aria-label="${esc(item.title)}" name="library-source-${id}" value="${esc(value)}" ${playbackSources.get(id) === value ? "checked" : ""}><span><b>${t("remotePlaybackSource")} · ${esc(item.title)}</b><small>${t("aniRssManaged")}${episodeText}</small></span>${deleteAction}</div>`; }).join("")}</div>`
-      : "",
+    subtitleTarget = playableTargets.find((item) => item.path === selectedPlaybackSource && item.subtitleApplicable !== false)
+      || playableTargets.find((item) => item.subtitleApplicable !== false),
+    libraryContent = libraryHtml({ ...x.library, targets: libraryTargets }, x.id)
+      || (playableAniSubscriptions.length ? `<p class="muted">${t("aniRssRemoteOnlyLibrary")}</p>` : `<p class="muted">—</p>`),
+    playbackSourceSelector = playbackSourceHtml(playableTargets, playableAniSubscriptions, selectedPlaybackSource),
+    aniRssManagement = aniSubscriptions.map(aniSubscriptionManagementHtml).join(""),
     resourceList = `${torrentGroups(x.torrents).map((group) => torrentGroupHtml(group, x.id)).join("")}${aniResources.map((y) => aniResourceHtml(y, x.id)).join("")}`,
     hasEligibleResource = (x.torrents || []).some((y) => y.eligible) || aniResources.some((y) => y.eligible);
+  if (generation !== detailGeneration) return;
   $("detail").innerHTML =
-    `${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}">${t("reloadImage")}</button></div>` : ""}<span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("tags-fact", t("tag"), displayTags)}</div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryHtml(x.library, x.id)}${managedByAniRss}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}">${t("reloadImage")}</button></div>` : ""}<span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("tags-fact", t("tag"), displayTags)}</div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
   if (imagesEnabled) queueCoverElement($("detail").querySelector("[data-cover]"), coverBatch, true);
   $("detail")
@@ -4883,12 +4992,10 @@ async function showDetail(id) {
       setTimeout(() => showDetail(id), 900);
     };
   });
-  $("detail").querySelectorAll(`input[name="library-source-${id}"]`).forEach((radio) => {
-    radio.onchange = () => {
-      playbackSources.set(id, radio.value);
-      showDetail(id).catch((error) => alert(error.message));
-    };
-  });
+  if ($("playbackSource")) $("playbackSource").onchange = (event) => {
+    playbackSources.set(id, event.target.value);
+    showDetail(id).catch((error) => alert(error.message));
+  };
   $("detail").querySelectorAll("[data-ani-rss-delete]").forEach((button) => {
     button.onclick = async () => {
       if (!window.confirm(t("aniRssDeleteConfirm"))) return;
@@ -5312,21 +5419,20 @@ function loadOperationalSettings() {
   $("onDemandHash").checked =
     config.differentialPlanning?.samePathSizePolicy === "hash_and_skip";
 }
-function saveOperationalSettings() {
-  config.components.discovery.pollMinutes = Math.max(
+function saveOperationalSettings(target) {
+  target.components.discovery.pollMinutes = Math.max(
     5,
     +$("pollMinutes").value || 30,
   );
-  config.storageGuard.minimumFreeTiB = Math.max(
+  target.storageGuard.minimumFreeTiB = Math.max(
     0,
     +$("minimumFree").value || 0,
   );
-  config.differentialPlanning = config.differentialPlanning || {};
-  config.differentialPlanning.samePathSizePolicy = $("onDemandHash").checked
+  target.differentialPlanning = target.differentialPlanning || {};
+  target.differentialPlanning.samePathSizePolicy = $("onDemandHash").checked
     ? "hash_and_skip"
     : "size_and_skip";
 }
-$("settingsForm").addEventListener("submit", saveOperationalSettings, true);
 function openSettings() {
   renderPolicy();
   loadOperationalSettings();
@@ -5361,7 +5467,6 @@ function openSettings() {
   $("openSubtitlesEndpoint").value = (subtitleProviders.opensubtitles?.endpoints || ["https://api.opensubtitles.com/api/v1"])[0];
   $("openSubtitlesKey").value = "";
   const playback = config.playback || {};
-  $("playbackEnabled").checked = playback.enabled !== false;
   $("preferDirectPaths").checked = playback.preferDirectPaths !== false;
   $("playbackPublicUrl").value = playback.publicBaseUrl || "";
   $("playlistTtl").value = playback.playlistIdleSeconds || playback.playlistTtlSeconds || 43200;
@@ -5389,6 +5494,7 @@ async function saveSettings(e) {
     c = enabled("contentClasses"),
     r = enabled("allowedResolutions"),
     g = enabled("allowedRegions");
+  saveOperationalSettings(nextConfig);
   const archiveOrder = order("archiveGroups"), archiveEnabled = new Set([...$("archiveGroups").querySelectorAll("li")].filter(x => x.querySelector("input").checked).map(x => x.dataset.value));
   p.archiveGroupIds = archiveOrder;
   p.resourceGroups.filter((x) => p.archiveGroupIds.includes(x.id)).forEach((x) => (x.enabled = archiveEnabled.has(x.id)));
@@ -5452,7 +5558,8 @@ async function saveSettings(e) {
   nextConfig.deployment.libraryUncRoot = $("libraryPath").value.trim();
   nextConfig.deployment.qbtLibraryRoot = $("qbtLibraryPath").value.trim();
   const externalSource = {
-    id: "external-read-only",
+    ...(nextConfig.externalLibraries || [])[0],
+    id: nextConfig.externalLibraries?.[0]?.id || "external-read-only",
     kind: $("externalReadOnlyKind").value,
     enabled: $("externalReadOnlyEnabled").checked,
     path: $("externalReadOnlyPath").value.trim() || "/External",
@@ -5462,7 +5569,7 @@ async function saveSettings(e) {
     +$("externalScanMinutes").value || 60,
     ),
   };
-  nextConfig.externalLibraries = [externalSource];
+  nextConfig.externalLibraries = [externalSource, ...(nextConfig.externalLibraries || []).slice(1)];
   const lines = (id) => $(id).value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
   nextConfig.subtitles = nextConfig.subtitles || {};
   nextConfig.subtitles.enabled = $("subtitlesEnabled").checked;
@@ -5488,7 +5595,8 @@ async function saveSettings(e) {
   });
   const playbackIdle = Math.max(900, Math.min(172800, +$("playlistTtl").value || 43200));
   nextConfig.playback = {
-    enabled: $("playbackEnabled").checked,
+    ...(nextConfig.playback || {}),
+    enabled: true,
     preferDirectPaths: $("preferDirectPaths").checked,
     publicBaseUrl: $("playbackPublicUrl").value.trim(),
     playlistIdleSeconds: playbackIdle,
@@ -5679,7 +5787,7 @@ async function persistUi() {
     catalogView: view,
     imagesEnabled,
     pageSize: pageSize === "all" ? "all" : +pageSize,
-    sort,
+    sort: configuredSort,
     sortDirection: direction,
   });
   await api("/api/config", {
@@ -5968,7 +6076,9 @@ let syncSummaryTimer, lastCatalogRecordCount = null, lastArchiveName = null;
 async function pollSyncSummary() {
   clearTimeout(syncSummaryTimer);
   try {
-    const [stats, startup] = await Promise.all([api("/api/stats"), api("/api/startup/state")]);
+    const [stats, startup, aniState] = await Promise.all([
+      api("/api/stats"), api("/api/startup/state"), api("/api/ani-rss/status"),
+    ]);
     const count = Number(stats.record_count || 0), archiveName = String(stats.archive_name || "");
     if ((lastCatalogRecordCount === 0 && count > 0) ||
         (lastArchiveName === "bootstrap-pending" && archiveName !== "bootstrap-pending")) {
@@ -5978,6 +6088,12 @@ async function pollSyncSummary() {
     lastCatalogRecordCount = count;
     lastArchiveName = archiveName;
     startupState = startup;
+    const previousSort = sort;
+    applyRecentEpisodeSortAvailability(aniState, { refresh: true });
+    const generation = [aniState.successful_generation, aniState.last_success_at, aniState.last_release_update_at].join(":");
+    if (lastAniRssGeneration !== null && generation !== lastAniRssGeneration &&
+        sort === "recent_episode" && previousSort === sort) search().catch(() => {});
+    lastAniRssGeneration = generation;
     $("buildInfo").textContent = archiveSummary(stats);
     renderScanProgress(stats, startup);
     const activeWarmup = startup?.state === "Starting" || startup?.state === "Warming";
@@ -6015,6 +6131,198 @@ function ensureEraYearOption(year) {
   option.dataset.generatedYear = "1";
   select.insertBefore(option, select.options[1] || null);
 }
+// Radar has independent filters and bounded pages; catalog selections stay intact.
+let radarSeason = 1, radarPage = 0, radarTimer, radarController, radarGeneration = 0;
+let radarQuarterKey = "", radarSubscribeGeneration = 0;
+const radarPendingSubscriptions = new Set();
+const radarSubmittingSubscriptions = new Set();
+const radarSeenStorageKey = "anm-radar-seen-v1";
+let radarSeenUpdates = (() => {
+  try {
+    const value = JSON.parse(localStorage.getItem(radarSeenStorageKey) || "{}");
+    const entries = Array.isArray(value) ? value : Object.entries(value || {});
+    return new Map(entries.filter((entry) => Array.isArray(entry) && entry.length === 2
+      && typeof entry[0] === "string" && typeof entry[1] === "string").slice(-1000));
+  } catch (_) { return new Map(); }
+})();
+function radarUpdateToken(item) { return String(item?.last_episode_update_at || ""); }
+function radarSeenKey(item) { return String(item?.bgm_id || item?.id || ""); }
+function radarIsHighlighted(item) {
+  const token = radarUpdateToken(item), key = radarSeenKey(item);
+  return Boolean(key && token && radarSeenUpdates.get(key) !== token);
+}
+function markRadarSeen(seenKey, animeId, token) {
+  if (!seenKey || !token) return;
+  radarSeenUpdates.delete(String(seenKey));
+  radarSeenUpdates.set(String(seenKey), String(token));
+  if (radarSeenUpdates.size > 1000) radarSeenUpdates.delete(radarSeenUpdates.keys().next().value);
+  try { localStorage.setItem(radarSeenStorageKey, JSON.stringify([...radarSeenUpdates])); } catch (_) {}
+  const row = $("radarResults")?.querySelector(`tr[data-radar-id="${animeId}"]`);
+  row?.classList.remove("radar-highlight");
+}
+function radarSeasons(now = new Date()) {
+  const anchor = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
+  const quarter = anchor.getFullYear() * 4 + Math.floor(anchor.getMonth() / 3);
+  return [-1, 0, 1].map((offset) => {
+    const ordinal = quarter + offset, year = Math.floor(ordinal / 4);
+    const season = ["winter", "spring", "summer", "autumn"][((ordinal % 4) + 4) % 4];
+    return { year, season, ...seasonDateRange(year, season) };
+  });
+}
+function radarSeasonLabel(season, index) {
+  const key = "season" + season.season[0].toUpperCase() + season.season.slice(1);
+  return `${t(["radarPrevious", "radarCurrent", "radarNext"][index])} · ${season.year} ${t(key)}`;
+}
+async function loadRadar() {
+  if (!$("radarDialog").open) return;
+  clearTimeout(radarTimer);
+  radarController?.abort();
+  const controller = new AbortController(), generation = ++radarGeneration;
+  radarController = controller;
+  const seasons = radarSeasons(), quarterKey = seasons[1].from;
+  if (quarterKey !== radarQuarterKey) { radarQuarterKey = quarterKey; radarPage = 0; }
+  $("radarTabs").innerHTML = seasons.map((item, index) =>
+    `<button id="radarTab${index}" class="tab ${index === radarSeason ? "active" : ""}" role="tab" aria-controls="radarPanel" aria-selected="${index === radarSeason}" tabindex="${index === radarSeason ? 0 : -1}" data-season="${index}">${esc(radarSeasonLabel(item, index))}</button>`).join("");
+  $("radarPanel").setAttribute("aria-labelledby", `radarTab${radarSeason}`);
+  $("radarTabs").querySelectorAll("button").forEach((button) => {
+    button.onclick = () => { radarSeason = Number(button.dataset.season); radarPage = 0; loadRadar(); };
+    button.onkeydown = (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      radarSeason = event.key === "Home" ? 0 : event.key === "End" ? 2 :
+        (radarSeason + (event.key === "ArrowRight" ? 1 : 2)) % 3;
+      radarPage = 0; loadRadar(); $(`radarTab${radarSeason}`).focus();
+    };
+  });
+  const season = seasons[radarSeason];
+  $("radarStatus").textContent = t("radarLoading");
+  $("radarPrev").disabled = $("radarNext").disabled = true;
+  try {
+    const query = new URLSearchParams({ sort: "recent_episode", radar: "1", language, start_from: season.from,
+      start_to: season.to, limit: "50", offset: String(radarPage * 50) });
+    const data = await api(`/api/anime?${query}`, { signal: controller.signal });
+    if (generation !== radarGeneration || !$("radarDialog").open) return;
+    if (radarPage && radarPage * 50 >= data.total) { radarPage = 0; return loadRadar(); }
+    const available = data.recentEpisodeSortAvailable;
+    $("radarStatus").textContent = available ? "" : t("recentEpisodeRequiresAniRss");
+    $("radarResults").innerHTML = data.items.length ? `<table class="data-table radar-table"><thead><tr>
+      <th>${t("radarTitleColumn")}</th><th class="radar-media">${t("radarMediaType")}</th><th>${t("radarProgress")}</th><th>${t("radarSubscription")}</th><th>${t("radarUpdated")}</th>
+      </tr></thead><tbody>${data.items.map((item) => {
+        if (item.subscription_state === "active") radarPendingSubscriptions.delete(item.id);
+        const pending = radarPendingSubscriptions.has(item.id) || radarSubmittingSubscriptions.has(item.id);
+        const state = item.subscription_state;
+        const stamp = item.last_episode_update_at ? new Date(item.last_episode_update_at) : null;
+        const subscription = pending ? esc(t("radarSubscriptionPending")) : state === "active" ?
+          `<span class="radar-subscribed">${t("radarSubscribed")}</span>` : state === "paused" ? esc(t("radarPaused")) :
+          `<button class="text-button" data-subscribe="${item.id}" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("radarSubscribe")}</button>`;
+        const updateToken = radarUpdateToken(item), seenKey = radarSeenKey(item);
+        return `<tr data-radar-id="${item.id}" data-radar-seen-key="${esc(seenKey)}" data-radar-update="${esc(updateToken)}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}"><td><button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button></td>
+          <td class="radar-media" data-label="${esc(t("radarMediaType"))}">${esc(label("media", item.media_code))}</td>
+          <td class="radar-progress" data-label="${esc(t("radarProgress"))}">${item.episode_progress?.current || "?"} / ${item.episode_progress?.total || "?"}</td>
+          <td data-label="${esc(t("radarSubscription"))}">${subscription}</td><td data-label="${esc(t("radarUpdated"))}">${stamp && Number.isFinite(stamp.getTime()) ? esc(stamp.toLocaleString(language)) : t("radarNoUpdate")}</td></tr>`;
+      }).join("")}</tbody></table>` : `<p class="empty">${t("radarEmpty")}</p>`;
+    $("radarResults").querySelectorAll("tr[data-radar-id]").forEach((row) => {
+      row.addEventListener("click", () => markRadarSeen(row.dataset.radarSeenKey, Number(row.dataset.radarId), row.dataset.radarUpdate));
+    });
+    $("radarResults").querySelectorAll("[data-detail]").forEach((b) => {
+      b.onclick = () => showDetail(Number(b.dataset.detail)).catch((error) => { $("radarStatus").textContent = error.message; });
+    });
+    $("radarResults").querySelectorAll("[data-subscribe]").forEach((b) => {
+      b.onclick = () => openRadarSubscription(Number(b.dataset.subscribe));
+    });
+    $("radarPage").textContent = `${data.total ? radarPage + 1 : 0} / ${Math.ceil(data.total / 50)}`;
+    $("radarPrev").disabled = radarPage === 0;
+    $("radarNext").disabled = (radarPage + 1) * 50 >= data.total;
+  } catch (error) {
+    if (generation === radarGeneration && !controller.signal.aborted) {
+      $("radarStatus").textContent = `${t("failed")}: ${error.message}`;
+      $("radarResults").replaceChildren();
+    }
+  } finally {
+    if (generation === radarGeneration && $("radarDialog").open)
+      radarTimer = setTimeout(loadRadar, 30000);
+  }
+}
+async function openRadarSubscription(animeId) {
+  if (radarSubmittingSubscriptions.has(animeId)) return;
+  const dialog = $("radarSubscribeDialog"), generation = ++radarSubscribeGeneration;
+  const active = () => generation === radarSubscribeGeneration && dialog.open;
+  $("radarResource").replaceChildren();
+  $("radarResource").disabled = false;
+  $("radarSubscribeSubmit").disabled = true;
+  $("radarSubscribeForm").dataset.animeId = String(animeId);
+  $("radarSubscribeStatus").textContent = t("radarLoading");
+  showModalDialog(dialog);
+  try {
+    let detail = await api(`/api/anime/${animeId}?language=${encodeURIComponent(language)}`);
+    if (!active()) return;
+    const eligible = (value) => (value.ani_rss?.resources || []).filter((r) => r.eligible && r.kind === "follow");
+    if (!eligible(detail).length) {
+      const existingJob = await api(`/api/anime/${animeId}/ani-rss/search`);
+      if (existingJob.state !== "running") {
+        try {
+          await api(`/api/anime/${animeId}/ani-rss/search`, { method: "POST" });
+        } catch (error) {
+          const concurrentJob = await api(`/api/anime/${animeId}/ani-rss/search`);
+          if (concurrentJob.state !== "running") throw error;
+        }
+      }
+      const deadline = Date.now() + 90000;
+      while (active()) {
+        const job = await api(`/api/anime/${animeId}/ani-rss/search`);
+        if (job.state === "failed") throw new Error(job.error || t("failed"));
+        if (job.state !== "running") break;
+        if (Date.now() >= deadline) throw new Error(t("radarSearchTimeout"));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (!active()) return;
+      detail = await api(`/api/anime/${animeId}?language=${encodeURIComponent(language)}`);
+    }
+    if (!active()) return;
+    const resources = eligible(detail);
+    $("radarResource").innerHTML = resources.map((r) =>
+      `<option value="${esc(r.resourceId)}">${esc([r.title, r.resolution ? r.resolution + "p" : ""].filter(Boolean).join(" · "))}</option>`).join("");
+    $("radarSubscribeStatus").textContent = resources.length ? t("radarSubscribeHint") : t("radarNoResources");
+    $("radarSubscribeSubmit").disabled = !resources.length;
+  } catch (error) {
+    if (active()) $("radarSubscribeStatus").textContent = error.message;
+  }
+}
+$("radarButton").onclick = () => { radarSeason = 1; radarPage = 0; showModalDialog($("radarDialog")); loadRadar(); };
+$("radarPrev").onclick = () => { radarPage = Math.max(0, radarPage - 1); loadRadar(); };
+$("radarNext").onclick = () => { radarPage++; loadRadar(); };
+$("radarDialog").addEventListener("close", () => { clearTimeout(radarTimer); radarController?.abort(); radarGeneration++; });
+$("radarSubscribeDialog").addEventListener("close", () => { radarSubscribeGeneration++; });
+$("radarSubscribeForm").onsubmit = async (event) => {
+  event.preventDefault();
+  const button = $("radarSubscribeSubmit"), resource = $("radarResource").value;
+  if (button.disabled || !resource) return;
+  const animeId = Number($("radarSubscribeForm").dataset.animeId);
+  const generation = radarSubscribeGeneration;
+  radarSubmittingSubscriptions.add(animeId);
+  button.disabled = true;
+  $("radarResource").disabled = true;
+  try {
+    await api(`/api/ani-rss/resources/${encodeURIComponent(resource)}/subscribe`, { method: "POST", timeoutMs: 240000 });
+    radarPendingSubscriptions.add(animeId);
+    if (generation === radarSubscribeGeneration) {
+      $("radarSubscribeStatus").textContent = t("radarSubscriptionDone");
+      $("radarSubscribeDialog").close();
+    }
+    loadRadar();
+    if (sort === "recent_episode") search().catch(() => {});
+  } catch (error) {
+    if (generation === radarSubscribeGeneration) {
+      $("radarSubscribeStatus").textContent = error.message;
+      button.disabled = false;
+    }
+  } finally {
+    radarSubmittingSubscriptions.delete(animeId);
+    if (generation === radarSubscribeGeneration) $("radarResource").disabled = false;
+    loadRadar();
+  }
+};
+
 function seasonDateRange(year, season) {
   const y = Number(year);
   if (!Number.isInteger(y) || y < 1) return null;
@@ -6311,13 +6619,14 @@ async function applyApplicationUpdate() {
 async function initialize() {
   try {
     if (!(await establishSession())) return;
-    const [stats, o, c, cap, groups, startup] = await Promise.all([
+    const [stats, o, c, cap, groups, startup, aniState] = await Promise.all([
       api("/api/stats", { timeoutMs: 30000 }),
       api("/api/options", { timeoutMs: 30000 }),
       api("/api/config", { timeoutMs: 30000 }),
       api("/api/capabilities", { timeoutMs: 30000 }),
       api("/api/resource-groups", { timeoutMs: 30000 }),
       api("/api/startup/state", { timeoutMs: 30000 }),
+      api("/api/ani-rss/status", { timeoutMs: 30000 }),
     ]);
     config = c;
     catalogStats = stats;
@@ -6333,7 +6642,8 @@ async function initialize() {
     imagesEnabled = c.ui?.imagesEnabled !== false;
     pageSize = String(c.ui?.pageSize || 12);
     seed = String(stats.instance_random_seed || "anm");
-    sort = c.ui?.sort || "random";
+    configuredSort = c.ui?.sort || "recent_episode";
+    sort = configuredSort;
     direction = c.ui?.sortDirection || "asc";
     fill("era", o.eras);
     fill("source_type", o.source_types, "source");
@@ -6345,6 +6655,7 @@ async function initialize() {
     applyStatusDefaults();
     if (!restoreFilterState()) setRecentDates();
     $("pageSize").value = pageSize;
+    applyRecentEpisodeSortAvailability(aniState);
     $("sort").value = sort;
     $("sortDirection").textContent = direction === "asc" ? "↑" : "↓";
     updateSortControls();
@@ -6444,6 +6755,7 @@ $("loginForm").onsubmit = async (event) => {
     $("loginError").textContent = error.message;
   }
 };
+$("userCreateForm").onsubmit = (event) => { event.preventDefault(); $("createUser").click(); };
 $("createUser").onclick = async () => {
   const button = $("createUser"), username = $("newUsername"), password = $("newUserPassword");
   setUserManagementStatus();
@@ -6529,6 +6841,8 @@ $("refreshHistory").onclick = loadHistory;
 $("refreshWatches").onclick = loadWatches;
 $("sort").onchange = (e) => {
   sort = e.target.value;
+  configuredSort = sort;
+  recentEpisodeSortDeferred = false;
   updateSortControls();
   page = 0;
   search();

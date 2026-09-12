@@ -166,6 +166,26 @@ class AniRssTest(unittest.TestCase):
         self.assertTrue(FakeAniRss.seen_keys)
         self.assertTrue(all(key == "temporary-key" for key in FakeAniRss.seen_keys))
 
+    def test_search_records_unsubscribed_new_episode_without_repromoting_repeats(self):
+        episode = 1
+        def call(path, **kwargs):
+            if path == "mikan":
+                return {"weeks": [{"items": [{"url": "https://mikan.test/work", "title": "Work"}]}]}
+            if path == "mikanGroup":
+                return [{"label": "SubsPlease", "rss": "https://mikan.test/feed",
+                         "items": [{"title": f"[SubsPlease] Work - {episode:02d} (1080p) [WEB-DL]", "size": 100}]}]
+            raise AssertionError(path)
+        client = mock.Mock()
+        client.call.side_effect = call
+        with mock.patch.object(ani_rss, "_client", return_value=client):
+            for number, stamp in ((1, "2026-09-01"), (2, "2026-09-02"), (2, "2026-09-03")):
+                episode = number
+                with mock.patch.object(ani_rss, "utcnow", return_value=stamp + "T00:00:00+00:00"):
+                    ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((2, "2026-09-02T00:00:00+00:00"), db.execute(
+                "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state WHERE anime_id=1").fetchone())
+
     def test_probe_search_subscribe_and_deletion_grace(self):
         self.assertTrue(ani_rss.probe(self.config)["authenticated"])
         result = ani_rss.search(self.db_path, 1, self.config)
@@ -198,6 +218,96 @@ class AniRssTest(unittest.TestCase):
         updated = {row["remoteId"]: row for row in ani_rss.subscriptions_for_anime(self.db_path, 1)}
         self.assertEqual(9, updated["remote-a"]["currentEpisode"])
         self.assertEqual(8, updated["remote-b"]["currentEpisode"])
+
+    def test_new_episode_evidence_requires_episode_advance_not_only_redownload_time(self):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        first_time = int((now - dt.timedelta(hours=3)).timestamp() * 1000)
+        redownload_time = int((now - dt.timedelta(hours=2)).timestamp() * 1000)
+        next_episode_time = int((now - dt.timedelta(hours=1)).timestamp() * 1000)
+        subscription = {
+            "id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "enable": True, "currentEpisodeNumber": 8, "totalEpisodeNumber": 12,
+            "lastDownloadTime": first_time,
+        }
+        FakeAniRss.subscriptions = [subscription]
+        ani_rss.sync(self.db_path, self.config)
+        baseline = ani_rss.subscriptions_for_anime(self.db_path, 1)[0]
+        self.assertIsNone(baseline["lastEpisodeUpdateAt"])
+
+        subscription["lastDownloadTime"] = redownload_time
+        ani_rss.sync(self.db_path, self.config)
+        redownloaded = ani_rss.subscriptions_for_anime(self.db_path, 1)[0]
+        self.assertNotEqual(baseline["lastDownloadAt"], redownloaded["lastDownloadAt"])
+        self.assertIsNone(redownloaded["lastEpisodeUpdateAt"])
+
+        subscription["currentEpisodeNumber"] = 9
+        subscription["lastDownloadTime"] = next_episode_time
+        ani_rss.sync(self.db_path, self.config)
+        advanced = ani_rss.subscriptions_for_anime(self.db_path, 1)[0]
+        self.assertEqual(9, advanced["currentEpisode"])
+        self.assertNotEqual(redownloaded["lastEpisodeUpdateAt"], advanced["lastEpisodeUpdateAt"])
+        self.assertEqual(advanced["lastDownloadAt"], advanced["lastEpisodeUpdateAt"])
+
+    def test_episode_counter_and_clock_rollback_do_not_reannounce_old_episodes(self):
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        subscription = {"id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+                        "enable": True, "totalEpisodeNumber": 12}
+        FakeAniRss.subscriptions = [subscription]
+        def observe(episode, hours):
+            subscription.update(currentEpisodeNumber=episode,
+                                lastDownloadTime=int((now - dt.timedelta(hours=hours)).timestamp() * 1000))
+            ani_rss.sync(self.db_path, self.config)
+            return ani_rss.subscriptions_for_anime(self.db_path, 1)[0]
+        observe(8, 8)
+        advanced = observe(9, 7)
+        observe(2, 6)
+        restored = observe(9, 5)
+        self.assertEqual(advanced["lastEpisodeUpdateAt"], restored["lastEpisodeUpdateAt"])
+        observe(9, 9)
+        self.assertEqual(advanced["lastEpisodeUpdateAt"], observe(10, 8)["lastEpisodeUpdateAt"])
+        self.assertGreater(observe(11, 1)["lastEpisodeUpdateAt"], advanced["lastEpisodeUpdateAt"])
+
+    def test_active_remote_id_remap_starts_fresh_episode_evidence_baseline(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("INSERT INTO anime_work VALUES(2,456,'作品二','作品二','Work Two','2026-07',24)")
+            db.execute("INSERT INTO anime_title VALUES(2,'作品二')")
+        first_time = int(dt.datetime(2026, 9, 1, tzinfo=dt.timezone.utc).timestamp() * 1000)
+        second_time = int(dt.datetime(2026, 9, 2, tzinfo=dt.timezone.utc).timestamp() * 1000)
+        subscription = {
+            "id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+            "enable": True, "currentEpisodeNumber": 8, "totalEpisodeNumber": 12,
+            "lastDownloadTime": first_time,
+        }
+        FakeAniRss.subscriptions = [subscription]
+        ani_rss.sync(self.db_path, self.config)
+        subscription.update({
+            "title": "作品二", "bgmUrl": "https://bgm.tv/subject/456",
+            "currentEpisodeNumber": 9, "totalEpisodeNumber": 24, "lastDownloadTime": second_time,
+        })
+        ani_rss.sync(self.db_path, self.config)
+        self.assertEqual([], ani_rss.subscriptions_for_anime(self.db_path, 1))
+        remapped = ani_rss.subscriptions_for_anime(self.db_path, 2)[0]
+        self.assertEqual(9, remapped["currentEpisode"])
+        self.assertEqual(24, remapped["totalEpisode"])
+        self.assertIsNone(remapped["lastEpisodeUpdateAt"])
+
+    def test_remap_drops_old_media_even_if_new_playlist_cannot_refresh(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("INSERT INTO anime_work VALUES(2,456,'作品二','作品二','Work Two','2026-07',24)")
+            db.execute("INSERT INTO anime_title VALUES(2,'作品二')")
+        subscription = {"id": "remote-a", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+                        "url": "https://mikan.test/RSS/Bangumi?bangumiId=123", "enable": True,
+                        "currentEpisodeNumber": 8}
+        FakeAniRss.subscriptions = [subscription]
+        FakeAniRss.media = {"/remote/Work E08.mkv": b"synthetic"}
+        ani_rss.sync(self.db_path, self.config)
+        self.assertEqual(1, ani_rss.subscriptions_for_anime(self.db_path, 1)[0]["playableCount"])
+        subscription.update(bgmUrl="https://bgm.tv/subject/456", currentEpisodeNumber=1)
+        with mock.patch.object(ani_rss.Client, "play_list", side_effect=OSError("offline")):
+            ani_rss.sync(self.db_path, self.config)
+        self.assertEqual(0, ani_rss.subscriptions_for_anime(self.db_path, 2)[0]["playableCount"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM ani_rss_media").fetchone()[0])
 
     def test_periodic_sync_materializes_and_refreshes_playable_media(self):
         FakeAniRss.subscriptions = [{
@@ -1096,6 +1206,10 @@ class AniRssTest(unittest.TestCase):
         self.assertEqual([], FakeAniRss.subscriptions)
         self.assertIn("deleteFiles=true", FakeAniRss.delete_paths[-1])
         self.assertEqual([], ani_rss.subscriptions_for_anime(self.db_path, 1))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(0, db.execute(
+                "SELECT COUNT(*) FROM ani_rss_episode_state WHERE remote_id='remote-a'"
+            ).fetchone()[0])
 
     def test_default_sync_interval_is_thirty_minutes(self):
         self.assertEqual(30, ani_rss._settings({})["syncMinutes"])
@@ -1329,4 +1443,3 @@ class AniRssTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

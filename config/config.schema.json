@@ -350,6 +350,7 @@
         },
         "sort": {
           "enum": [
+            "recent_episode",
             "random",
             "date",
             "title",

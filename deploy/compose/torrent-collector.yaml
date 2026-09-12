@@ -1,6 +1,6 @@
 services:
   torrent-collector:
-    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.3.0}
     restart: unless-stopped
     init: true
     environment:

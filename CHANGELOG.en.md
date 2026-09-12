@@ -3,7 +3,28 @@
 
 # Changelog
 
-This file records user-facing changes in reverse version order. Internal refactoring, test-only adjustments, and details that do not affect use are omitted.
+This file lists user-facing changes in reverse version order. Internal refactors, test adjustments, and details that do not affect usage are not listed separately.
+
+## 0.3.0
+
+0.3.0 adds Release radar and improves episode progress, work details, and memory use. Existing Catalogs, media directories, and 0.2.x configuration remain compatible; required fields migrate automatically without rebuilding the Catalog or moving media.
+
+### Added and improved
+
+- Added Release radar with paginated previous/current/next seasons and automatic rollover seven days before each quarter; it shows localized titles, media type, latest/total episodes, subscription state, and update time, with unread highlights and direct subscription.
+- Improved release discovery: films can appear in the season of their theatrical, streaming, or BD/Blu-ray release; serials use confirmed episode advances, including updates found by resource scans for unsubscribed works.
+- Improved episode progress: details and radar share work-local numbering, convert cumulative series numbers when supported by clear evidence, and prioritize the known total for the current work.
+- Improved work details: library inventory and playback sources are separate, duplicate media entries are reduced, subtitle search has one entry point, and Ani-RSS subscriptions remain manageable before media arrives or while paused.
+- Improved defaults: all three availability options are selected initially and after reset, including compatibility with the legacy `available` default; M3U playback stays enabled without a redundant master switch.
+- Reduced memory during initial Catalog builds and periodic scans through compact Archive data, lazy title indexes, bounded parsing caches, streamed Torrent rows, and reliable connection cleanup on errors.
+
+### Fixed
+
+- Fixed false episode announcements after redownloading, episode-counter rollback and recovery, or download-clock rollback; stale follow-up evidence is disabled during disconnection and restored after reconnection.
+- Fixed progress leaking between works sharing a physical directory, and stale episode, download-time, or media evidence after subscription deletion or remapping.
+- Fixed required user-creation fields blocking unrelated settings, failed saves changing runtime configuration early, and additional media libraries being lost on save.
+- Fixed stale responses overriding newer detail or playback-source selections, and recent radar read history being evicted incorrectly when its limit is reached.
+- Fixed expanded title search bypassing radar filters or region permissions and malformed release dates being accepted; strengthened publication checks to exclude configuration backups.
 
 ## 0.2.1
 

@@ -5,7 +5,7 @@ include:
 
 services:
   qbt-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.3.0}
     environment:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
@@ -50,7 +50,7 @@ services:
         condition: service_completed_successfully
       qbittorrent:
         condition: service_started
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.3.0}
     restart: unless-stopped
     init: true
     environment:

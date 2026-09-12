@@ -11,6 +11,22 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_config_backups_stay_local_and_are_rejected_in_release_archives(self):
+        scanner = ROOT / "scripts" / "check_public_tree.py"
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "source"
+            source.mkdir()
+            (source / "config.json.old").write_text('{"synthetic":true}', encoding="utf-8")
+            subprocess.run([sys.executable, str(scanner), str(source)], check=True, capture_output=True)
+            for name in ("config.json.old", "config.json.bak", "app/animemachine/config.json.old"):
+                with self.subTest(name=name):
+                    release = pathlib.Path(directory) / "release.zip"
+                    with zipfile.ZipFile(release, "w") as archive:
+                        archive.writestr("AnimeMachine-test/" + name, '{"synthetic":true}')
+                    result = subprocess.run([sys.executable, str(scanner), str(release)], capture_output=True, text=True)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("private filename", result.stdout)
+
     def test_publication_scan_ignores_local_source_state_but_rejects_it_in_release(self):
         scanner = ROOT / "scripts" / "check_public_tree.py"
         with tempfile.TemporaryDirectory() as directory:

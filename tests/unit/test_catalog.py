@@ -87,6 +87,64 @@ class CatalogTests(unittest.TestCase):
         strict_codes = {relation["relation_code"] for relation in detail["relations"] if relation["strict_group"]}
         self.assertTrue(strict_codes.issubset(catalog.STRICT_SERIES_RELATIONS))
 
+    def test_recent_episode_sort_uses_ani_rss_episode_evidence_and_ignores_direction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.sqlite3"
+            shutil.copy2(DB, path)
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
+                ani_rss.migrate(db)
+                for remote_id, anime_id, stamp in (
+                    ("older", 9, "2026-09-05T12:00:00+00:00"),
+                    ("newer", 10, "2026-09-06T12:00:00+00:00"),
+                ):
+                    db.execute("""INSERT INTO ani_rss_subscription
+                        (remote_id,anime_id,title,bgm_id,enabled,subscription_kind,current_episode,total_episode,
+                         remote_media_path,remote_state,first_seen_at,last_seen_at,missed_successful_syncs,deleted_at,evidence_json)
+                        VALUES(?,?,?,?,1,'follow',1,12,NULL,'enabled','now','now',0,NULL,'{}')""",
+                        (remote_id, anime_id, remote_id, None))
+                    db.execute("INSERT INTO ani_rss_episode_state VALUES(?,?,?)", (remote_id, stamp, stamp))
+            ready = {"connection_state": "ready", "credentialConfigured": True, "effective_mode": "prefer"}
+            with mock.patch.object(catalog.ani_rss, "state", return_value=ready):
+                ascending = catalog.query_catalog(path, {"sort": ["recent_episode"], "direction": ["asc"], "limit": ["all"]})
+                descending = catalog.query_catalog(path, {"sort": ["recent_episode"], "direction": ["desc"], "limit": ["all"]})
+            self.assertTrue(ascending["recentEpisodeSortAvailable"])
+            self.assertEqual("recent_episode", ascending["effectiveSort"])
+            self.assertEqual([10, 9], [item["id"] for item in ascending["items"][:2]])
+            self.assertEqual([item["id"] for item in ascending["items"]], [item["id"] for item in descending["items"]])
+
+    def test_recent_episode_sort_falls_back_when_ani_rss_is_unavailable(self):
+        unavailable = {"connection_state": "error", "credentialConfigured": True, "effective_mode": "manual"}
+        with mock.patch.object(catalog.ani_rss, "state", return_value=unavailable):
+            result = catalog.query_catalog(DB, {"sort": ["recent_episode"], "seed": ["stable"], "limit": ["all"]})
+        self.assertFalse(result["recentEpisodeSortAvailable"])
+        self.assertEqual("random", result["effectiveSort"])
+
+    def test_detail_episode_progress_distinguishes_current_from_known_total(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.sqlite3"
+            shutil.copy2(DB, path)
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
+                ani_rss.migrate(db)
+                db.execute("""INSERT INTO ani_rss_subscription
+                    (remote_id,anime_id,title,bgm_id,enabled,subscription_kind,current_episode,total_episode,
+                     remote_media_path,remote_state,first_seen_at,last_seen_at,missed_successful_syncs,deleted_at,evidence_json)
+                    VALUES('progress',2,'Progress',NULL,1,'follow',9,12,NULL,'enabled','now','now',0,NULL,'{}')""")
+            ready = {"connection_state": "ready", "credentialConfigured": True, "effective_mode": "prefer"}
+            with mock.patch.object(catalog.ani_rss, "state", return_value=ready):
+                detail = catalog.catalog_detail(path, 2)
+            self.assertEqual({"current": 9, "total": 12}, detail["episode_progress"])
+
+    def test_detail_episode_progress_treats_archive_episode_count_as_total_not_current(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.sqlite3"
+            shutil.copy2(DB, path)
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
+                db.execute("UPDATE anime_work SET episode_count=12 WHERE id=2")
+            unavailable = {"connection_state": "unconfigured", "credentialConfigured": False, "effective_mode": "manual"}
+            with mock.patch.object(catalog.ani_rss, "state", return_value=unavailable):
+                detail = catalog.catalog_detail(path, 2)
+            self.assertEqual({"current": None, "total": 12}, detail["episode_progress"])
+
     def test_infobox_parser_handles_lists(self):
         parsed = catalog.parse_archive_infobox("{{Infobox\n|别名={\n[英文名|Example]\n[简称|EX]\n}\n|动画制作=Studio A\n}}")
         self.assertEqual(parsed["别名"], ["Example", "EX"])
@@ -903,6 +961,7 @@ class CatalogTests(unittest.TestCase):
         self.assertNotIn("start_from", params)
         self.assertNotIn("start_to", params)
         self.assertNotIn("country", params)
+        self.assertEqual(["torrent", "ani-rss", "unavailable"], params["availability"])
         self.assertEqual(["local", "external", "submitted", "not_in_library"], params["library_state"])
 
     def test_prepared_through_month_only_moves_backward(self):
@@ -1272,6 +1331,7 @@ class CatalogTests(unittest.TestCase):
                     ORDER BY w.id LIMIT 1""").fetchone()
                 self.assertIsNotNone(row)
                 anime_id = int(row[0])
+                title = str(db.execute("SELECT title_ja FROM anime_work WHERE id=?", (anime_id,)).fetchone()[0])
                 db.execute("""INSERT INTO ani_rss_subscription VALUES(
                     'region-test',?,'Region Test',NULL,1,'follow',1,1,NULL,'enabled','now','now',0,NULL,'{}')""", (anime_id,))
             config = json.loads(Path(catalog.EXAMPLE_CONFIG).read_text(encoding="utf-8"))
@@ -1279,9 +1339,11 @@ class CatalogTests(unittest.TestCase):
             ani = catalog.query_catalog(path, {"availability": ["ani-rss"], "limit": ["all"]}, config)
             unavailable = catalog.query_catalog(path, {"availability": ["unavailable"], "limit": ["all"]}, config)
             unfiltered = catalog.query_catalog(path, {"limit": ["all"]}, config)
+            searched = catalog.query_catalog(path, {"q": [title], "media_type": ["other"], "limit": ["all"]}, config)
             self.assertNotIn(anime_id, {int(item["id"]) for item in ani["items"]})
             self.assertNotIn(anime_id, {int(item["id"]) for item in unavailable["items"]})
             self.assertNotIn(anime_id, {int(item["id"]) for item in unfiltered["items"]})
+            self.assertNotIn(anime_id, {int(item["id"]) for item in searched["items"]})
 
     def test_archive_download_resumes_an_interrupted_response(self):
         payload = b"abcdef"

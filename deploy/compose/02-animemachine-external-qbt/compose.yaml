@@ -2,7 +2,7 @@ name: animemachine
 
 services:
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.2.1}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.3.0}
     restart: unless-stopped
     init: true
     environment:

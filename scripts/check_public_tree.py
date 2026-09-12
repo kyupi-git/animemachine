@@ -43,7 +43,7 @@ def _filename_failures(relative: str) -> list[str]:
         failures.append(f"private publication path: {relative}")
     if ".local" in parts:
         failures.append(f"runtime state directory: {relative}")
-    if p.name in FORBIDDEN_NAMES and relative != "config/config.example.json":
+    if (p.name in FORBIDDEN_NAMES or p.name.casefold().startswith("config.json.")) and relative != "config/config.example.json":
         failures.append(f"private filename: {relative}")
     if p.suffix.casefold() in RUNTIME_SUFFIXES and relative not in ALLOWED_RUNTIME_FIXTURES:
         failures.append(f"runtime artifact: {relative}")
@@ -79,7 +79,7 @@ def _directory_entries(root: Path) -> Iterable[tuple[str, bytes]]:
         relative = path.relative_to(root).as_posix()
         parts = PurePosixPath(relative).parts
         if (any(part in SKIP_DIRS or part in SOURCE_PRIVATE_DIRS for part in parts)
-                or relative in SOURCE_PRIVATE_FILES
+                or relative in SOURCE_PRIVATE_FILES or relative.casefold().startswith("config.json.")
                 or any(relative == prefix or relative.startswith(prefix + "/")
                        for prefix in SOURCE_PRIVATE_PREFIXES)):
             continue

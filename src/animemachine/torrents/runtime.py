@@ -353,15 +353,17 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
                  manifest_json: Path | None = None) -> dict[str, int]:
     if manifest_json and manifest_json.is_file():
         backfill_manifests(runtime_db, manifest_json)
+    with contextlib.closing(sqlite3.connect(runtime_db)) as runtime, contextlib.closing(sqlite3.connect(metadata_db)) as product:
+        return _sync_overlay_connections(product, runtime, offline_metadata=offline_metadata)
+
+
+def _sync_overlay_connections(product: sqlite3.Connection, runtime: sqlite3.Connection, *,
+                              offline_metadata: Path | None = None) -> dict[str, int]:
     stamp = utcnow()
-    runtime = sqlite3.connect(runtime_db)
     runtime.row_factory = sqlite3.Row
-    product = sqlite3.connect(metadata_db)
     product.row_factory = sqlite3.Row
     product.execute("PRAGMA foreign_keys=ON")
     migrate_overlay(product)
-    bgm_to_anime, by_title_year, by_title, start_by_bgm = _identity_indexes(product)
-    offline = _offline_by_mal(offline_metadata)
     tables = {row[0] for row in runtime.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     required = {"torrent", "anime_work", "torrent_work", "torrent_resolution"}
     if not required.issubset(tables):
@@ -398,8 +400,9 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
             "submissions": int(product.execute("SELECT COUNT(*) FROM runtime_submission").fetchone()[0]),
             "watchMatches": 0, "snapshotReused": 1,
         }
-        product.close(); runtime.close()
         return result
+    bgm_to_anime, by_title_year, by_title, start_by_bgm = _identity_indexes(product)
+    offline = _offline_by_mal(offline_metadata)
     work_map: dict[int, int] = {}
     work_rows = list(runtime.execute("SELECT * FROM anime_work ORDER BY work_id"))
     mapped_rows: list[tuple[Any, ...]] = []
@@ -421,12 +424,14 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
     file_map_table = "file_map" in tables
     submission_table = "submission" in tables
     asset_table = "asset_provenance" in tables
-    torrent_rows = list(runtime.execute("SELECT * FROM torrent ORDER BY info_hash"))
+    torrent_count = int(runtime.execute("SELECT COUNT(*) FROM torrent").fetchone()[0])
     verified_link_counts = {str(row["info_hash"]): int(row["n"]) for row in runtime.execute(
         "SELECT info_hash,COUNT(*) n FROM torrent_work WHERE mapping_state='verified' GROUP BY info_hash")}
     directory_by_work = {int(row["work_id"]): str(row["directory_name"]) for row in work_rows}
-    created_by_hash = {str(row["info_hash"]): str(row["torrent_created_at"] or "") for row in torrent_rows}
-    asset_kind_by_hash = {str(row["info_hash"]): str(row["asset_kind"] if "asset_kind" in row.keys() else "torrent") for row in torrent_rows}
+    created_by_hash = {str(row[0]): str(row[1] or "") for row in runtime.execute("SELECT info_hash,torrent_created_at FROM torrent")}
+    has_asset_kind = any(row[1] == "asset_kind" for row in runtime.execute("PRAGMA table_info(torrent)"))
+    asset_kind_by_hash = ({str(row[0]): str(row[1]) for row in runtime.execute("SELECT info_hash,asset_kind FROM torrent")}
+                         if has_asset_kind else {})
     archive_start_by_id = {int(row[0]): str(row[1] or "") for row in product.execute("SELECT id,start_month FROM anime_work")}
     with product:
         product.execute("UPDATE download_plan SET state='stale',updated_at=? WHERE state='preview'", (stamp,))
@@ -434,19 +439,19 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
             product.execute(f"DELETE FROM {table}")
         product.executemany("INSERT INTO runtime_work VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", mapped_rows)
         product.executemany("INSERT INTO runtime_review VALUES(?,?,?,?,?,?,?)", reviews)
-        torrent_values = []
-        for row in torrent_rows:
-            keys = set(row.keys())
-            torrent_values.append((
-                row["info_hash"], row["torrent_path"], row["asset_kind"] if "asset_kind" in keys else "torrent",
-                row["magnet_uri"] if "magnet_uri" in keys else None, row["info_name"], row["source_class"], row["effective_group"],
-                row["language_hint"], row["scan_state"], row["scan_reason"], row["file_count"], row["total_bytes"],
-                row["torrent_created_at"], row["created_by"], row["release_flags_json"] or "[]", row["collection_hint"],
-                row["video_height"], row["video_scan"], row["bit_depth"], row["metadata_state"] if "metadata_state" in keys else "available",
-                row["release_unit"] if "release_unit" in keys else "unknown",
-                row["volume_sequence_json"] if "volume_sequence_json" in keys else "[]",
-                row["episode_sequence_json"] if "episode_sequence_json" in keys else "[]"))
-        product.executemany("INSERT INTO runtime_torrent VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", torrent_values)
+        def torrent_values():
+            for row in runtime.execute("SELECT * FROM torrent ORDER BY info_hash"):
+                keys = set(row.keys())
+                yield (
+                    row["info_hash"], row["torrent_path"], row["asset_kind"] if "asset_kind" in keys else "torrent",
+                    row["magnet_uri"] if "magnet_uri" in keys else None, row["info_name"], row["source_class"], row["effective_group"],
+                    row["language_hint"], row["scan_state"], row["scan_reason"], row["file_count"], row["total_bytes"],
+                    row["torrent_created_at"], row["created_by"], row["release_flags_json"] or "[]", row["collection_hint"],
+                    row["video_height"], row["video_scan"], row["bit_depth"], row["metadata_state"] if "metadata_state" in keys else "available",
+                    row["release_unit"] if "release_unit" in keys else "unknown",
+                    row["volume_sequence_json"] if "volume_sequence_json" in keys else "[]",
+                    row["episode_sequence_json"] if "episode_sequence_json" in keys else "[]")
+        product.executemany("INSERT INTO runtime_torrent VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", torrent_values())
         link_values = []
         for row in runtime.execute("SELECT * FROM torrent_work WHERE mapping_state='verified' ORDER BY info_hash,work_id"):
             anime_id = work_map.get(int(row["work_id"]))
@@ -512,7 +517,7 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
             "runtime_synced_at": stamp,
             "runtime_work_count": str(len(mapped_rows)),
             "runtime_unmapped_work_count": str(len(reviews)),
-            "runtime_torrent_count": str(len(torrent_rows)),
+            "runtime_torrent_count": str(torrent_count),
             "runtime_verified_link_count": str(product.execute("SELECT COUNT(*) FROM runtime_torrent_work").fetchone()[0]),
             "runtime_manifest_file_count": str(product.execute("SELECT COUNT(*) FROM runtime_torrent_file").fetchone()[0]),
             "runtime_submission_count": str(product.execute("SELECT COUNT(*) FROM runtime_submission").fetchone()[0]),
@@ -524,12 +529,11 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
     result = {
         "metadataWorks": product.execute("SELECT COUNT(*) FROM anime_work").fetchone()[0],
         "mappedRuntimeWorks": len(mapped_rows), "unmappedRuntimeWorks": len(reviews),
-        "torrents": len(torrent_rows), "verifiedLinks": product.execute("SELECT COUNT(*) FROM runtime_torrent_work").fetchone()[0],
+        "torrents": torrent_count, "verifiedLinks": product.execute("SELECT COUNT(*) FROM runtime_torrent_work").fetchone()[0],
         "manifestFiles": product.execute("SELECT COUNT(*) FROM runtime_torrent_file").fetchone()[0],
         "submissions": product.execute("SELECT COUNT(*) FROM runtime_submission").fetchone()[0],
         "watchMatches": watch_matches,
     }
-    product.close(); runtime.close()
     return result
 
 

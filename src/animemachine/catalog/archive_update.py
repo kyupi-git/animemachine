@@ -130,8 +130,12 @@ class ArchiveUpdater:
             with contextlib.closing(sqlite3.connect(self.db_path, timeout=120)) as db:
                 db.execute("PRAGMA busy_timeout=120000")
                 current = db.execute("SELECT value FROM metadata WHERE key='archive_digest'").fetchone()
+                release_event_source = db.execute(
+                    "SELECT value FROM metadata WHERE key='release_event_source_version'"
+                ).fetchone()
             digest = str(descriptor.get("digest") or "")
-            if current and current[0] == digest:
+            if (current and current[0] == digest and release_event_source
+                    and release_event_source[0] == self.catalog.RELEASE_EVENT_SOURCE_VERSION):
                 self._set("unchanged", archiveName=descriptor.get("name"), archiveCreatedAt=descriptor.get("created_at"))
                 return
             self._set("building", archiveName=descriptor.get("name"))
@@ -189,9 +193,19 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
             for table, fields in simple.items():
                 db.execute(f"DELETE FROM {table} WHERE anime_id IN (SELECT t.id FROM anime_work t JOIN incoming.anime_work s ON s.bgm_id=t.bgm_id WHERE EXISTS(SELECT 1 FROM incoming.{table} x WHERE x.anime_id=s.id))")
                 db.execute(f"INSERT OR IGNORE INTO {table}(anime_id,{','.join(fields)}) SELECT t.id,{','.join('x.'+f for f in fields)} FROM incoming.{table} x JOIN incoming.anime_work s ON s.id=x.anime_id JOIN anime_work t ON t.bgm_id=s.bgm_id")
+            db.execute("""DELETE FROM anime_release_event
+                WHERE source LIKE 'bangumi-archive:%' AND anime_id IN (
+                    SELECT t.id FROM anime_work t JOIN incoming.anime_work s ON s.bgm_id=t.bgm_id
+                )""")
+            db.execute("""INSERT OR IGNORE INTO anime_release_event(anime_id,event_type,release_date,source)
+                SELECT t.id,x.event_type,x.release_date,x.source
+                FROM incoming.anime_release_event x
+                JOIN incoming.anime_work s ON s.id=x.anime_id
+                JOIN anime_work t ON t.bgm_id=s.bgm_id""")
             catalog_module.rebuild_studio_clusters(db)
             catalog_module.rebuild_theme_clusters(db)
-            for key in ("archive_name", "archive_created_at", "archive_digest", "record_count", "built_at"):
+            for key in ("archive_name", "archive_created_at", "archive_digest", "record_count", "built_at",
+                        "release_event_source_version"):
                 db.execute("INSERT INTO metadata(key,value) SELECT key,value FROM incoming.metadata WHERE key=? ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key,))
             catalog_module.relation_graph.rebuild(db, force=True)
             catalog_module.rebuild_physical_layout(db)

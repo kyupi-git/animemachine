@@ -7,6 +7,7 @@
   --line: #dcd8cd;
   --accent: #d55f3d;
   --green: #234c3d;
+  --radar-highlight: #fff1bd;
   --shadow: 0 18px 50px rgba(32, 42, 37, 0.1);
 }
 * {
@@ -528,7 +529,8 @@ dialog {
   box-shadow: 0 35px 100px rgba(0, 0, 0, 0.28);
   overflow: auto;
 }
-#settingsDialog {
+#settingsDialog,
+#radarDialog {
   width: min(1280px, 96vw);
   height: min(900px, calc(100vh - 48px));
   max-height: calc(100vh - 48px);
@@ -566,6 +568,35 @@ dialog::backdrop {
 }
 #settingsForm > h2 { margin: 0 0 12px; font-size: 30px; }
 #settingsDialog > .close { position: absolute; right: 0; }
+#radarDialog > .close { position: absolute; right: 0; }
+.radar-button { margin-inline-end: 1em; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-weight: 700; }
+.radar-shell { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 24px 34px 12px; }
+.radar-shell h2 { margin: 0 40px 8px 0; font-size: 30px; }
+.radar-shell > p { margin: 0 40px 18px 0; }
+.radar-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.radar-tabs .tab { flex: 1; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; color: var(--ink); background: var(--paper); font: inherit; cursor: pointer; }
+.radar-tabs .tab.active { background: var(--green); color: var(--panel); }
+.radar-panel { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+.radar-table { width: 100%; min-width: 1040px; }
+.radar-table th, .radar-table td { white-space: nowrap; }
+.radar-table th:first-child, .radar-table td:first-child { min-width: 460px; width: 58%; }
+.radar-table th:not(:first-child), .radar-table td:not(:first-child) { width: 1%; padding-left: 10px; padding-right: 10px; }
+.radar-table th.radar-media, .radar-table td.radar-media { min-width: 86px; }
+.radar-table th:last-child, .radar-table td:last-child { min-width: 170px; }
+.radar-table tbody tr.radar-highlight { background: var(--radar-highlight); }
+.radar-table tbody tr.radar-highlight:hover { background: var(--radar-highlight); }
+.radar-work { text-align: start; font-weight: 700; white-space: nowrap; overflow-wrap: normal; }
+.radar-progress { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.radar-subscribed { color: var(--green); font-weight: 700; }
+#radarSubscribeForm { display: grid; gap: 18px; padding: 30px; }
+#radarSubscribeForm h2 { margin-right: 30px; }
+#radarResource { width: 100%; }
+@media (max-width: 600px) {
+  .radar-shell { padding: 18px 14px 8px; }
+  .radar-shell h2 { font-size: 24px; }
+  .radar-tabs { flex-wrap: nowrap; }
+  .radar-tabs .tab { min-width: 0; padding: 8px 6px; font-size: 12px; text-align: center; }
+}
 #settingsDialog .tab-panel {
   min-height: 0;
   padding: 2px 4px 18px;
@@ -1005,7 +1036,6 @@ details summary {
   font-size: 12px;
 }
 .inventory.selectable { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px; align-items: start; }
-.ani-rss-inventory:has(.ani-rss-delete) { grid-template-columns: max-content minmax(0, 1fr) max-content; }
 .ani-rss-delete { align-self: center; margin-left: 2ch; }
 .inventory.selectable > input { margin-top: 4px; }
 .inventory.selectable > span > b { display: block; overflow-wrap: anywhere; }
@@ -1013,11 +1043,16 @@ details summary {
 .subtitle-tools { display: grid; grid-template-columns: max-content minmax(180px, 1fr) max-content; align-items: center; gap: 10px; padding: 0 12px 12px 36px; }
 .subtitle-tools small { grid-column: 1 / -1; }
 .subtitle-tools select { min-width: 0; }
+.detail-subtitle-tools { margin-top: 8px; padding-left: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.playback-source-picker { display: grid; grid-template-columns: max-content minmax(180px, 1fr); align-items: center; gap: 10px; margin-bottom: 10px; }
+.playback-source-picker select { min-width: 0; }
+.ani-rss-playback-management { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -2px 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .resource-search-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1em; margin-top: 13px; }
 .submission-checks .check { white-space: nowrap; }
 .submission-checks .check input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; }
 @media (max-width: 720px) {
   .subtitle-tools { grid-template-columns: 1fr; padding-left: 12px; }
+  .playback-source-picker { grid-template-columns: 1fr; }
 }
 .detail-section-heading {
   display: flex;
@@ -1291,7 +1326,7 @@ details summary {
   list-style: none;
 }
 @media (max-height: 760px) {
-  #settingsDialog { height: calc(100vh - 24px); max-height: calc(100vh - 24px); }
+  #settingsDialog, #radarDialog { height: calc(100vh - 24px); max-height: calc(100vh - 24px); }
   #settingsForm { padding-top: 14px; }
   #settingsForm > h2 { margin-bottom: 6px; font-size: 25px; }
   #settingsDialog .form-actions { min-height: 54px; }
@@ -2148,8 +2183,6 @@ tr.global-search-divider::after {
   margin-bottom: 12px;
 }
 .playback-scope select { width: min(100%, 520px); min-width: 180px; }
-.ani-rss-library { display: grid; gap: 8px; }
-.ani-rss-inventory { border-color: #2d7157; background: #e8f3ed; }
 
 html[data-theme="dark"] {
   color-scheme: dark;
@@ -2160,6 +2193,7 @@ html[data-theme="dark"] {
   --line: #38453f;
   --accent: #f08a68;
   --green: #9ac8b2;
+  --radar-highlight: #443d24;
   --shadow: 0 18px 50px rgba(0, 0, 0, .34);
 }
 html[data-theme="dark"] input,
@@ -2184,7 +2218,6 @@ html[data-theme="dark"] .detail-image-actions .text-button { color: var(--ink); 
 html[data-theme="dark"] .inventory code,
 html[data-theme="dark"] .plan-job code { background: #111814; }
 html[data-theme="dark"] .notice { background: #2a211d; }
-html[data-theme="dark"] .ani-rss-inventory { border-color: #4e806a; background: #182920; }
 html[data-theme="dark"] .badge.ani-rss-managed { color: #bde8d4; background: #214c39; }
 html[data-theme="dark"] .badge.ani-rss-resource { color: #f1d99c; background: #5a461d; }
 html[data-theme="dark"] .badge.external { color: #dec5f2; background: #46345a; }

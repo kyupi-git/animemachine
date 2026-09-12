@@ -31,7 +31,7 @@ import zipfile
 
 import httpx
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -86,6 +86,7 @@ DISPLAY_TAG_METADATA = {
 }
 PLATFORMS = {0: "其他", 1: "TV", 2: "OVA", 3: "剧场版", 4: "短片", 5: "WEB", 2006: "动态漫画"}
 PLATFORM_CODES = {0: "other", 1: "tv", 2: "ova", 3: "movie", 4: "short", 5: "web", 2006: "motion_comic"}
+RELEASE_EVENT_SOURCE_VERSION = "archive-infobox-v2"
 RELATIONS = {1: "改编", 2: "前传", 3: "续集", 4: "总集篇", 5: "全集", 6: "番外篇", 7: "角色出演", 8: "相同世界观", 9: "不同世界观", 10: "不同演绎", 11: "衍生", 12: "主线故事", 14: "联动", 99: "其他"}
 RELATION_CODES = {1: "adaptation", 2: "prequel", 3: "sequel", 4: "summary", 5: "full_story", 6: "side_story", 7: "character_appearance", 8: "same_setting", 9: "alternative_setting", 10: "alternative_version", 11: "spin_off", 12: "main_story", 14: "collaboration", 99: "other"}
 STAFF_POSITIONS = {
@@ -526,6 +527,81 @@ def parse_archive_infobox(raw: str | None) -> dict[str, list[str]]:
         if cleaned:
             fields[key] = cleaned
     return fields
+
+
+_ARCHIVE_EXPLICIT_DATE_RE = re.compile(
+    r"(?<!\d)((?:19|20)\d{2})\s*(?:[-./]\s*(\d{1,2})\s*[-./]\s*(\d{1,2})|年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日)(?!\d)"
+)
+
+
+def parse_archive_explicit_dates(raw: str | None) -> list[str]:
+    """Extract only complete calendar dates explicitly present in Archive text."""
+    text = unicodedata.normalize("NFKC", str(raw or ""))
+    dates: list[str] = []
+    for match in _ARCHIVE_EXPLICIT_DATE_RE.finditer(text):
+        year = int(match.group(1))
+        month = int(match.group(2) or match.group(4) or 0)
+        day = int(match.group(3) or match.group(5) or 0)
+        try:
+            value = dt.date(year, month, day).isoformat()
+        except ValueError:
+            continue
+        if value not in dates:
+            dates.append(value)
+    return dates
+
+
+def _release_field_key(raw: str) -> str:
+    return unicodedata.normalize("NFKC", str(raw or "")).casefold().strip()
+
+
+def _is_bd_release_field(raw: str) -> bool:
+    """Recognize fields whose key explicitly says that the date is a BD/Blu-ray release."""
+    key = _release_field_key(raw)
+    compact = re.sub(r"[\s_‐‑‒–—―-]+", "", key)
+    has_bd_marker = (
+        compact.startswith("bd")
+        or re.search(r"[/／&＆+＋・･]bd", compact) is not None
+        or any(marker in compact for marker in ("blu-ray", "bluray", "ブルーレイ", "蓝光", "藍光"))
+    )
+    if not has_bd_marker or "bdrip" in compact:
+        return False
+    return any(term in compact for term in (
+        "発売日", "発売日期", "発売予定日", "发售日", "发售日期", "发售预定日", "发售预定日期",
+        "發售日", "發售日期", "發售預定日", "發售預定日期", "发行日", "发行日期", "發行日", "發行日期",
+        "リリース日", "releasedate",
+    ))
+
+
+def _is_theatrical_release_field(raw: str) -> bool:
+    """Recognize explicit public-premiere fields used by movie subjects."""
+    compact = re.sub(r"[\s_‐‑‒–—―-]+", "", _release_field_key(raw))
+    return compact in {
+        "上映日", "上映日期", "公映日", "公映日期", "公開日", "公开日", "公開年月日", "公开年月日",
+        "劇場公開日", "剧场公开日", "劇場公開日期", "剧场公开日期",
+        "配信日", "配信開始日", "配信开始日", "ネット配信開始日", "网络上线日", "网络上线日期",
+        "網絡上線日", "網絡上線日期", "onlinepremieredate", "onlinereleasedate", "streamingreleasedate",
+    }
+
+
+def archive_release_events(subject: dict[str, Any]) -> list[dict[str, str]]:
+    """Extract semantically explicit release events from one local Archive subject."""
+    events: dict[tuple[str, str], dict[str, str]] = {}
+    platform = int(subject.get("platform") or 0)
+    for key, lines in _archive_infobox_chunks(subject.get("infobox")).items():
+        event_type = "bd" if _is_bd_release_field(key) else (
+            "theatrical" if platform == 3 and _is_theatrical_release_field(key) else ""
+        )
+        if not event_type:
+            continue
+        for release_date in parse_archive_explicit_dates("\n".join(lines)):
+            identity = (event_type, release_date)
+            events.setdefault(identity, {
+                "event_type": event_type,
+                "release_date": release_date,
+                "source": f"bangumi-archive:infobox:{key.strip()}",
+            })
+    return [events[key] for key in sorted(events)]
 
 
 def parse_archive_alias_entries(raw: str | None) -> list[tuple[str, str | None]]:
@@ -1247,6 +1323,7 @@ class BuildItem:
     staff: list[dict[str, Any]]
     cast: list[dict[str, Any]]
     relations: list[dict[str, Any]]
+    release_events: list[dict[str, str]] = field(default_factory=list)
 
 
 def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] | None,
@@ -1256,12 +1333,8 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
     print(f"[archive] Reading {'all animation works' if manifest is None else f'{len(target_ids)} selected works'} from {archive_path.name}...", flush=True)
     with zipfile.ZipFile(archive_path) as archive:
         subjects: dict[int, dict[str, Any]] = {}
-        related_subjects: dict[int, dict[str, Any]] = {}
         for row in iter_jsonlines(archive, "subject.jsonlines"):
             subject_id = int(row.get("id", -1))
-            related_subjects[subject_id] = {key: row.get(key) for key in (
-                "id", "type", "name", "name_cn", "infobox", "platform", "series", "tags", "date"
-            )}
             if (manifest is None and int(row.get("type", -1)) == 2) or subject_id in target_ids:
                 subjects[subject_id] = row
         if manifest is None:
@@ -1271,42 +1344,65 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
         if missing:
             raise RuntimeError(f"subjects absent from archive: {missing}; enable a future online supplement or choose archived IDs")
 
-        subject_persons = scan_rows(archive, "subject-persons.jsonlines", lambda r: int(r.get("subject_id", -1)) in target_ids)
-        subject_characters = scan_rows(archive, "subject-characters.jsonlines", lambda r: int(r.get("subject_id", -1)) in target_ids)
-        person_characters = scan_rows(archive, "person-characters.jsonlines", lambda r: int(r.get("subject_id", -1)) in target_ids)
-        relation_rows_raw = scan_rows(archive, "subject-relations.jsonlines", lambda r: int(r.get("subject_id", -1)) in target_ids)
+        def grouped_links(filename: str, fields: tuple[str, ...]) -> dict[int, list[tuple[int, ...]]]:
+            grouped: dict[int, list[tuple[int, ...]]] = {}
+            selected = 0
+            defaults = {"position": -1, "relation_type": 99}
+            for count, link in enumerate(iter_jsonlines(archive, filename), 1):
+                sid = int(link.get("subject_id", -1))
+                if sid in target_ids:
+                    grouped.setdefault(sid, []).append(tuple(int(link.get(key, defaults.get(key, 0)) or 0) for key in fields))
+                    selected += 1
+                if count % 500_000 == 0:
+                    metrics.progress(f"[archive] {filename}: scanned {count:,}, selected {selected:,}")
+            metrics.end_progress()
+            return grouped
+
+        positions_by_subject = grouped_links("subject-persons.jsonlines", ("person_id", "position"))
+        chars_by_subject = grouped_links("subject-characters.jsonlines", ("character_id", "type"))
+        actors_by_subject = grouped_links("person-characters.jsonlines", ("person_id", "character_id"))
+        relations_by_subject = grouped_links("subject-relations.jsonlines", ("related_subject_id", "relation_type"))
+        # Only retain subjects actually referenced by a selected animation.
+        # Keeping every book/game/music infobox in the dump dominated startup RSS.
+        related_ids = {link[0] for links in relations_by_subject.values() for link in links}
+        related_subjects = {sid: subjects[sid] for sid in related_ids if sid in subjects}
+        missing_related = related_ids - subjects.keys()
+        if missing_related:
+            for row in iter_jsonlines(archive, "subject.jsonlines"):
+                sid = int(row.get("id", -1))
+                if sid in missing_related:
+                    related_subjects[sid] = {key: row.get(key) for key in (
+                        "id", "type", "name", "name_cn", "infobox", "platform", "series", "tags", "date"
+                    )}
         episode_count: dict[int, int] = {}
+        episode_start_number: dict[int, int] = {}
         selected_episodes = 0
         for count, row in enumerate(iter_jsonlines(archive, "episode.jsonlines"), 1):
             sid = int(row.get("subject_id", -1))
             if sid in target_ids and int(row.get("type", -1)) == 0:
                 episode_count[sid] = episode_count.get(sid, 0) + 1
+                with contextlib.suppress(TypeError, ValueError):
+                    sort_value = float(row.get("sort"))
+                    if sort_value > 0 and sort_value.is_integer():
+                        number = int(sort_value)
+                        episode_start_number[sid] = min(episode_start_number.get(sid, number), number)
                 selected_episodes += 1
             if count % 500_000 == 0:
                 metrics.progress(f"[archive] episode.jsonlines: scanned {count:,}, selected {selected_episodes:,}")
         metrics.end_progress()
 
-        person_ids = {int(row["person_id"]) for row in subject_persons + person_characters}
-        character_ids = {int(row["character_id"]) for row in subject_characters + person_characters}
-        people = {int(row["id"]): row for row in scan_rows(archive, "person.jsonlines", lambda r: int(r.get("id", -1)) in person_ids)}
-        characters = {int(row["id"]): row for row in scan_rows(archive, "character.jsonlines", lambda r: int(r.get("id", -1)) in character_ids)}
-
-    positions_by_subject: dict[int, list[dict[str, Any]]] = {}
-    for row in subject_persons:
-        positions_by_subject.setdefault(int(row["subject_id"]), []).append(row)
-    chars_by_subject: dict[int, list[dict[str, Any]]] = {}
-    for row in subject_characters:
-        chars_by_subject.setdefault(int(row["subject_id"]), []).append(row)
-    actors_by_subject: dict[int, list[dict[str, Any]]] = {}
-    for row in person_characters:
-        actors_by_subject.setdefault(int(row["subject_id"]), []).append(row)
-    relations_by_subject: dict[int, list[dict[str, Any]]] = {}
-    for row in relation_rows_raw:
-        relations_by_subject.setdefault(int(row["subject_id"]), []).append(row)
+        person_ids = {link[0] for groups in (positions_by_subject, actors_by_subject)
+                      for links in groups.values() for link in links}
+        character_ids = {link[0] for links in chars_by_subject.values() for link in links}
+        character_ids.update(link[1] for links in actors_by_subject.values() for link in links)
+        people = {int(row["id"]): {"id": int(row["id"]), "name": row["name"]}
+                  for row in iter_jsonlines(archive, "person.jsonlines") if int(row.get("id", -1)) in person_ids}
+        characters = {int(row["id"]): {"id": int(row["id"]), "name": row["name"]}
+                      for row in iter_jsonlines(archive, "character.jsonlines") if int(row.get("id", -1)) in character_ids}
     output: list[BuildItem] = []
     related_evidence_cache: dict[int, tuple[str, str]] = {}
     for bgm_id in sorted(target_ids):
-        subject = subjects[bgm_id]
+        subject = subjects.pop(bgm_id)
         manifest_item = manifest_by_id[bgm_id]
         info = parse_archive_infobox(subject.get("infobox"))
         raw_tag_records = [_tag_record(tag, rank) for rank, tag in enumerate(subject.get("tags") or [], 1)]
@@ -1351,19 +1447,19 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
                 dedup_titles.append(title)
 
         staff: list[dict[str, Any]] = []
-        for link in positions_by_subject.get(bgm_id, []):
-            person = people.get(int(link["person_id"]))
+        for person_id, position in positions_by_subject.pop(bgm_id, []):
+            person = people.get(person_id)
             if not person:
                 continue
-            position = int(link.get("position", -1))
             role, role_type = STAFF_POSITIONS.get(position, (f"职员 #{position}", "staff"))
             staff.append({"person_id": person["id"], "name": person["name"], "role": role, "role_type": role_type, "source": "bangumi-archive"})
 
-        char_roles = {int(row["character_id"]): CHARACTER_ROLES.get(int(row.get("type", 0)), "其他") for row in chars_by_subject.get(bgm_id, [])}
+        char_roles = {character_id: CHARACTER_ROLES.get(role, "其他")
+                      for character_id, role in chars_by_subject.pop(bgm_id, [])}
         cast: list[dict[str, Any]] = []
-        for link in actors_by_subject.get(bgm_id, []):
-            person = people.get(int(link["person_id"]))
-            character = characters.get(int(link["character_id"]))
+        for person_id, character_id in actors_by_subject.pop(bgm_id, []):
+            person = people.get(person_id)
+            character = characters.get(character_id)
             if person and character:
                 cast.append({
                     "character_id": character["id"], "character_name": character["name"],
@@ -1374,10 +1470,8 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
         cast.sort(key=lambda x: ({"主角": 0, "配角": 1, "客串": 2}.get(x["character_role"], 3), x["character_name"]))
 
         relations: list[dict[str, Any]] = []
-        for link in relations_by_subject.get(bgm_id, []):
-            related_id = int(link["related_subject_id"])
+        for related_id, relation_id in relations_by_subject.pop(bgm_id, []):
             related = related_subjects.get(related_id, {})
-            relation_id = int(link.get("relation_type", 99))
             relation_code = RELATION_CODES.get(relation_id, "other")
             cached_evidence = related_evidence_cache.get(related_id)
             if cached_evidence is None:
@@ -1421,12 +1515,17 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
             "title_ja": subject["name"], "title_zh_hans": subject.get("name_cn") or None, "title_en": english,
             "media_type": PLATFORMS.get(platform, f"平台 #{subject.get('platform')}"), "media_code": PLATFORM_CODES.get(platform, "other"),
             "start_month": start_month, "directory_date": directory_date, "raw_date": subject.get("date"),
-            "episode_count": episode_count.get(bgm_id) or None, "source_type": source_label, "source_code": source_code(source_label),
+            "episode_count": episode_count.get(bgm_id) or None,
+            "episode_start_number": episode_start_number.get(bgm_id),
+            "source_type": source_label, "source_code": source_code(source_label),
             "original_language": original_language,
             "country_code": manifest_item.get("country_code"), "studio": " / ".join(studios) or None,
             "summary": subject.get("summary"), "source_url": f"https://bgm.tv/subject/{bgm_id}"
         }
-        output.append(BuildItem(manifest_item, work, dedup_titles, filtered_tags, staff, cast, relations))
+        output.append(BuildItem(
+            manifest_item, work, dedup_titles, filtered_tags, staff, cast, relations,
+            archive_release_events(subject),
+        ))
         if len(output) % 500 == 0 or len(output) == len(target_ids):
             metrics.progress(f"[catalog] prepared {len(output):,}/{len(target_ids):,} works")
     metrics.end_progress()
@@ -1440,7 +1539,7 @@ CREATE TABLE anime_work(
   id INTEGER PRIMARY KEY, bgm_id INTEGER NOT NULL UNIQUE, wikidata_id TEXT,
   title_ja TEXT NOT NULL, title_zh_hans TEXT, title_en TEXT, media_type TEXT, media_code TEXT,
   start_month TEXT NOT NULL, directory_date TEXT NOT NULL, raw_date TEXT,
-  episode_count INTEGER, source_type TEXT, source_code TEXT, original_language TEXT NOT NULL DEFAULT 'ja', country_code TEXT, studio TEXT,
+  episode_count INTEGER, episode_start_number INTEGER, source_type TEXT, source_code TEXT, original_language TEXT NOT NULL DEFAULT 'ja', country_code TEXT, studio TEXT,
   summary TEXT, source_url TEXT NOT NULL, fetched_at TEXT NOT NULL,
   physical_role TEXT NOT NULL DEFAULT 'work', physical_owner_anime_id INTEGER
 );
@@ -1471,6 +1570,12 @@ CREATE TABLE anime_relation(
   relation_code TEXT NOT NULL, strict_group INTEGER NOT NULL CHECK(strict_group IN (0,1)), source TEXT NOT NULL,
   related_subject_type INTEGER, related_subject_kind TEXT, related_subject_meta_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE anime_release_event(
+  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  anime_id INTEGER NOT NULL REFERENCES anime_work(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL, release_date TEXT NOT NULL, source TEXT NOT NULL,
+  UNIQUE(anime_id,event_type,release_date)
+);
 CREATE INDEX idx_work_start ON anime_work(start_month);
 CREATE INDEX idx_work_type ON anime_work(media_type);
 CREATE INDEX idx_work_source ON anime_work(source_type);
@@ -1490,6 +1595,7 @@ CREATE INDEX idx_studio_cluster_name ON anime_studio_cluster(cluster_name,anime_
 CREATE INDEX idx_country_code ON anime_country(country_code,anime_id);
 CREATE INDEX idx_staff_anime ON anime_staff(anime_id);
 CREATE INDEX idx_cast_anime ON anime_cast(anime_id);
+CREATE INDEX idx_release_event_type_date ON anime_release_event(event_type,release_date,anime_id);
 """
 
 
@@ -1517,7 +1623,8 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
             # bind mounts; the validated result is published atomically below.
             db.execute("PRAGMA journal_mode=OFF")
             db.execute("PRAGMA synchronous=OFF")
-            db.execute("PRAGMA temp_store=MEMORY")
+            db.execute("PRAGMA temp_store=FILE")
+            db.execute("PRAGMA cache_size=-16384")
             db.executescript(SCHEMA)
             runtime_catalog.migrate_overlay(db)
             ani_rss.migrate(db)
@@ -1531,7 +1638,8 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                 ("sources", "Bangumi Archive" + ("; Wikidata labels/aliases" if uses_wikidata else "")),
                 ("license_notice", "Bangumi entries: CC BY-SA 3.0" + ("; Wikidata: CC0" if uses_wikidata else "")),
                 ("build_state", "enriching"),
-                ("feature_schema_version", "14"),
+                ("feature_schema_version", "16"),
+                ("release_event_source_version", RELEASE_EVENT_SOURCE_VERSION),
                 ("english_display_title_policy", "quality-v4")
             ]
             if archive_meta:
@@ -1577,6 +1685,10 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                 db.executemany("INSERT INTO anime_relation VALUES(?,?,?,?,?,?,?,?,?,?)", [
                     (anime_id, x["related_bgm_id"], x["related_title"], x["relation_type"], x["relation_code"], x["strict_group"], x["source"], x["related_subject_type"], x["related_subject_kind"], x["related_subject_meta_json"]) for x in row.relations
                 ])
+                db.executemany(
+                    "INSERT OR IGNORE INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(?,?,?,?)",
+                    [(anime_id, x["event_type"], x["release_date"], x["source"]) for x in row.release_events],
+                )
                 if ordinal % 5000 == 0 or ordinal == total_rows:
                     metrics.progress(f"[catalog] rows {ordinal:,}/{total_rows:,}")
             metrics.end_progress()
@@ -1739,6 +1851,8 @@ def migrate_catalog_features(db: sqlite3.Connection) -> None:
             db.execute("ALTER TABLE anime_work ADD COLUMN physical_role TEXT NOT NULL DEFAULT 'work'")
         if "physical_owner_anime_id" not in columns:
             db.execute("ALTER TABLE anime_work ADD COLUMN physical_owner_anime_id INTEGER")
+        if "episode_start_number" not in columns:
+            db.execute("ALTER TABLE anime_work ADD COLUMN episode_start_number INTEGER")
         tag_columns = {row[1] for row in db.execute("PRAGMA table_info(anime_tag)")}
         if "vote_count" not in tag_columns:
             db.execute("ALTER TABLE anime_tag ADD COLUMN vote_count INTEGER NOT NULL DEFAULT 0")
@@ -1758,6 +1872,12 @@ def migrate_catalog_features(db: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS anime_studio_cluster(anime_id INTEGER NOT NULL REFERENCES anime_work(id) ON DELETE CASCADE,cluster_key TEXT NOT NULL,cluster_name TEXT NOT NULL,studio_name TEXT NOT NULL,UNIQUE(anime_id,cluster_key,studio_name));
         CREATE TABLE IF NOT EXISTS anime_country(anime_id INTEGER NOT NULL REFERENCES anime_work(id) ON DELETE CASCADE,country_code TEXT NOT NULL,evidence TEXT NOT NULL,UNIQUE(anime_id,country_code));
         CREATE TABLE IF NOT EXISTS anime_image(anime_id INTEGER PRIMARY KEY REFERENCES anime_work(id) ON DELETE CASCADE,mime_type TEXT,image_blob BLOB,source_url TEXT,etag TEXT,fetched_at TEXT,error TEXT);
+        CREATE TABLE IF NOT EXISTS anime_release_event(
+          event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          anime_id INTEGER NOT NULL REFERENCES anime_work(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL,release_date TEXT NOT NULL,source TEXT NOT NULL,
+          UNIQUE(anime_id,event_type,release_date)
+        );
         CREATE INDEX IF NOT EXISTS idx_theme_value ON anime_theme(theme_code);
         CREATE INDEX IF NOT EXISTS idx_theme_evidence_anime ON anime_theme_evidence(anime_id,accepted);
         CREATE INDEX IF NOT EXISTS idx_studio_value ON anime_studio(studio);
@@ -1770,6 +1890,7 @@ def migrate_catalog_features(db: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_cast_anime ON anime_cast(anime_id);
         CREATE INDEX IF NOT EXISTS idx_staff_role_name_anime ON anime_staff(role_type,name,anime_id);
         CREATE INDEX IF NOT EXISTS idx_cast_person_anime ON anime_cast(person_name,anime_id);
+        CREATE INDEX IF NOT EXISTS idx_release_event_type_date ON anime_release_event(event_type,release_date,anime_id);
         """)
         db.execute("""UPDATE anime_work SET media_code=CASE media_type WHEN 'TV' THEN 'tv' WHEN 'OVA' THEN 'ova'
             WHEN '剧场版' THEN 'movie' WHEN '短片' THEN 'short' WHEN 'WEB' THEN 'web' WHEN '动态漫画' THEN 'motion_comic'
@@ -1815,7 +1936,7 @@ def migrate_catalog_features(db: sqlite3.Connection) -> None:
         rebuild_studio_clusters(db)
         relation_graph.rebuild(db)
         rebuild_physical_layout(db)
-        db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('feature_schema_version','14')")
+        db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('feature_schema_version','16')")
 
 
 def rebuild_physical_layout(db: sqlite3.Connection) -> None:
@@ -1907,10 +2028,11 @@ def ensure_catalog_features(db_path: Path) -> None:
         version = db.execute("SELECT value FROM metadata WHERE key='feature_schema_version'").fetchone()
         title_policy = db.execute("SELECT value FROM metadata WHERE key='english_display_title_policy'").fetchone()
         relation_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_relation_edge'").fetchone()
-        return ("media_code" in columns and "physical_role" in columns
-                and bool(version and version[0] == "14")
+        release_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_release_event'").fetchone()
+        return ("media_code" in columns and "physical_role" in columns and "episode_start_number" in columns
+                and bool(version and version[0] == "16")
                 and bool(title_policy and title_policy[0] == "quality-v4")
-                and bool(relation_table))
+                and bool(relation_table) and bool(release_table))
 
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
         if ready(db):
@@ -1940,16 +2062,114 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
                 )
     return items
 
+
+def _legacy_episode_start_number(db: sqlite3.Connection, anime_id: int, episode_count: int) -> int | None:
+    """Infer a cumulative episode start only from an unambiguous same-format sequel chain.
+
+    Fresh Catalogs persist Bangumi Archive ``episode.sort`` directly.  This fallback keeps
+    existing Catalogs useful until their next Archive refresh without guessing across branches,
+    movies, specials, or works whose episode totals are unknown.
+    """
+    if episode_count <= 0 or not db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_relation_edge'").fetchone():
+        return None
+    current = db.execute("SELECT media_code FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+    if not current:
+        return None
+    media_code = str(current[0] or "")
+    offset = 0
+    node = anime_id
+    seen = {node}
+    while True:
+        predecessors = db.execute(
+            """SELECT e.source_anime_id,w.episode_count,w.media_code
+               FROM anime_relation_edge e JOIN anime_work w ON w.id=e.source_anime_id
+               WHERE e.target_anime_id=? AND e.relation_code='sequel' AND e.grouping=1""",
+            (node,),
+        ).fetchall()
+        if not predecessors:
+            return offset + 1 if offset else None
+        if len(predecessors) != 1:
+            return None
+        predecessor_id, predecessor_count, predecessor_media = predecessors[0]
+        predecessor_id = int(predecessor_id)
+        if predecessor_id in seen or str(predecessor_media or "") != media_code or int(predecessor_count or 0) <= 0:
+            return None
+        seen.add(predecessor_id)
+        offset += int(predecessor_count)
+        node = predecessor_id
+
+
+def _episode_start_number(db: sqlite3.Connection, anime_id: int, episode_count: int,
+                          stored: Any = None) -> int | None:
+    with contextlib.suppress(TypeError, ValueError):
+        value = int(stored)
+        if value > 0:
+            return value
+    return _legacy_episode_start_number(db, anime_id, episode_count)
+
+
+def _episode_number(raw: Any) -> int:
+    with contextlib.suppress(TypeError, ValueError, OverflowError):
+        value = float(raw or 0)
+        if math.isfinite(value) and value > 0:
+            return int(value)
+    return 0
+
+
+def _local_episode_number(raw: Any, episode_count: int, episode_start: int | None) -> int:
+    value = _episode_number(raw)
+    if value <= 0:
+        return 0
+    # Ani-RSS normally reports work-local numbers. Only reinterpret a value when it
+    # exceeds this work's known total and Archive/sequel evidence can map it back
+    # into that total. This avoids changing already-local numbering.
+    if episode_count > 0 and value > episode_count and episode_start and episode_start > 1 and value >= episode_start:
+        local = value - episode_start + 1
+        if 1 <= local <= episode_count:
+            return local
+    return value
+
+
+def _episode_progress(db: sqlite3.Connection, anime_id: int, episode_count: Any,
+                      episode_start: Any, currents: Iterable[Any], totals: Iterable[Any]) -> dict[str, int | None]:
+    known_total = _episode_number(episode_count)
+    raw_currents = list(currents)
+    raw_totals = list(totals)
+    needs_offset = known_total > 0 and any(
+        _episode_number(value) > known_total for value in [*raw_currents, *raw_totals]
+    )
+    start = _episode_start_number(db, anime_id, known_total, episode_start) if needs_offset else None
+    normalized_currents = [_local_episode_number(value, known_total, start) for value in raw_currents]
+    normalized_totals = [_local_episode_number(value, known_total, start) for value in raw_totals]
+    current = max(normalized_currents, default=0)
+    # Archive episode_count is the work-local total.  Do not let an Ani-RSS
+    # franchise-wide total replace it after current progress has been localized.
+    # Only fall back to runtime totals when Archive is evidently stale (the
+    # observed local current already exceeds its known count) or has no count.
+    if known_total > 0 and (not current or current <= known_total):
+        total = known_total
+    else:
+        valid_totals = [value for value in normalized_totals if value > 0 and (not current or value >= current)]
+        total = max(valid_totals, default=0)
+    return {"current": current or None, "total": total or None}
+
 def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_catalog_features(db_path)
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as feature_db:
         has_ani_rss_media_table = bool(feature_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_media'").fetchone())
+        has_ani_rss_episode_state_table = bool(feature_db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_episode_state'").fetchone())
+        has_ani_rss_release_state_table = bool(feature_db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_release_state'").fetchone())
     config = config or ConfigStore(DEFAULT_CONFIG, EXAMPLE_CONFIG).read()
     config = {**config, "ui": {**config.get("ui", {}), "language": (params.get("language") or [config.get("ui", {}).get("language", "en")])[0]}}
     ani_state = ani_rss.state(db_path, config)
     ani_connection_ready = ani_rss.state_available(ani_state)
     base_where = ["COALESCE(w.physical_role,'work') NOT IN ('supplement','supplement_review')"]
+    hard_where: list[str] = []
+    hard_values: list[Any] = []
     where: list[str] = []
     values: list[Any] = []
 
@@ -1960,6 +2180,10 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         return [str(item).strip() for item in params.get(name, []) if str(item).strip()]
 
     q = value("q")
+    radar_mode = value("radar") == "1"
+    if radar_mode:
+        hard_where.append("(EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code='JP') "
+                          "OR NOT EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code!='OTHER'))")
     keyword_clause = "EXISTS(SELECT 1 FROM anime_title t WHERE t.anime_id=w.id AND t.title LIKE ?)"
     if q:
         where.append(keyword_clause)
@@ -1996,14 +2220,39 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             values.append(studio)
     start_from, start_to = value("start_from"), value("start_to")
     date_clauses: list[str] = []
-    if start_from:
-        date_clauses.append("w.start_month>=?")
-        values.append(start_from)
-    if start_to:
-        date_clauses.append("w.start_month<=?")
-        values.append(start_to)
-    if date_clauses:
-        where.append("(" + " AND ".join(date_clauses) + ")")
+
+    def month_bounds(expression: str) -> tuple[str, list[str]]:
+        clauses: list[str] = []
+        bound_values: list[str] = []
+        if start_from:
+            clauses.append(f"{expression}>=?")
+            bound_values.append(start_from)
+        if start_to:
+            clauses.append(f"{expression}<=?")
+            bound_values.append(start_to)
+        return (" AND ".join(clauses) if clauses else "1"), bound_values
+
+    if radar_mode:
+        tv_range, tv_values = month_bounds("w.start_month")
+        movie_start_range, movie_start_values = month_bounds("w.start_month")
+        release_range, release_values = month_bounds("substr(re.release_date,1,7)")
+        hard_where.append(
+            f"((w.media_code='tv' AND ({tv_range})) OR "
+            f"(w.media_code='movie' AND (({movie_start_range}) OR EXISTS("
+            "SELECT 1 FROM anime_release_event re WHERE re.anime_id=w.id "
+            f"AND re.event_type IN ('theatrical','bd') AND ({release_range})))))"
+        )
+        hard_values.extend([*tv_values, *movie_start_values, *release_values])
+        date_clauses = [tv_range] if start_from or start_to else []
+    else:
+        if start_from:
+            date_clauses.append("w.start_month>=?")
+            values.append(start_from)
+        if start_to:
+            date_clauses.append("w.start_month<=?")
+            values.append(start_to)
+        if date_clauses:
+            where.append("(" + " AND ".join(date_clauses) + ")")
     era = value("era") or value("decade")
     current_year = dt.datetime.now().year
     # The UI synchronizes a concrete era into the date range. Avoid counting
@@ -2061,7 +2310,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     # recategorize disabled works as “No available source”. A disabled region
     # therefore removes its cards from normal catalog queries entirely.
     if region_sql != "1":
-        where.append(f"({region_sql})")
+        hard_where.append(f"({region_sql})")
     disabled_classes = explicitly_disabled(policy.get("contentClasses", {}))
     disabled_resolutions = explicitly_disabled(policy.get("resolutions", {}))
     enabled_classes = [str(name).casefold() for name, enabled in policy.get("contentClasses", {}).items() if enabled]
@@ -2142,7 +2391,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     offset = max(int(value("offset") or 0), 0)
     locale = value("language") or "zh-Hans"
     title_expr = "COALESCE(w.title_zh_hans,w.title_ja)" if locale == "zh-Hans" else ("COALESCE(w.title_en,w.title_ja)" if locale == "en" else "w.title_ja")
-    sort = value("sort") or "random"
+    requested_sort = value("sort") or "recent_episode"
+    recent_episode_available = ani_connection_ready and has_ani_rss_episode_state_table
+    sort = requested_sort if requested_sort != "recent_episode" or recent_episode_available else "random"
     seed = value("seed") or instance_random_seed(db_path) or "anm"
     direction = "DESC" if value("direction") == "desc" else "ASC"
     primary = {
@@ -2151,10 +2402,38 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         "type": "w.media_code",
     }.get(sort, "w.start_month")
     pending_expr = "CASE WHEN EXISTS(SELECT 1 FROM anime_studio_cluster asp WHERE asp.anime_id=w.id) THEN 0 ELSE 1 END"
-    order = (f"{pending_expr} ASC,seeded_rank(w.id,?) ASC,w.start_month,w.media_code,{title_expr}" if sort == "random"
-             else f"{primary} {direction},w.start_month ASC,w.media_code ASC,{title_expr} ASC")
-    order_values = [seed] if sort == "random" else []
-    predicate = " WHERE " + " AND ".join(base_where + where)
+    episode_update_expr = "COALESCE((SELECT MAX(aes.last_episode_update_at) FROM ani_rss_subscription ans JOIN ani_rss_episode_state aes ON aes.remote_id=ans.remote_id WHERE ans.deleted_at IS NULL AND ans.enabled=1 AND ans.anime_id=w.id),'')"
+    if has_ani_rss_release_state_table:
+        episode_update_expr = (f"MAX({episode_update_expr},COALESCE((SELECT MAX(ars.last_episode_update_at) "
+                               "FROM ani_rss_release_state ars WHERE ars.anime_id=w.id),''))")
+    radar_event_date_expr = "w.start_month"
+    radar_event_order_values: list[str] = []
+    if radar_mode:
+        event_bounds, event_bound_values = month_bounds("substr(rse.release_date,1,7)")
+        start_bounds, start_bound_values = month_bounds("w.start_month")
+        radar_event_date_expr = (
+            "MAX(COALESCE((SELECT MAX(rse.release_date) FROM anime_release_event rse "
+            "WHERE rse.anime_id=w.id AND rse.event_type IN ('theatrical','bd') "
+            f"AND ({event_bounds})),''),CASE WHEN ({start_bounds}) THEN w.start_month ELSE '' END)"
+        )
+        radar_event_order_values = [*event_bound_values, *start_bound_values]
+    if sort == "recent_episode":
+        if radar_mode:
+            order = (f"CASE WHEN w.media_code='tv' AND {episode_update_expr}<>'' THEN 0 ELSE 1 END ASC,"
+                     f"CASE WHEN w.media_code='tv' THEN {episode_update_expr} ELSE '' END DESC,"
+                     f"CASE WHEN w.media_code='movie' THEN {radar_event_date_expr} ELSE w.start_month END DESC,"
+                     f"w.start_month DESC,w.media_code ASC,{title_expr} ASC,w.id ASC")
+        else:
+            order = (f"CASE WHEN {episode_update_expr}='' THEN 1 ELSE 0 END ASC,"
+                     f"{episode_update_expr} DESC,w.start_month DESC,w.media_code ASC,{title_expr} ASC,w.id ASC")
+    elif sort == "random":
+        order = f"{pending_expr} ASC,seeded_rank(w.id,?) ASC,w.start_month,w.media_code,{title_expr}"
+    else:
+        order = f"{primary} {direction},w.start_month ASC,w.media_code ASC,{title_expr} ASC"
+    order_values = ([seed] if sort == "random" else
+                    (radar_event_order_values if sort == "recent_episode" and radar_mode else []))
+    predicate = " WHERE " + " AND ".join(base_where + hard_where + where)
+    predicate_values = hard_values + values
     search_expanded = bool(q and len(where) > 1)
     filter_dimension_count = max(0, len(where) - 1) if q else 0
     if search_expanded:
@@ -2169,24 +2448,24 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             WHEN EXISTS(SELECT 1 FROM anime_title kt WHERE kt.anime_id=w.id AND lower(kt.title)=lower(?)) THEN 3
             WHEN EXISTS(SELECT 1 FROM anime_title kt WHERE kt.anime_id=w.id AND lower(kt.title) LIKE lower(?)) THEN 2
             ELSE 1 END"""
-        predicate = " WHERE " + " AND ".join(base_where + [keyword_clause])
-        values = [f"%{q}%"]
+        predicate = " WHERE " + " AND ".join(base_where + hard_where + [keyword_clause])
+        predicate_values = hard_values + [f"%{q}%"]
         ranked_prefix = (f"WITH ranked AS (SELECT w.*, ({filter_score_expr}) AS filter_match_count, "
                          f"({keyword_rank_expr}) AS keyword_match_rank FROM anime_work w{predicate}) SELECT w.* FROM ranked w")
         ranking_prefix = (f"CASE WHEN w.filter_match_count={filter_dimension_count} THEN 0 "
                           f"WHEN w.filter_match_count=0 THEN 2 ELSE 1 END ASC,"
                           "w.filter_match_count DESC,"
                           "CASE WHEN w.filter_match_count=0 THEN w.keyword_match_rank ELSE 0 END DESC,")
-        row_values = filter_values + [q, f"{q}%"] + values
+        row_values = filter_values + [q, f"{q}%"] + predicate_values
     else:
         ranked_prefix = f"SELECT w.* FROM anime_work w{predicate}"
         ranking_prefix = ""
-        row_values = values
+        row_values = predicate_values
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         db.create_function("seeded_rank", 2, lambda anime_id, s: hashlib.sha256(f"{s}:{anime_id}".encode()).hexdigest(), deterministic=True)
         has_runtime = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_work'").fetchone())
-        total = db.execute(f"SELECT count(*) FROM anime_work w{predicate}", values).fetchone()[0]
+        total = db.execute(f"SELECT count(*) FROM anime_work w{predicate}", predicate_values).fetchone()[0]
         # Page first, then enrich only the visible rows.  Doing correlated
         # aggregates before ORDER BY made a 30k-work catalog needlessly scan
         # child tables for every work.
@@ -2216,10 +2495,11 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                     JOIN ani_rss_subscription ars ON ars.remote_id=arm.remote_id
                     WHERE ars.deleted_at IS NULL AND arm.anime_id IN ({marks})
                     GROUP BY arm.anime_id""", effective_ids)}
+            logical_marks = ",".join("?" for _ in ids)
             ani_rss_counts = {int(a): int(n) for a, n in db.execute(
-                f"SELECT anime_id,COUNT(*) FROM ani_rss_resource WHERE eligible=1 AND julianday(expires_at)>=julianday('now') AND anime_id IN ({marks}) GROUP BY anime_id", effective_ids)}
+                f"SELECT anime_id,COUNT(*) FROM ani_rss_resource WHERE eligible=1 AND julianday(expires_at)>=julianday('now') AND anime_id IN ({logical_marks}) GROUP BY anime_id", ids)}
             ani_rss_managed = {int(row[0]) for row in db.execute(
-                f"SELECT DISTINCT anime_id FROM ani_rss_subscription WHERE deleted_at IS NULL AND anime_id IN ({marks})", effective_ids)}
+                f"SELECT DISTINCT anime_id FROM ani_rss_subscription WHERE deleted_at IS NULL AND anime_id IN ({logical_marks})", ids)}
             for anime_id in ids:
                 usable_counts[anime_id] = sum(1 for item in runtime_catalog.torrents_for_anime(db, anime_id, config) if item["eligible"])
         for row in rows:
@@ -2238,6 +2518,37 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             row["studios"] = [x[0] for x in db.execute("SELECT DISTINCT cluster_name FROM anime_studio_cluster WHERE anime_id=? ORDER BY cluster_name", (anime_id,))]
             row["countries"] = [x[0] for x in db.execute("SELECT country_code FROM anime_country WHERE anime_id=? ORDER BY country_code", (anime_id,))]
             owner_id = physical_ids.get(anime_id, anime_id)
+            if has_ani_rss_episode_state_table and ani_connection_ready:
+                progress = db.execute("""SELECT MAX(s.current_episode),MAX(s.total_episode),
+                    MAX(CASE WHEN s.enabled=1 THEN e.last_episode_update_at END),
+                    COUNT(*),MAX(s.enabled)
+                    FROM ani_rss_subscription s LEFT JOIN ani_rss_episode_state e ON e.remote_id=s.remote_id
+                    WHERE s.deleted_at IS NULL AND s.anime_id=?""", (anime_id,)).fetchone()
+                playable = db.execute("""SELECT MAX(m.episode) FROM ani_rss_media m
+                    JOIN ani_rss_subscription s ON s.remote_id=m.remote_id
+                    WHERE s.deleted_at IS NULL AND s.anime_id=?""",
+                    (anime_id,)).fetchone()[0] if has_ani_rss_media_table else None
+                current_candidates: list[Any] = [progress[0], playable]
+                total_candidates: list[Any] = [progress[1]]
+                row["episode_progress"] = _episode_progress(
+                    db, int(anime_id), row.get("episode_count"), row.get("episode_start_number"),
+                    current_candidates, total_candidates,
+                )
+                row["last_episode_update_at"] = progress[2]
+                row["subscription_state"] = "active" if progress[4] else ("paused" if progress[3] else "none")
+                if has_ani_rss_release_state_table:
+                    release = db.execute("""SELECT MAX(current_episode),MAX(last_episode_update_at)
+                        FROM ani_rss_release_state WHERE anime_id=?""", (anime_id,)).fetchone()
+                    current_candidates.append(release[0])
+                    row["episode_progress"] = _episode_progress(
+                        db, int(anime_id), row.get("episode_count"), row.get("episode_start_number"),
+                        current_candidates, total_candidates,
+                    )
+                    row["last_episode_update_at"] = max(progress[2] or "", release[1] or "") or None
+            else:
+                row["episode_progress"] = {"current": None, "total": row.get("episode_count")}
+                row["last_episode_update_at"] = None
+                row["subscription_state"] = "unknown"
             row["torrent_count"] = torrent_counts.get(owner_id, 0)
             row["usable_torrent_count"] = usable_counts.get(anime_id, 0)
             row["external_media_count"] = external_counts.get(owner_id, 0)
@@ -2246,9 +2557,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                 external_counts.get(owner_id, 0) or ani_rss_media_counts.get(owner_id, 0))
             region_enabled = region_policy_enabled(policy, row["countries"])
             row["ani_rss_resource_count"] = (
-                ani_rss_counts.get(owner_id, 0) if region_enabled and ani_connection_ready else 0)
+                ani_rss_counts.get(anime_id, 0) if region_enabled and ani_connection_ready else 0)
             row["ani_rss_managed"] = (
-                region_enabled and ani_connection_ready and owner_id in ani_rss_managed)
+                region_enabled and ani_connection_ready and anime_id in ani_rss_managed)
             ani_search_available = (region_enabled and ani_connection_ready
                                     and ani_state.get("effective_mode") in {"prefer", "fallback"})
             row["ani_rss_search_available"] = ani_search_available
@@ -2264,7 +2575,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             ).fetchone()
             row["series_member_count"] = int(component[0]) if component else 1
     return {"total": total, "limit": limit, "offset": offset, "items": rows,
-            "searchExpanded": search_expanded, "filterDimensionCount": filter_dimension_count}
+            "searchExpanded": search_expanded, "filterDimensionCount": filter_dimension_count,
+            "requestedSort": requested_sort, "effectiveSort": sort,
+            "recentEpisodeSortAvailable": recent_episode_available}
 
 
 def catalog_options(db_path: Path) -> dict[str, Any]:
@@ -2576,11 +2889,34 @@ def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None =
                     (runtime_catalog.physical_anime_id(db, anime_id), target.get("path"))) if value[0]}
                 target["subtitleApplicable"] = not classes or bool(classes - serial_classes)
         result["torrents"] = runtime_catalog.torrents_for_anime(db, anime_id, config) if has_runtime else []
+        subscriptions = ani_rss.subscriptions_for_anime(db_path, anime_id) if ani_connection_ready else []
         result["ani_rss"] = {
             "state": ani_state,
-            "subscriptions": ani_rss.subscriptions_for_anime(db_path, anime_id) if ani_connection_ready else [],
+            "subscriptions": subscriptions,
             "resources": ani_rss.resources(db_path, anime_id, config) if ani_connection_ready else [],
         }
+        current_candidates: list[Any] = []
+        if ani_connection_ready and db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_release_state'").fetchone():
+            release = db.execute("SELECT current_episode FROM ani_rss_release_state WHERE anime_id=?", (anime_id,)).fetchone()
+            if release:
+                current_candidates.append(release[0])
+        total_candidates: list[Any] = []
+        for subscription in subscriptions:
+            playable = [float(value) for value in subscription.get("playableEpisodes") or []]
+            subscription_currents = [subscription.get("currentEpisode")]
+            if playable:
+                subscription_currents.append(max(playable))
+            subscription["episodeProgress"] = _episode_progress(
+                db, int(anime_id), result.get("episode_count"), result.get("episode_start_number"),
+                subscription_currents, [subscription.get("totalEpisode")],
+            )
+            current_candidates.extend(subscription_currents)
+            total_candidates.append(subscription.get("totalEpisode"))
+        result["episode_progress"] = _episode_progress(
+            db, int(anime_id), result.get("episode_count"), result.get("episode_start_number"),
+            current_candidates, total_candidates,
+        )
         return result
 
 
@@ -3436,12 +3772,12 @@ class CatalogWarmup:
             "language": [str(config.get("ui", {}).get("language") or "zh-Hans")],
             "sort": ["random"], "direction": ["asc"], "seed": [seed],
         }
-        try:
-            torrents = int(runtime_catalog.runtime_stats(self.db_path).get("torrents", 0))
-        except (OSError, sqlite3.Error, ValueError):
-            torrents = 0
-        availability = defaults.get("availability", ["torrent", "ani-rss"]) if torrents else ["torrent", "ani-rss", "unavailable"]
-        params["availability"] = [str(value) for value in availability]
+        availability = [str(value) for value in defaults.get(
+            "availability", ["torrent", "ani-rss", "unavailable"],
+        )]
+        if "available" in availability:
+            availability = ["torrent", "ani-rss", "unavailable"]
+        params["availability"] = availability
         params["library_state"] = [str(value) for value in defaults.get("libraryStates", [
             "local", "external", "submitted", "not_in_library",
         ])]
@@ -4525,6 +4861,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             super().__init__(*args, directory=str(static_dir), **kwargs)
 
         def end_headers(self) -> None:
+            if urllib.parse.urlparse(self.path).path in {"/", "/index.html", "/app.js", "/boot.js", "/styles.css"}:
+                self.send_header("Cache-Control", "no-cache")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -5455,6 +5793,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             subscribe_match = re.fullmatch(r"/api/ani-rss/resources/(ar-[0-9a-f]{24})/subscribe", parsed.path)
             if subscribe_match:
+                if not submission_is_enabled():
+                    self.json_response({"error": "submission_disabled"}, HTTPStatus.FORBIDDEN)
+                    return
                 try:
                     with ani_rss_user_operation():
                         result = ani_rss.subscribe(db_path, subscribe_match.group(1), config_store.read())

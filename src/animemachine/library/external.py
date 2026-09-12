@@ -165,15 +165,25 @@ def _media_files(root: Path) -> Iterable[Path]:
             raise StorageUnavailableError(exc.errno or 0, f"storage unavailable: {root}") from exc
 
 
-def _title_index(db: sqlite3.Connection) -> dict[str, set[int]]:
-    result: dict[str, set[int]] = {}
+def _title_index(db: sqlite3.Connection) -> dict[str, int | set[int]]:
+    # Most normalized titles identify one work. Allocate a set only for collisions.
+    result: dict[str, int | set[int]] = {}
+    def insert(key: str, anime_id: int) -> None:
+        previous = result.get(key)
+        if previous is None:
+            result[key] = anime_id
+        elif isinstance(previous, set):
+            previous.add(anime_id)
+        elif previous != anime_id:
+            result[key] = {previous, anime_id}
+
     def add(anime_id: int, title: str | None) -> None:
         key = normalize(title)
         if key:
-            result.setdefault(key, set()).add(int(anime_id))
+            insert(key, anime_id)
         base = normalize(SEASON_SUFFIX.sub("", title or ""))
         if base and base != key:
-            result.setdefault(base, set()).add(int(anime_id))
+            insert(base, anime_id)
 
     for anime_id, title in db.execute("SELECT anime_id,title FROM anime_title"):
         add(int(anime_id), str(title))
@@ -190,7 +200,7 @@ def _title_index(db: sqlite3.Connection) -> dict[str, set[int]]:
     return result
 
 
-def _resolve(db: sqlite3.Connection, index: dict[str, set[int]], title: str, year: int | None,
+def _resolve(db: sqlite3.Connection, index: dict[str, int | set[int]], title: str, year: int | None,
              media: str | None) -> tuple[int | None, str, dict[str, Any]]:
     query = normalize(title)
     try:
@@ -204,7 +214,8 @@ def _resolve(db: sqlite3.Connection, index: dict[str, set[int]], title: str, yea
     if len(subscription_ids) == 1:
         resolved = next(iter(subscription_ids))
         return resolved, "verified", {"mode": "ani_rss_subscription_title", "exactTitleCandidates": [resolved]}
-    candidates = sorted(index.get(query, ()))
+    matched = index.get(query, set())
+    candidates = [matched] if isinstance(matched, int) else sorted(matched)
     evidence: dict[str, Any] = {"exactTitleCandidates": candidates}
     if len(candidates) > 1 and media:
         marks = ",".join("?" for _ in candidates)
@@ -242,7 +253,7 @@ def _resolve(db: sqlite3.Connection, index: dict[str, set[int]], title: str, yea
     rows = db.execute(f"""SELECT w.id,t.title FROM anime_work w JOIN anime_title t ON t.anime_id=w.id
         WHERE {' AND '.join(where)} UNION SELECT w.id,w.title_ja FROM anime_work w WHERE {' AND '.join(where)}
         UNION SELECT w.id,w.title_zh_hans FROM anime_work w WHERE {' AND '.join(where)}
-        UNION SELECT w.id,w.title_en FROM anime_work w WHERE {' AND '.join(where)}""", values * 4).fetchall()
+        UNION SELECT w.id,w.title_en FROM anime_work w WHERE {' AND '.join(where)}""", values * 4)
     scored: dict[int, tuple[float, str, str]] = {}
     for anime_id, candidate_title in rows:
         candidate = normalize(candidate_title)
@@ -271,7 +282,7 @@ def _resolve(db: sqlite3.Connection, index: dict[str, set[int]], title: str, yea
         global_rows = db.execute("""SELECT w.id,t.title FROM anime_work w JOIN anime_title t ON t.anime_id=w.id WHERE w.media_code=?
             UNION SELECT w.id,w.title_ja FROM anime_work w WHERE w.media_code=?
             UNION SELECT w.id,w.title_zh_hans FROM anime_work w WHERE w.media_code=?
-            UNION SELECT w.id,w.title_en FROM anime_work w WHERE w.media_code=?""", (media,) * 4).fetchall()
+            UNION SELECT w.id,w.title_en FROM anime_work w WHERE w.media_code=?""", (media,) * 4)
         global_scores: dict[int, tuple[float, str]] = {}
         for anime_id, candidate_title in global_rows:
             candidate = normalize(candidate_title)
@@ -335,7 +346,9 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
     with contextlib.closing(sqlite3.connect(db_path)) as db:
         db.execute("PRAGMA journal_mode=WAL"); db.execute("PRAGMA synchronous=NORMAL"); db.execute("PRAGMA busy_timeout=60000")
         migrate(db)
-        index = _title_index(db)
+        db.execute("PRAGMA temp_store=FILE")
+        db.execute("CREATE TEMP TABLE scan_seen(path TEXT PRIMARY KEY) WITHOUT ROWID")
+        index = None
         resolution_cache: dict[tuple[str, int | None, str | None], tuple[int | None, str, dict[str, Any]]] = {}
         stamp = utcnow()
         for source in sources:
@@ -384,7 +397,7 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                 continue
             stats["sources"] += 1
             source_counters = {key: stats[key] for key in ("files", "unchanged", "verified", "ambiguous", "unmatched")}
-            seen: set[str] = set()
+            db.execute("DELETE FROM scan_seen")
             db.execute("SAVEPOINT external_source_scan")
             try:
                 db.execute("""INSERT INTO external_library_source VALUES(?,?,?,?,?,?,?)
@@ -394,7 +407,7 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                      json.dumps({"followLinks": False, "matchRuleVersion": MATCH_RULE_VERSION})))
                 for path in _media_files(root):
                     absolute = str(path.absolute())
-                    seen.add(absolute.casefold())
+                    db.execute("INSERT OR IGNORE INTO scan_seen VALUES(?)", (absolute.casefold(),))
                     try:
                         info = path.stat()
                     except OSError as exc:
@@ -412,13 +425,17 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                             progress(dict(stats))
                         continue
                     hints = _title_hints(root, path, kind)
+                    if hints and index is None:
+                        index = _title_index(db)
                     title, year, media, _ = hints[0] if hints else (path.parent.name, None, None, "fallback")
                     resolved: list[tuple[int, dict[str, Any], str]] = []
                     attempted: list[dict[str, Any]] = []
                     for hint_title, hint_year, hint_media, hint_source in hints:
                         cache_key = (normalize(hint_title), hint_year, hint_media)
                         if cache_key not in resolution_cache:
-                            resolution_cache[cache_key] = _resolve(db, index, hint_title, hint_year, hint_media)
+                            if len(resolution_cache) >= 4096:
+                                resolution_cache.clear()
+                            resolution_cache[cache_key] = _resolve(db, index or {}, hint_title, hint_year, hint_media)
                         candidate_id, candidate_state, candidate_evidence = resolution_cache[cache_key]
                         attempted.append({"title": hint_title, "year": hint_year, "media": hint_media,
                                           "source": hint_source, "state": candidate_state})
@@ -448,7 +465,7 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                     if stats["files"] % 250 == 0 and progress:
                         progress(dict(stats))
                 for absolute, in db.execute("SELECT absolute_path FROM external_media_file WHERE source_id=?", (source_id,)):
-                    if str(absolute).casefold() not in seen:
+                    if not db.execute("SELECT 1 FROM scan_seen WHERE path=?", (str(absolute).casefold(),)).fetchone():
                         db.execute("DELETE FROM external_media_file WHERE source_id=? AND absolute_path=?", (source_id, absolute))
                 db.execute("UPDATE external_library_source SET scan_state='ready',last_scan_at=?,evidence_json=? WHERE source_id=?",
                            (stamp, json.dumps({"followLinks": False, "matchRuleVersion": MATCH_RULE_VERSION,

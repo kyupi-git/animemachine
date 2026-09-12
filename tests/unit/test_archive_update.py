@@ -55,14 +55,29 @@ class ArchiveUpdateTests(unittest.TestCase):
             with contextlib.closing(sqlite3.connect(target)) as db, db:
                 anime_id = db.execute("SELECT id FROM anime_work WHERE bgm_id=265").fetchone()[0]
                 db.execute("INSERT OR REPLACE INTO anime_image(anime_id,mime_type,image_blob) VALUES(?,?,?)", (anime_id, "image/jpeg", b"cached"))
+                db.execute("INSERT INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(?,?,?,?)",
+                           (anime_id, "bd", "2026-01-01", "bangumi-archive:infobox:BD発売日"))
             with contextlib.closing(sqlite3.connect(incoming)) as db, db:
+                anime_id = db.execute("SELECT id FROM anime_work WHERE bgm_id=265").fetchone()[0]
                 db.execute("UPDATE anime_work SET title_en='Updated title' WHERE bgm_id=265")
                 db.execute("UPDATE metadata SET value='sha256:new' WHERE key='archive_digest'")
+                db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('release_event_source_version',?)",
+                           (catalog.RELEASE_EVENT_SOURCE_VERSION,))
+                db.execute("INSERT INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(?,?,?,?)",
+                           (anime_id, "bd", "2026-08-27", "bangumi-archive:infobox:BD発売日"))
             archive_update.merge_metadata(target, incoming, catalog)
             with contextlib.closing(sqlite3.connect(target)) as db:
                 self.assertEqual(db.execute("SELECT title_en FROM anime_work WHERE bgm_id=265").fetchone()[0], "Updated title")
                 self.assertEqual(db.execute("SELECT image_blob FROM anime_image WHERE anime_id=(SELECT id FROM anime_work WHERE bgm_id=265)").fetchone()[0], b"cached")
                 self.assertEqual(db.execute("SELECT value FROM metadata WHERE key='archive_digest'").fetchone()[0], "sha256:new")
+                self.assertEqual(
+                    db.execute("SELECT release_date FROM anime_release_event WHERE anime_id=(SELECT id FROM anime_work WHERE bgm_id=265) AND event_type='bd'").fetchall(),
+                    [("2026-08-27",)],
+                )
+                self.assertEqual(
+                    db.execute("SELECT value FROM metadata WHERE key='release_event_source_version'").fetchone()[0],
+                    catalog.RELEASE_EVENT_SOURCE_VERSION,
+                )
 
 
 if __name__ == "__main__":
