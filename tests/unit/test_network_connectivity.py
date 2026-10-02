@@ -298,6 +298,9 @@ class NetworkConnectivityStateTests(unittest.TestCase):
             self.assertTrue(allowed)
 
     def test_successful_opportunistic_remote_request_recovers_confirmed_offline(self):
+        # A coarse Windows clock must not place the reconstructed deadline a
+        # floating-point fraction ahead of the mocked recovery request.
+        self.enterContext(mock.patch.object(connectivity.time, "monotonic", return_value=3600.0))
         current = time.monotonic()
         first = current - connectivity.OFFLINE_AFTER_SECONDS
         connectivity.note_environment("test-network", now=first)
