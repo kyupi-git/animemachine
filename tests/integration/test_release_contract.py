@@ -99,7 +99,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("packages: write", workflow)
         self.assertIn("contents: write", workflow)
         self.assertIn("linux/amd64,linux/arm64", workflow)
-        self.assertRegex(workflow, r"docker/build-push-action@[0-9a-f]{40} # v6")
+        self.assertRegex(workflow, r"docker/build-push-action@[0-9a-f]{40} # v[67](?:\.|\s|$)")
         self.assertIn("gh release create", workflow)
         self.assertIn("animemachine-*-py3-none-any.whl", workflow)
         self.assertIn("release-app", workflow)
