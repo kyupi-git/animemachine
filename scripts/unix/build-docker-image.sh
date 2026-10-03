@@ -31,8 +31,9 @@ cp "$root/deploy/compose/04-full-stack/compose.yaml" "$root/deploy/compose/04-fu
 cp "$root/deploy/compose/torrent-collector.yaml" "$bundle/"
 cp "$script_dir/initialize-animemachine.sh" "$bundle/"
 cp "$root/scripts/windows/Initialize-AnimeMachine.ps1" "$bundle/"
-cp "$root/README.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$bundle/"
-cp "$root/docs/guide.md" "$bundle/docs/"
+cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$bundle/"
+find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$bundle/docs/" \;
+cp -R "$root/docs/images" "$bundle/docs/images"
 chmod +x "$bundle/initialize-animemachine.sh"
 for file in "$bundle/compose.yaml" "$bundle/.env.example"; do
   sed -E -e "s|ghcr.io/kyupi-git/animemachine:[0-9]+\.[0-9]+\.[0-9]+|$image:$version|g" -e 's|../torrent-collector.yaml|./torrent-collector.yaml|g' "$file" > "$file.tmp"

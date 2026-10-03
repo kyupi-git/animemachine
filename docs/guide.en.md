@@ -1,191 +1,251 @@
 [中文](guide.md) | [English](guide.en.md) | [日本語](guide.ja.md)  
-[README](../README.en.md) | [Deployment and Usage Guide](guide.en.md) | [Architecture and Database](architecture.en.md) | [Changelog](../CHANGELOG.en.md)
+[README](../README.en.md) · [Architecture](architecture.en.md) · [Configuration reference](reference.en.md)
 
-# AnimeMachine Deployment Guide
+# Setup and usage guide
 
-An AnimeMachine deployment begins with two decisions: (1) where media managed by AnimeMachine will be stored; and (2) whether existing qBittorrent, Ani-RSS, Torrent pools, and older media libraries will remain external or be managed together under Compose. Most other settings follow from these choices.
+This guide covers deployment, initial setup, everyday use, and maintenance. Select a launch method for your device, sign in, and configure media folders and service connections as needed.
 
-Before the first run, only an anime library needs to be prepared. The Torrent pool and external read-only library may initially be empty, and neither qBittorrent nor Ani-RSS is a prerequisite for starting AnimeMachine. They can be connected later without rebuilding the Catalog.
+[Launch methods](#start) · [Initial setup](#first-use) · [Everyday use](#daily-use) · [Connections and folders](#connections) · [Updates and backups](#maintenance) · [Common questions](#help)
 
-## Path meanings
+<a id="start"></a>
 
-| Name | Access | Purpose | Recommended setting |
-|---|---|---|---|
-| Anime library | Read/write | Stores media, placeholders, subtitles, and directory structure managed by AnimeMachine | Local disk, NAS share, or container `/Library` |
-| Torrent pool | AnimeMachine read-only | Directory containing `.torrent` files supplied by the user or optional Torrent Collector; subdirectories and unrelated files are allowed | Separate directory or container `/Torrents` |
-| External read-only media library | Read-only | Maps existing media without moving, renaming, or deleting it | ani-rss or another media directory; container `/External` |
-| Ani-RSS media directory | Read-only | Maps media downloaded by Ani-RSS into work pages and playlists | Container `/Media` |
-| State directory | Read/write | Stores SQLite databases, Archive data, covers, subtitles, plans, and operation history | Local SSD; container `/Data` |
-| Configuration directory | Read/write | Stores `config.json`, certificates, and component configuration | Container `/Config` |
+## 1. Choose a launch method
 
-The most common source of confusion is the difference among a “host path,” the path “seen by AnimeMachine,” and the path “seen by qBittorrent.” With local execution these are often identical; with Docker or cross-host deployment they may be completely different. AnimeMachine only requires the final mapping to be real and accessible. Different processes do not need to use the same path string.
+### Windows
 
-Windows local deployment can use drive-letter paths or UNC paths directly, for example `D:\Anime` or `\\nas\anime`. The Windows account running AnimeMachine is the account that accesses a UNC share, so that account must have direct read/write permission. A mapped drive belongs to the current logon session and should not be the only dependency of a long-running background service. Confirm permissions by using the same account to create, rename, and delete a test file on the share.
+1. Open [Releases](https://github.com/kyupi-git/animemachine/releases/latest). Under Assets, download the file ending in `release-windows.zip`.
+2. Extract the entire ZIP to a permanent folder, such as `D:\AnimeMachine`.
+3. Double-click **`AnimeMachine.cmd`** in that folder and leave the launch window open.
+4. Open **<http://localhost:8787>** in your browser.
 
-Inside Docker, `/Library`, `/Torrents`, and similar paths are fixed container paths; users only map real host directories to them. External qBittorrent additionally needs the path to the library as qBittorrent itself sees it. That value may be `/Anime`, `/downloads/anime`, or a UNC path and does not need to match AnimeMachine's `/Library`. Windows Docker Desktop is generally a poor place to use a UNC path directly as a bind source; it is more reliable to mount SMB/NFS through the host OS first and pass the resulting local mount point to Docker. The same model is recommended on Linux, macOS, and fnOS.
+Python is included in the release. Use the same launcher next time; close its window to stop AnimeMachine.
 
-![Connection and path settings](images/settings-connections.png)
+### Linux / macOS
 
-*Settings → Connections: verify the managed library, Torrent Pool, external media library, qBittorrent, and Ani-RSS paths and connection state in one place.*
+Install [Python 3.11 or later](https://www.python.org/downloads/), then download the release matching your operating system and processor from [Releases](https://github.com/kyupi-git/animemachine/releases/latest). `x86_64` generally means Intel / AMD; `arm64` or `aarch64` means ARM. Choose ARM for Apple silicon.
 
-The API key required for an Ani-RSS connection is available under “Login settings” in the Ani-RSS interface. qBittorrent, Ani-RSS, ASSRT, and OpenSubtitles API credentials saved under Settings → Connections are kept in permission-restricted `credentials/` files under the state directory and survive restart. Their values are not written to `config.json`, browser local storage, logs, or API responses. If the deployment already supplies the same credential through an environment variable or Docker Secret, the deployment value has precedence and a Web-saved value does not replace it in the running process. “Test connection” uses the qBittorrent/Ani-RSS API key currently typed in the field only for that probe and neither persists nor clears it; a new credential is written to restricted storage only when Settings are saved. A save is handled by the server as one transaction for the complete configuration plus all newly entered credentials: all configuration validation completes first, and any persistence failure rolls back that save. Even after full offline mode has been confirmed, an administrator-triggered connection test is allowed as an explicit recovery probe; recognized local/LAN targets continue to use direct access.
+On Linux, extract the package, open a terminal in its folder, and run:
 
-![Ani-RSS API key](images/anirss-apikey.png)
-
-## Local deployment
-
-### Windows 10/11
-
-A Windows local installation is best done in this order: (1) source mode requires Python 3.11 or later; the official Windows Release bundles the fixed Python 3.14 runtime and does not require a separate Python installation, while root-level `BUILD-INFO.json` records the version, commit, and build environment; (2) in source mode run `scripts\windows\AnimeMachine.cmd`, while an extracted Release uses `AnimeMachine.cmd` in the package root; (3) no `.env.local` is required for a direct first launch: the default listener is `0.0.0.0:8787`, so the local machine can use `http://127.0.0.1:8787` and another LAN device can use `http://<AnimeMachine-host-IP>:8787`; a remotely reachable bind automatically enables authentication, and when no administrator password was supplied the first launch generates one, stores it in a restricted credential file, and prints the username, password, and saved location in the console; while that generated bootstrap administrator remains active, later starts print the same login credentials again; (4) after login, use “Settings → Connections” to add the library, Torrent pool, and optional external components; (5) source-mode state defaults to `.local/state`, while Release state defaults to `data/state`, and subsequent launches reuse the existing Catalog, caches, and history.
-
-If paths should be prepared before the first startup, copy `deploy/local/.env.local.example` to `.local/.env.local` and uncomment only the required entries. A Release uses `.env.local` in its root directory. Avoid storing NAS usernames and passwords in AnimeMachine merely to save a setup step; for Windows local execution, it is preferable for the process account itself to have access to the share.
-
-### Linux/macOS
-
-In source mode, Linux runs `scripts/unix/AnimeMachine-Linux.sh` and macOS runs `scripts/unix/AnimeMachine-macOS.command`. The first launch creates an isolated environment under `.local/venv`, and Python 3.11 or later is required. An extracted Release uses the corresponding launcher in the package root. Every Release retains Windows, Linux, and macOS entry points, but when it is run on a platform different from the build platform, the system must provide Python 3.11+ and the first launch may retrieve compatible dependencies for that platform.
-
-If the extraction tool did not preserve Unix executable bits, first run `chmod +x AnimeMachine.sh AnimeMachine-Linux.sh AnimeMachine-macOS.command`. For NAS access on macOS, mount SMB in Finder and use a path such as `/Volumes/share/...`. On Linux, it is preferable to mount SMB/NFS through the operating system under `/mnt` or `/srv`. This keeps AnimeMachine working with ordinary filesystem paths while authentication, reconnection, and network-filesystem behavior remain the operating system's responsibility.
-
-## Docker Compose
-
-Docker deployment requires Docker Engine 24+ and Docker Compose 2.20.3+. If AnimeMachine directly manages qBittorrent, the target qBittorrent version must be 5.2.0 or later. The 0.3.0 full Compose layout pins Ani-RSS `v3.2.28` and qBittorrent `5.2.3`, and the current adapters are verified against those interfaces. All four layouts can be started without creating `.env`: run `docker compose up -d` directly. Defaults publish `0.0.0.0:8787`, use relative directories, and generate an AnimeMachine administrator password. `04-full-stack/compose.yaml` is self-contained and does not depend on parent-directory files even when that single YAML is copied into an empty directory; layouts 3/4 also generate and persist random qBittorrent/Ani-RSS API credentials in their component configuration directories. AnimeMachine waits for the corresponding bootstrap to complete successfully and for the managed service containers to start before its first application process begins, avoiding a race between credential creation and application startup in an empty configuration directory. On layout 4 first start, the generated Ani-RSS download templates target the shared `/Media` mount (host default `./external/ani-rss`), while qBittorrent uses `/downloads/incomplete` only for incomplete data, so completed Ani-RSS media is immediately discoverable and playable by AnimeMachine without manual container-path alignment. To handle empty bind directories first created by Docker as `root:root`, the AnimeMachine container entrypoint prepares only the writable mount points during early startup and then immediately drops to `PUID/PGID` before launching the application; existing media contents are not recursively re-owned. Copy `.env.example` to `.env` only when host paths, fixed credentials, PUID/PGID, proxy settings, or ports need to be overridden; explicit values continue to take priority over generated defaults.
-
-After configuration, run:
-
-```bash
-docker compose up -d
-docker compose logs -f animemachine
+```sh
+./AnimeMachine-Linux.sh
 ```
 
-For customized deployment, keeping `.env` beside `compose.yaml` is sufficient; Compose reads it through its standard interpolation rules. Automation may instead use `docker compose --env-file /path/to/custom.env up -d`, with no separate service-level env-file setting. Under Compose, `ANM_BIND_ADDRESS` controls only the host-side publication address; AnimeMachine inside the container always listens on `0.0.0.0:8787`. The default therefore allows LAN access at `http://<Docker-host-IP>:8787` and automatically requires authentication. Set `ANM_BIND_ADDRESS=127.0.0.1` only when the Web service should be published on the host loopback interface. `ANM_WEB_PORT` selects the host-side published port while the container port remains 8787.
+On macOS, open **`AnimeMachine-macOS.command`**, or run it from a terminal in the extracted folder:
 
-On fnOS, for example, the first Compose startup downloads and parses the Bangumi Archive base package. Treat the consolidated `========== AnimeMachine access ==========` block as the readiness marker: core initialization and the Catalog are complete, the Web service is reachable, and background cover preloading has started. The same block gives a concise view of the actual network route, Ani-RSS, qBittorrent, storage paths, and primary image sources. The instance random seed is generated when the first usable Catalog is created and then persisted; ordinary restarts or Catalog rebuilds keep it unchanged, and only an explicit Reshuffle or a fresh redeployment creates a new seed. Covers first complete the bounded landing-page window page by page under the current random seed, then fill every work from the most recent six months, and finally continue strictly month by month from month seven through older works. A transient failure for one cover does not block later batches and is retried in the background. Healthy cached covers are checked automatically only from six to two months before airing, from two months before through one month after airing, and from one to two months after airing, at 72-, 24-, and 72-hour intervals respectively. Every 12 hours a lowest-priority scan selects due works; automatic refresh is disabled outside those windows, while manual Reload remains unconditional. `[images] preload complete` means the historical traversal and bounded retry passes have finished; a small number of genuinely missing or persistently unreachable covers may remain.
+```sh
+./AnimeMachine-macOS.command
+```
 
-![AnimeMachine initialization log](images/fnos-ready.png)
+The launcher installs the required components. Open **<http://localhost:8787>**. Close the terminal or press `Ctrl+C` to stop the app. If you get an execution-permission error, run `chmod +x AnimeMachine*.sh AnimeMachine-macOS.command` first.
 
-### Four deployment layouts
+<a id="docker"></a>
 
-| Directory | Components | Torrent Pool source | Recommended use |
-|---|---|---|---|
-| `01-animemachine-standalone` | AnimeMachine; optional external Ani-RSS | User-maintained directory or empty | Maintains the catalog, directories, external media, and Torrent Pool independently; works without Ani-RSS |
-| `02-animemachine-external-qbt` | AnimeMachine + external qBittorrent; optional external Ani-RSS | User-maintained directory | Manual library; matches Torrent Pool resources and submits them to external qBittorrent |
-| `03-animemachine-managed-qbt` | AnimeMachine + Torrent Collector + bundled qBittorrent; optional external Ani-RSS | Resources gathered by Collector | Automated library; Collector gathers resources and bundled qBittorrent maintains the library |
-| `04-full-stack` | AnimeMachine + Torrent Collector + bundled qBittorrent + bundled Ani-RSS | Collections gathered by Collector | Fully automated collection and subscription; all components are managed by one Compose project |
+### NAS / Docker
 
-The four layouts are independent rather than a low-to-high feature hierarchy. Ani-RSS is optional in the first three layouts. A machine that already has stable qBittorrent will often fit layout 02; choose 03 or 04 when AnimeMachine and the download chain are being moved together to a NAS or dedicated host. On the first `04-full-stack` start, the Ani-RSS bootstrap fills missing defaults such as download paths and automatic startup; later container recreations update only the Compose-managed API key and qBittorrent connection, preserving user changes to Ani-RSS behavior such as automatic startup and download-path templates.
+Enable Docker or container management in your NAS app center, or install [Docker](https://docs.docker.com/get-started/get-docker/) on your computer. Use Docker Engine 24+ and Docker Compose **2.20.3+**.
 
-Layout 03 includes the shared service definition from `deploy/compose/torrent-collector.yaml`. To make layout 04 genuinely single-file and zero-configuration, the same Torrent Collector service and named volume are embedded directly in `04-full-stack/compose.yaml`, so that YAML can be deployed by itself. Release packages keep the shared Collector file for layout 03 and advanced reuse. Torrent Collector runs the `torrent-collector` command from the AnimeMachine image and has write access to the host Torrent Pool, while AnimeMachine still mounts `/Torrents` read-only. Collector uses title, Torrent-manifest, and local-Catalog evidence to produce `accept / reject / defer`, and only `accept` enters the Torrent Pool. When the evidence is insufficient, the result stays undecided instead of being guessed complete from a fixed episode span. Existing-pool audit is report-only by default; quarantining clearly rejected files must be enabled explicitly, and the quarantine directory must be outside the Torrent Pool. Ongoing single-episode or single-volume tracking is still better delegated to Ani-RSS.
+Select a configuration based on your existing services:
 
-The ordinary `.env` contains only settings that commonly need to change. Proxy behavior, polling intervals, historical backfill batches, retry limits, audit mode, and a separate Collector state directory are documented in `deploy/compose/torrent-collector.advanced.env.example`. Copy only the required advanced entries into `.env`; proxying is disabled by default.
+| Deployment scenario | Configuration |
+| --- | --- |
+| Browse titles and connect existing media | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/compose.yaml) |
+| You already run qBittorrent | [02 · Connect an existing downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/compose.yaml) |
+| Install qBittorrent alongside AnimeMachine | [03 · AnimeMachine + qBittorrent](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
+| Install a downloader, Ani-RSS, and a resource collector together | [04 · Full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/compose.yaml) |
 
-### fnOS / NAS
+1. Create a permanent folder, such as `animemachine`.
+2. Open a configuration above, click **Download raw file**, and save it in that folder as **`compose.yaml`**.
+3. Open a terminal in the folder and run the command below. In a NAS Compose project manager, you can also paste the configuration and start the project.
 
-On fnOS or a similar NAS, it is useful to prepare six classes of directories in the Docker project area: `config`, `data`, `imports`, `torrents`, `library`, and `external`. Allocate them according to I/O behavior: (1) keep `config` and `data` on SSD storage; (2) place `library` on the large-capacity media pool; (3) map `torrents` to the existing Torrent Pool and keep the AnimeMachine side read-only; (4) map `external` to ani-rss or older media directories, again read-only; (5) use real absolute NAS paths in `.env`, such as `/vol1/1000/docker/animemachine/data`; and (6) ensure the container `PUID/PGID` has write access to `config`, `data`, and `library`; with `04-full-stack`, it must also be able to write the Ani-RSS media directory.
+```sh
+docker compose up -d
+```
 
-If the Web interface opens after deployment but files cannot be scanned, or media can be read but directories cannot be created, check the host mount and `PUID/PGID` before changing AnimeMachine's internal paths. Container paths are only the result of the mapping; host-side permissions are the more common root cause.
+4. Open **`http://YOUR-NAS-ADDRESS:8787`**, or **<http://localhost:8787>** on the same computer.
+5. View the `animemachine` container logs for your initial account and password. From a terminal, run:
 
-### Separating deployment from storage
+```sh
+docker compose logs animemachine
+```
 
-AnimeMachine can run on a small host or virtual machine while media resides on another NAS. The recommended complete path is: NAS provides SMB/NFS → the AnimeMachine host mounts it → Compose receives only the local mount point. AnimeMachine then does not need to retain NAS credentials, and network-filesystem reconnection remains the responsibility of mature OS components.
+Default folders and service connections are created automatically. Setups 03 and 04 configure qBittorrent; setup 04 also connects Ani-RSS. For setup 02, enter your existing downloader's details under [Connections](#connections).
 
-Keep databases, Archive data, and cover caches on the host SSD when possible, while placing large media files and the Torrent Pool on network storage. The reason is straightforward: catalog construction, filtering, and relationship graphs repeatedly touch many small records, whereas video files are what actually require capacity. Separating these I/O patterns is usually more stable than putting the entire state directory on a NAS.
+To store media on a particular drive, add a `.env` file before starting, as shown in [Folder paths](#folders). To open qBittorrent or Ani-RSS from another computer, configure [access to their web interfaces](reference.en.md#service-access).
 
-## Network and base package
+<a id="first-use"></a>
 
-AnimeMachine's network layer selects among official sources, user-configured mirrors, and direct connections, and validates Archive size and SHA-256. For large Archive and application-update assets with known size and digest, resumable Range segments are preferred; if the preferred Range route fails during transfer while another probed route supports only whole-file delivery, AnimeMachine downgrades to the whole-file route and keeps the same integrity checks. A complete temporary file that fails SHA-256 is discarded so a later retry cannot reuse corrupt content. Every external request re-evaluates its effective route and distinguishes direct access, an environment proxy, and the Windows system proxy. When proxy configuration changes, subsequent requests use a new connection generation and endpoint failures recorded under the previous network route are isolated, so switching from an initial no-proxy launch to a proxy, changing proxies, or returning to direct access does not require a restart. If an environment or Windows-system proxy URL is malformed, has an invalid port, or cannot be instantiated by the current runtime, that proxy route is skipped and later routes including direct access are still tried instead of aborting the whole remote request chain. Proxy addresses shown in diagnostics are sanitized, and malformed strings are never echoed with credentials intact. Loopback, and private networks remain direct so local qBittorrent, Ani-RSS, and NAS services do not take an unnecessary proxy route.
+## 2. Initial setup
 
-The second home status row uses a compact background-image progress, `YYYY-MM` backward frontier, Bangumi Archive version, and Catalog work-count structure. Remaining work, ETA, and the current item are intentionally omitted from the home row; those details remain in “Settings → Diagnostics.”
+### Sign in and check the library
 
-The “System health” block at the top of “Settings → General” compresses network, Ani-RSS, qBittorrent, storage, image preload, and playback into a small set of Normal/Warning states; detailed information remains under “Settings → Diagnostics.” Diagnostics shows the effective network route read-only, together with recent success rate, latency, throughput, and the latest failure reason for Bangumi Archive, Subject Cache, Bangumi API, and each image source. Image sources additionally plot the last 12 hours of health separately for direct access, environment proxy, and Windows system proxy. “Recheck now” uses the same network layer as production requests, so probe results also update mirror health. Mirror ordering is learned independently for the three network environments; recent evidence decays over time and an effective sample count determines confidence, so a low-sample source cannot jump to the top because of one incidental result. The incumbent also has a short hold window and a minimum switching advantage. Diagnostics states the current choice, its confidence, and whether it is being held, replaced by a meaningfully better candidate, or bypassed because it entered cooldown. The same page shows the recent-six-month, historical-catalog, and failed-retry preload stages together with remaining work, an ETA derived from recent real throughput, current rate, current item, and adaptive background concurrency. Background preload may be paused/resumed and limited by concurrency or bandwidth; controls and progress persist in the state directory. Effective background intensity is also reduced automatically when foreground activity rises, image responses slow down, CPU pressure increases, or recent image-I/O/network signals deteriorate, then increases again as conditions recover. Foreground-visible works always preempt background preparation, and the browser prefetches only a bounded next-screen window in the current scroll direction. Server-side preload completes the current-seed landing pages in page order, then the most recent six months, then older months one by one. Periodic cover maintenance runs after full-library preload and retry work and is capped at one lowest-priority background task; an item already queued in the background is still promoted immediately when it becomes visible.
+The launch window or container logs show your address, initial username, and random password. After signing in, follow the initialization progress: downloading title data, building the catalog, and preparing covers. You can use the library as soon as titles appear; covers continue loading in the background.
 
-To prepare the base package manually, place the official `dump-*.zip` under `/Imports`, or under the `imports` directory for a local Release, then start AnimeMachine and import it. If a corporate HTTPS gateway uses a private CA, place the PEM CA in the configuration directory and set `ANM_CA_BUNDLE`. A certificate-verification failure means the trust chain is incomplete; the correct fix is to provide the CA, not to disable TLS verification.
+Create accounts for other people under **Settings → Users**. You can also create your own administrator account, sign in with it, and disable the initial account.
 
-## Upgrade notes for 0.3.0
+### Configure and check media folders
 
-Upgrading from a published release to 0.3.0 does not require rebuilding the Catalog or moving media directories. Existing local and Compose configuration remains the base configuration, while scheduled application-update checks stay disabled by default, so no release is installed automatically unless that behavior is explicitly enabled. The 0.3.0 Docker image retains the stable supervisor entrypoint and app-layer update area under the writable state directory. If the current Docker image predates that supervisor, pull the 0.3.0 image and recreate the container once through the normal Docker workflow before using Web-driven Docker updates and failed-start rollback. Portable update workers and the Docker supervisor perform post-restart health checks against the effective listen address; an explicit LAN/IPv6 bind is probed directly instead of through a hard-coded `127.0.0.1`, while wildcard `0.0.0.0`/`::` binds are translated to the matching loopback address for the local probe.
+Configure media folders under **Settings → Connections**:
 
-No network migration is required. Enabling, disabling, or replacing an environment/Windows system proxy at runtime causes subsequent requests to identify the new network environment, while diagnostics and source-health learning remain separated by route environment. A temporary failure of all upstreams does not immediately enter full offline mode: remote background work is paused only after at least 30 minutes of continuous failed observation, while recovery probes and bounded opportunistic recovery remain available. After upgrading, “Settings → Diagnostics → Recheck” is the quickest way to validate the environment before reviewing the system-health summary, application-update sources, and image-source state.
+| Purpose | Setting |
+| --- | --- |
+| Organize new downloads | “Anime library path” under qBittorrent |
+| Browse anime already on a drive | Enable “Map an external read-only library” and enter the media folder |
+| Connect media downloaded by Ani-RSS | Enter its media path under Ani-RSS, or use remote playback through its API |
 
-## Updates and backups
+In Docker, enter the paths visible inside the container. The default collection is `/Library`; existing media uses `/External`. See the [folder diagram](#folders) for an example.
 
-Updates and backups can be reduced to four rules: (1) official portable releases and current Docker images can use Settings → Check for updates to view the current/latest version, selected download source, SHA-256 verification, and upgrade result, then check or install manually. Update routing probes GitHub, API, Release, and built-in proxy endpoints, persistently learns the fastest healthy route, and places failing routes into backoff cooldown. Scheduled checks are disabled by default; when enabled they can notify only or install automatically, with 04:35 local time as the default daily check time. Docker app-layer updates are stored in the state directory and restarted or rolled back by an in-container supervisor, without mounting the Docker socket. This layer replaces AnimeMachine's Python application code only; it cannot replace the base image, supervisor, Python/system components, or changed runtime dependencies. (2) Source deployments still update source and rerun the launcher; use `docker compose pull && docker compose up -d` for a full Docker image refresh whenever those image-level components change or when upgrading an older image that predates Web updates. (3) Backing up the state and configuration directories preserves databases, covers, subtitles, plans, settings, and Docker app-layer updates, while media files continue to follow the user's normal storage backup policy. (4) Never allow two AnimeMachine instances to write to the same state directory at the same time.
+Save the configuration, open a title's details, and check that identified media can be played. For seasonal subscriptions, add one subscription using the next section and check the synchronization result. After verifying playback or a subscription, add further titles.
 
-For a machine migration, copy the complete state and configuration directories first, then restore the original media paths or equivalent mappings. Copying only SQLite files may still produce a runnable system, but can lose caches, plans, or historical context and is therefore not the recommended migration method.
+![Title details with metadata, episode progress, and available media](images/work-detail.png)
 
-## Usage guide
+<a id="daily-use"></a>
 
-### Settings and account permissions
+## 3. Everyday use
 
-The Settings dialog is maintained by administrators and contains General, Resource priority, Resource groups, Connections, Diagnostics, Subscriptions, Users, Logs, History, Check for updates, and About AnimeMachine. General covers Archive/metadata maintenance and UI policy; Resource priority and Resource groups tune candidate ordering and release-group rules; Connections consolidates the managed library, Torrent Pool, qBittorrent, Ani-RSS, external read-only media, subtitle services, external-player handoff, and metadata-network endpoints, with player handoff mapping server paths to client paths or HTTP playback URLs; Diagnostics consolidates network, storage, image-preload, playback-chain, and system-health status and can run a network recheck; Subscriptions, Users, Logs, and History cover follow-up/Ani-RSS subscriptions, account management, troubleshooting, and review/restoration of recorded directory changes; Check for updates handles application updates, while About shows the version and project links.
+### Browse and filter
 
-Settings → General → Allowed resource categories also provides a Region multi-select for China, Japan, Korea, United States, Europe, and Other, with all regions enabled by default. China includes mainland China, Hong Kong, Macao, and Taiwan; Europe includes all European countries, including the UK and Russia; a blank or insufficiently evidenced region is classified as Other. A co-production remains eligible when at least one of its regions is enabled. Chinese UI order is China, Japan, Korea, United States, Europe, Other; English is United States, Europe, China, Japan, Korea, Other; Japanese is Japan, Korea, China, United States, Europe, Other. This policy applies first to Catalog visibility and also gates Torrent and Ani-RSS source availability: after a region is disabled, works in that region are removed from Catalog-card results and no longer participate through the corresponding Torrent/Ani-RSS source, while existing local media and remote subscription records are not deleted.
+Switch between cards and a table on the home page. Filter by year, month, format, studio, theme, resource source, or collection status. Search accepts Chinese, Traditional Chinese, English, and Japanese names.
 
-Prefer the Web UI for routine settings. For automated deployment or advanced fields that are not directly exposed in the UI, `config/config.example.json` is the complete persistent-configuration template and `config/config.schema.json` describes the corresponding fields, types, enums, and bounds. The active configuration defaults to root-level `config.json` for source/portable installs and `/Config/config.json` in Docker, and can be overridden with `ANM_CONFIG_PATH`. Stop AnimeMachine before editing `config.json` directly so a concurrent Web save cannot overwrite the file; built-in validation rejects invalid values on the next start. Deployment-level environment variables remain documented by `deploy/local/.env.local.example` and each Compose directory's `.env.example`; passwords, tokens, and proxy credentials should not be written back into public templates.
+A card's resource and subscription labels describe available releases or subscriptions. Its collection label describes your media holdings. Open details to see individual episodes and files. Use “New Episode Follow-up” to follow updates or “Random” to pick something to watch.
 
-When authentication is enabled, AnimeMachine has two roles. Administrators can change settings, maintain Archive/metadata, run Library Audit and network rechecks, control image preload, manage users, and apply application updates. In random sort mode they can also use “Reshuffle” to generate a new instance-wide random seed. Normal users can browse the Catalog, inspect works and resources, refresh an individual work image, build and submit download plans, and use permitted playback/subscription actions, but they cannot enter administrator settings or invoke those global maintenance endpoints. After the first login, create a replacement administrator before disabling the initial `admin`; the current account cannot disable itself. Single-user local mode with authentication disabled operates with administrator capabilities while still retaining Host/origin and write-request protections.
+### Release radar and subscriptions
 
-### Initial catalog construction
+[Connect Ani-RSS](#ani-rss), then:
 
-On the first use, it is better not to enable every automation feature at once. A safer sequence is: (1) after login, open “Settings → Connections” and confirm access to the anime library, Torrent Pool, and any external media libraries; (2) under “General,” check and update the anime base package. Archive import runs in background stages, the home status line reports Catalog state, background-image backward progress, and base-package information, and the complete Catalog is published only after validation; (3) the Torrent Pool is scanned incrementally on the configured interval. Completed batches can be queried immediately, and a work that does not yet show resources can be searched individually from its detail page; (4) if a large older media library already exists, run local-resource verification before enabling automated downloading.
+1. Open **Release radar** and choose the previous, current, or next season.
+2. Click **Search this season's releases** beside the title. It checks the selected season's works in sequence and shows progress. If a title fails, the scan continues with the others.
+3. Click **Subscribe** for a title, choose a release or group, and confirm.
+4. Ani-RSS handles downloading. Subscription status and media progress sync back to AnimeMachine automatically.
 
-Local verification has two levels. Fast mode mainly compares canonical targets, file distribution, and exact byte sizes and is intended for routine scans. Hash verification is used when a comparison baseline exists and the user explicitly enables exact verification. This raises evidence strength only where needed and avoids repeatedly calculating SHA-256 for every video.
+The latest count in “Latest / total episodes” prioritizes Ani-RSS resource and subscription records. “Episode updated” appears when a timestamp is available. Click a column such as “Premiere date” to sort the entire season; click again to reverse the order.
 
-### Selection and downloading
+New subscriptions move to the front of the home page in “New Episode Follow-up” and “Random” views. Your year, month, and other filters still apply.
 
-On first use, the home-page month filter covers the current month and the five preceding months. For example, in August 2026 the default range is 2026-03 through 2026-08. Later filter changes are stored in browser-local state. When both month endpoints are in the same year, Year mirrors that year only as synchronized display state and enables Season; because the server ignores the redundant year condition whenever explicit month bounds exist, the result set is unchanged. Cross-year winter is recognized as well: “2026 + Winter (around Jan)” means 2025-12 through 2026-02, with Year anchored to the year containing January. The five Season options are All, Winter (around Jan), Spring (around Apr), Summer (around Jul), and Autumn (around Oct), mapping to Dec–Feb, Mar–May, Jun–Aug, and Sep–Nov respectively. Changing Year while a season is selected recalculates that season correctly; changing Year for a custom same-year range still preserves its month numbers. Browser-saved season filters from earlier builds are normalized to the new definitions when restored. A legacy Winter state that contains only the previous-December through current-February range, with no explicit year, is anchored to the year containing January and cannot shift the season one year backward. The default page size is 12 works. The theme follows the operating system by default and can also be switched manually between dark and light beside the language selector.
+### Fill gaps and download
 
-Future/date unknown is a distinct filter state with no fixed month bounds, so restoring browser state does not reverse-infer empty dates and clear that choice. Non-Japanese works also no longer assume that every Archive primary title is Japanese: Catalog combines the primary-title script with country/region, tag, and studio evidence to preserve the original language, while explicitly labelled Japanese, English, and other aliases remain separate and can be used by the matching interface language. A source-work title is shown independently from the adaptation relation and is never hard-coded into the animation original-title field for one exceptional work.
+Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. Its options are in the [collector configuration example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example).
 
-Automatic and manual resource selection can be mixed: (1) after works are selected, the system searches under the current policy for a plan with suitable completeness and priority; (2) when intervention is needed, a specific collection, combined-volume, multi-episode, or single-episode plan can be chosen from the work detail page. Automatic selection does not mean immediate downloading; it only produces a candidate under the current evidence.
+1. Find a title and check candidate releases and existing files in its details.
+2. Select the works to collect, generate a plan, and review the files and destination folders.
+3. Confirm the plan. Tasks are added to qBittorrent in a **stopped state**.
+4. Open qBittorrent and start those tasks. AnimeMachine updates your collection status after downloads finish.
 
-When “Start download” is clicked, AnimeMachine first creates an immutable download plan. The plan lists the target directory, estimated space, files to add/skip/stage for replacement, and whether the job will be handed to qBittorrent or Ani-RSS. AnimeMachine always submits qBittorrent jobs stopped so confirming a plan never means immediately downloading it; after reviewing the plan, the user starts the job in qBittorrent.
+Plans compare releases with existing files and select content to fill gaps. Adjust your preferences under **Settings → Resource priority / Release groups**.
 
-The resource policy prefers complete collections and only then considers episode- or volume-level combinations. A combined plan must be judged from its actual coverage, and release groups that have stopped updating for a long period are reduced in priority. Existing local files are handled by a differential plan: a file with the same canonical target and exact byte size is skipped by default; missing items are filled only where needed; an older file with reliable revision evidence is staged first; and existing files that are not duplicates remain in place.
+After a single-episode or single-volume task finishes, **Settings → Subscriptions** can track later releases. New matches appear for your confirmation.
 
-### Browsing, filters, and relationship graphs
+### Relationship graph
 
-The home page supports card/table views, month and state filters, search, sorting, page-size selection, and random ordering; filter and display preferences are stored in browser-local state. Available sources is split into Torrent source, Ani-RSS source, and No available source: the first two may both match one work, while No available source matches only when neither exists. Library status is a separate, mutually exclusive four-way classification: Local library, External read-only, Submitted download, and Not yet in library. Local or completed qBittorrent media that has entered the managed library is Local library; mapped read-only media is External read-only; media playable through the Ani-RSS HTTP API is External read-only only while current credentials exist and the connection is confirmed healthy. If the API disconnects, credentials are removed or changed, or an endpoint change awaits revalidation, the historical API-media snapshot is retained for recovery but is no longer presented as currently playable external media, while an independently mounted read-only directory remains unaffected by API health. Queued, downloading, stopped, or paused incomplete qBittorrent tasks are Submitted download; everything else is Not yet in library. An Ani-RSS subscription by itself is never Submitted download. Fine-grained states such as Directory needs review remain available for directory verification, completeness, and download-safety decisions but are no longer Library-status filter categories. Disabling a region removes works from that region from Catalog-card results rather than reclassifying them as No available source; a co-production remains visible when at least one of its regions is still allowed. Random ordering uses an instance-wide persistent seed, so reloading the page or restarting the service does not reshuffle the sequence; only an administrator using “Reshuffle” generates a new seed. The work detail page can open a relationship graph for prequels, sequels, recaps, side stories, derivatives, alternate adaptations, and cross-series links. Nodes open the related work, complex graphs can use full-screen mode or hide selected relationship classes, and the rendered graph can be exported as SVG or PNG. Cards, details, graph nodes, later-release watches, and the image-preload diagnostic's current-work label use one current-interface-language title rule. The Catalog title policy automatically rechecks stored English aliases so aliases containing any non-Latin alphabetic script (including CJK, Cyrillic, Greek, Arabic, and similar scripts) are rejected when mislabeled as English, and missing or lower-quality verifiable English display titles can be repaired. If no English title exists upstream, the English UI temporarily falls back to the work’s original title for readability, without writing or classifying that fallback as English. A verified English title automatically takes priority when it later becomes available. The Catalog does not need to be rebuilt. Selecting works from the graph still follows normal resource eligibility and internal library-verification checks and cannot bypass download-plan validation.
+Click **Relationship graph** on a card or in details to explore prequels, sequels, movies, and side stories. Drag, zoom, use fullscreen, filter relationship types, or export an image.
 
-New Episode Follow-up puts the newest confirmed episode updates first while Ani-RSS is healthy. A subscription must exceed its highest observed episode and advance its download time to announce an update; redownloads, rollback and recovery, or time-only changes do not promote it. Resource scans establish a baseline for unsubscribed works and announce later increases. Disconnection falls back to random order; reconnection restores follow-up unless another sort was explicitly chosen. All three availability options are selected initially and after reset.
+![Explore related works in a series](images/relationship-graph.png)
 
-Release radar has previous/current/next seasons with 50 works per page. TV enters by broadcast month; films can also enter by explicit theatrical, streaming, or BD/Blu-ray release dates, without duplicates within a season. Serials prioritize episode updates and films use their current-season work or release date. The table shows localized titles, media, latest/total episodes, subscription state, and update time, with horizontal scrolling on narrow screens. Clicking an updated row clears its highlight; the browser remembers the most recently read 1000 works, and a later episode update highlights them again. Season ranges match the Season filter: winter is December–February, spring March–May, summer June–August, and autumn September–November; the window advances seven days before each quarter. Choose a resource group to subscribe, with background search when none is available. Radar refreshes every 30 seconds while open.
+### Playback and subtitles
 
-Details and radar share work-local latest/total episode counts, with `?` for unknown values and cumulative-number conversion only when supported by evidence. Works sharing a directory retain separate progress. The library shows actual media locations; remote playback is selected under Playback source. Subscriptions remain manageable without downloaded files or while paused. M3U stays enabled, with playback addresses, paths, and expiry still configurable.
+Open title details, choose a media source and starting episode, then select VLC, PotPlayer, or your system player. IINA is also available on macOS. Use **Copy playlist** to open the whole season in another player.
 
-### Later-release watches
+![Choose a starting episode and open an external player](images/playback.png)
 
-After AnimeMachine completes a managed episode- or volume-level job, it creates a watch using that job's exact release fingerprint. If a later Torrent Pool scan finds a higher sequence with the same fingerprint, AnimeMachine creates a pending match under “Settings → Subscriptions”; it does not download the match automatically. These watches are separate from Ani-RSS remote subscriptions. Removing a watch only stops AnimeMachine's future matching and does not delete already downloaded media or an Ani-RSS subscription.
+Install the player on the device you watch from. For playback on another device, set an AnimeMachine address that device can reach under **Settings → Connections → External player handoff**, such as `http://nas.example:8787`. If the player can access your media share directly, add an SMB / NFS path mapping.
 
-### Ani-RSS
+Use embedded subtitles, subtitles alongside your media, or import subtitle files and archives in title details. For online search, enter your ASSRT or OpenSubtitles credentials under **Settings → Connections → Subtitle sources**, then search and select a match.
 
-After Ani-RSS is connected, three resource-routing modes are available: (1) prefer: hand the work to Ani-RSS when no complete local collection is available; (2) fallback: call Ani-RSS only when there is no usable local plan at all; and (3) manual: do not discover or plan Ani-RSS resources in the background, and query resources only for explicit user actions such as “Query Ani-RSS resources.” These modes control resource discovery and planning only; subscription and API-playable-media state still refresh on the configured sync interval. A temporary remote failure does not rewrite the user's selected long-term mode; when the connection returns, the original setting remains in effect.
+<a id="connections"></a>
 
-When the Ani-RSS API key is healthy and mode is Prefer or Fallback, AnimeMachine warms Ani-RSS resource results in the background. Ordering follows cover preload: works from the most recent six months are handled page-by-page from the current seeded home ordering first, followed by the remaining recent-six-month works, then month-by-month from month 7 back through the most recent 24 already-aired calendar months. Cover batches are submitted first and Ani-RSS uses a small bounded concurrent queue, so covers normally finish slightly ahead. Runtime rechecks follow the Resource-pool scan interval. Startup warming and periodic rechecks share one non-blocking scan lease: if a new interval becomes due while the previous pass is still running, that tick is skipped rather than queued or run concurrently, and the completion time is not advanced; a later scheduler check reevaluates what is due after the active pass finishes. If a resource query fails because the Ani-RSS connection or transport is unavailable, the failure is recorded and the scheduler uses a short retry of at most five minutes instead of treating that pass as complete and waiting the full Resource-pool scan interval. If a per-work last-attempt timestamp is materially in the future after a wall-clock rollback, that work is treated as due immediately rather than being skipped until the future time arrives. The runtime Ani-RSS monitor also schedules the same resource recheck independently, so on a first deployment that becomes `ready` a few seconds after image warming starts, discovery begins in the same process without a restart. Works older than 24 months leave unattended background discovery. That two-year limit applies only to automatic warming/rechecks, not explicit user selection: in an Ani-RSS-only healthy setup, cards and relationship nodes remain selectable, and a multi-work plan can route some works to Ani-RSS and others to Torrents according to the current resource priority. A per-work query continues to later available Chinese/Japanese/English title candidates when an earlier title produces no result, so an English-only match is not lost merely because two earlier candidates miss. If the Ani-RSS address or API key changes, resource-search cache from the previous source is cleared immediately; an in-flight old-source result cannot write back after the switch, and discovery becomes due as soon as the replacement source validates rather than inheriting the previous source’s scan deadline. For a remote Ani-RSS source, each resource search also records the effective proxy-route generation at start; if the proxy or `NO_PROXY` changes while it is in flight, that late result is discarded before commit and normal rechecks continue under the current network generation.
+## 4. Connections and folders
 
-Media provided through the Ani-RSS HTTP API is treated as an external read-only source only while current API credentials exist and the connection is confirmed healthy, and is never directly moved or renamed; an independently mounted Ani-RSS media directory is always treated as a read-only directory. The configured sync interval, 30 minutes by default, governs one unified refresh, with a single background monitor responsible for automatic subscription/API-media synchronization. Each pass reconciles subscriptions and work mappings first, then API `playList` refreshes every mapped subscription that still has a remote URL, including a remotely disabled subscription that may still contain downloaded files. A newly downloaded episode therefore normally appears on the work page and in M3U playback within that sync interval even when no Ani-RSS media directory is mounted. The work page's playable count is derived from the actual local `ani_rss_media` snapshot rather than the subscription's `currentEpisodeNumber`, so subscription progress and playable-file count are no longer conflated. A full-success timestamp advances only after the media phase completes; a transient playlist failure or a background pass that yields to an explicit user action preserves the last good result and becomes eligible for a compensating retry within at most five minutes instead of clearing other works or waiting another full interval. If a wall-clock correction leaves persisted synchronization timestamps materially in the future, the snapshot is immediately treated as due so refresh cannot remain suppressed indefinitely. If an Ani-RSS media directory is configured, its read-only scan uses the same sync-interval setting but is decoupled from HTTP API health: it continues even when the API is unconfigured or temporarily unavailable. Directory scanning runs in a separate background thread so it cannot delay the API snapshot, and only one scan pass per external-media source may run at once; a due pass for that same source is skipped rather than queued while unrelated sources remain independent. The Ani-RSS local-cover shortcut is used only when the current API key matches the credential generation validated by the latest synchronization and the endpoint and synchronized state are confirmed healthy and AnimeMachine has no valid cover; `/api/file` fails fast, and a transport or server-side failure puts that endpoint plus the current credential generation into a 30-second fail-fast cooldown so the remaining cover queue immediately uses the original image-source pipeline. The cooldown is cleared early only when the route actually used by that Ani-RSS endpoint changes, so unrelated proxy toggles do not make a localhost/LAN endpoint retry repeatedly; replacing the API key and completing a successful resynchronization also bypasses any cooldown left by the old credential. Even an HTTP-success response is rejected unless its bytes validate as an image, and `/api/file` is recorded healthy only after that validation succeeds. Explicit Reload retries Ani-RSS, while an existing good AnimeMachine cover is not replaced in the background. Multiple subscriptions for one work remain independent by remote ID. If Ani-RSS is unconfigured, lacks credentials, has an endpoint change that is not yet revalidated, or is unreachable, HTTP automatic sync, current Ani-RSS Available-source eligibility, API External-read-only state, API subscription/resource presentation, remote playback entry points, and the cover shortcut are skipped automatically; the most recent successful API-media snapshot remains in SQLite only as recovery cache. Torrent, Bangumi image, local-library workflows, and any configured Ani-RSS read-only media-directory scan continue independently. Localhost, loopback, and private-network targets stay direct across environment-proxy changes. A remote Ani-RSS endpoint tracks the effective proxy/direct route generation. Each synchronization pass records the route generation captured at the start of that pass, so a proxy change that happens while requests are in flight cannot be mistaken for a successful validation of the new route; the mismatch makes a compensating synchronization due immediately. A meaningful environment-proxy, Windows-system-proxy, or `NO_PROXY` change therefore does not wait for the ordinary sync interval. Until that new route has been validated by synchronization, the previous remote `ready` snapshot is treated as revalidation-pending and is not exposed as a current Ani-RSS resource, API external-read-only medium, or remote-playback source; the stored snapshot remains available only for recovery. Local/LAN targets are unaffected because they remain direct. If one `listAni` generation temporarily omits the URL, enabled state, current/total episode values, download path, or another optional field for an existing remote ID, AnimeMachine keeps the last verified values so later `playList` refreshes can still discover new episodes without zeroing known subscription state; however, when a valid response explicitly remaps the same remote ID to a different work, episode values, download time, and optional evidence are not inherited across that identity boundary, and the corrected work starts a fresh baseline so the remap cannot appear as a new episode; only an explicitly removed remote subscription enters deletion handling. If `listAni` advertises more subscriptions than the number of unique remote IDs actually returned in that generation, the entire generation is treated as an incomplete subscription snapshot: unseen subscriptions do not age toward deletion, the full-success timestamp does not advance, and a short compensating retry remains due until a complete list is observed. For compatibility with older Ani-RSS builds, a `listAni` response without `total` may still update rows, but absence alone is not treated as deletion evidence; missing-subscription deletion grace advances only for a list carrying a valid `total` that matches the returned unique-ID count. An Ani-RSS API key saved through the Web UI is loaded before the image worker starts and its current effective value is passed with image tasks, so changing or removing credentials at runtime immediately changes cover-shortcut behavior. A previously issued remote-playback URL is also rejected locally without another Ani-RSS media request once credentials are removed or changed or the synchronized connection state is no longer `ready`. If successful synchronization now finds an explicit Ani-RSS cover path for a mapped work, AnimeMachine releases that work’s earlier `no_cover` negative cache when it contains no valid image bytes. Ani-RSS can therefore be retried by the next normal image request immediately after recovery instead of waiting for the 24/72-hour cover-maintenance cadence.
+<a id="ani-rss"></a>
 
-The first synchronization establishes a baseline instead of announcing existing downloads as new episodes. Confirmed subscription deletion clears its follow-up state. Number conversion affects presentation only and does not rewrite Ani-RSS data.
+### Connect an existing Ani-RSS instance
 
-The work detail page can delete an Ani-RSS subscription that already has downloaded content, but this is an explicit remote write operation: the UI asks for confirmation, AnimeMachine requests deletion of the subscription and files through the Ani-RSS HTTP API, and the remote list is synchronized again to verify the result. “External read-only” means AnimeMachine does not directly mutate the mapped media directory; it does not prohibit a user-confirmed Ani-RSS API deletion operation.
+Find the API Key under **Settings → Security** in Ani-RSS. Copy it into **Settings → Connections → Ani-RSS** in AnimeMachine:
 
-### Playback
+| Setting | What to enter |
+| --- | --- |
+| Service address | An Ani-RSS address reachable from AnimeMachine, such as `http://localhost:7789` for a local installation |
+| API Key | The key copied from Ani-RSS |
+| Mode | “Prefer Ani-RSS” is the usual choice |
+| Media path | The Ani-RSS download folder readable by AnimeMachine; leave it empty when using only the remote API |
 
-The work-detail Playback source selects the actual playback transport: local/mounted media and currently healthy Ani-RSS remote media are selected here, while Library itself describes actual inventory and no longer doubles as a transport selector through duplicate rows. After choosing a source, use “Copy,” “Download playlist,” “Open with VLC,” or “Open with PotPlayer.” The generated M3U contains main-program media only and is ordered by episode. If several media copies represent the same episode, the default playlist chooses one by source priority and file size. Different episodes are selected independently, so equal byte sizes alone never deduplicate one episode against another. Extras and the remaining copies stay visible in the library inventory. If playback starts from episode N, earlier items remain in the playlist; only the player start position changes to the selected item.
+Save, then click **Test connection**. Resources, subscriptions, and media status sync automatically after a successful connection. The full Compose stack configures these connections for you.
 
-![Playback and player handoff](images/playback.png)
+Ani-RSS and its downloader should see the same media save path. See the Ani-RSS guides for [download settings](https://docs.wushuo.top/config/download) and [subscriptions](https://docs.wushuo.top/add-rss).
 
-With local execution, a player can usually use filesystem paths directly. With Docker or remote deployment, this may not be true. The container path `/Library` has no meaning on the user's computer, so “Settings → Connections → External player handoff” must provide either an HTTP address reachable by the client or a mapping from server paths to client paths. For example, server `/Library` can map to Windows `\\nas\anime` or macOS `/Volumes/anime`. If the Ani-RSS media directory is not mounted, AnimeMachine can still build and proxy the complete M3U through the Ani-RSS HTTP API. VLC or PotPlayer then reads temporary AnimeMachine HTTP media URLs with byte Range support, seeking and continuous playlist playback; a short upstream interruption is retried from the already-transferred position. Remote Ani-RSS playback therefore does not require a local media path.
+### Connect an existing qBittorrent instance
 
-If PotPlayer/VLC seeking fails, playback stops midway, or remote throughput looks abnormal, open “Settings → Diagnostics → Remote playback sessions.” It keeps only a compact summary of recent sessions: the client Range, automatic resume count, Ani-RSS upstream HTTP state, and current transfer rate. Media content, complete local paths, and credentials are not retained.
+Use **qBittorrent 5.2.0 or later**. Enable its Web UI in qBittorrent's Web UI settings, then create or copy an API Key.
 
-### Subtitles
+Under **Settings → Connections → qBittorrent**, enter the service address, API Key, Anime library path, and the library path as seen by qBittorrent. Save and click **Test connection**. A Docker container connecting to a downloader on its host typically uses `http://host.docker.internal:8080`; within the same Compose stack, use `http://qbittorrent:8080`.
 
-For ongoing releases, candidate selection prefers subtitles in the user's language. Archival resources are checked in this order: (1) embedded subtitles; (2) same-name external subtitles; (3) local subtitle archives; and (4) user-configured subtitle services. When a new subtitle file is selected, the old subtitle is first backed up into the state directory. If the media comes from an external read-only library, the new subtitle is also stored under AnimeMachine state rather than written back to the original media path.
+<a id="folders"></a>
 
-Subtitle handling and media ownership are therefore separate concerns: AnimeMachine can associate a subtitle with a read-only video for playback without acquiring permission to modify the external media library itself.
+### Folders and path mapping
 
-### Directories and history
+A single folder can have different paths on your NAS, inside AnimeMachine, and inside the downloader. **Enter host paths in Compose; enter container paths in the app's settings.**
 
-A standalone work directory uses `『YYYY_MM』『Original Title』` by default. A series directory uses `『Start－End』『「Series Root」シリーズ』`, while child works inside the series continue to use their own first-air months. Split broadcasts belonging to the same official cour are merged under the first cour; mini-anime, Picture Drama, and similar material with a clear parent work are handled as attachments rather than receiving separate placeholder directories.
+![One collection folder as seen by the host and two containers](images/folder-mapping.en.svg)
 
-Directory handling begins by confirming work identity and the existing path. Before AnimeMachine moves, renames, or replaces a user-owned file, it records the change under “Settings → History”; ordinary directories created by AnimeMachine itself are not redundantly logged. If directory ownership, collection boundaries, or work identity still contain a conflict that cannot be proved automatically, the download plan remains in review until sufficient evidence is available.
+These are the default Compose folders. Relative host paths start from the folder containing `compose.yaml`:
+
+| Host folder | Path inside AnimeMachine | Purpose |
+| --- | --- | --- |
+| `./library` | `/Library` | New downloads and organized media |
+| `./torrents` | `/Torrents` | `.torrent` files |
+| `./external/read-only` | `/External` | Browse and play existing media as read-only |
+| `./external/ani-rss` | `/Media` | Media downloaded by Ani-RSS |
+| `./config`, `./data` | `/Config`, `/Data` | Settings, accounts, and runtime records |
+
+For example, to save your collection in `/srv/anime`, create `.env` beside `compose.yaml` and add:
+
+```dotenv
+ANM_LIBRARY_DIR=/srv/anime
+```
+
+Run `docker compose up -d` again. The library path in AnimeMachine remains `/Library`. You can change external media and data locations the same way; see [configuration variables](reference.en.md#environment).
+
+On Windows, enter a path such as `D:\Anime` or `\\nas\Anime`. On Linux / macOS, mount your NAS share first, then enter the mount path. Keep settings and runtime data on the machine's local disk; media can live on a NAS. Choose an external read-only library to keep using an existing folder layout.
+
+<a id="maintenance"></a>
+
+## 5. Preferences, updates, and backups
+
+Choose your language, theme, layout, and browsing filters. Administrators manage folders, connections, resource rules, and users in Settings; regular accounts browse and play media.
+
+AnimeMachine checks Bangumi Archive for catalog updates each week. Use **Settings → General → Check for catalog update** to check immediately, or **Import downloaded catalog base** to use an Archive ZIP you already downloaded. See [network settings](reference.en.md#ANM_CA_BUNDLE) for proxies and custom certificates.
+
+Open **Settings → Updates** to update the app. Check for a release, read its notes, then confirm the update. Enable scheduled checks if you want them.
+
+To update a complete Docker image, run the following in the original Compose folder. If your configuration pins a version, change its image tag to your target version first:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+For a backup, stop AnimeMachine and copy:
+
+| Installation | Backup contents |
+| --- | --- |
+| Windows / Linux / macOS release | `config.json`, `.env.local`, and the entire `data` folder |
+| Docker | The Compose file, `.env` if present, and the entire `config` and `data` folders; also back up a custom collector data folder or named volume |
+| Both | Keep separate backups of your media and Torrent pool |
+
+To restore, put these files back in their corresponding locations and start with the same configuration. After moving to a new machine, adjust the media paths. Review and restore recorded moves, renames, and version replacements under **Settings → History**.
+
+<a id="help"></a>
+
+## 6. Common questions
+
+| Issue | Recommended action |
+| --- | --- |
+| You forgot the initial password | In a local release or Docker's host data folder, open `data/state/auth/initial-admin.txt`, or check the container logs. The file records the account generated on first launch. |
+| The library is empty | Follow initialization progress and wait for title data to import. Check the network and archive status in Diagnostics. |
+| Titles appear without covers | Covers load in the background. Keep browsing and check progress in Diagnostics. |
+| Existing anime is missing | Check that AnimeMachine's host can read the media folder. In Docker, check the mount and the corresponding container path, such as `/External`. |
+| Episode counts or subscriptions are stale | Test the Ani-RSS connection, search the season's releases, and check that subscription in Ani-RSS. |
+| qBittorrent tasks have not started | Check that the plan was submitted, then start its stopped tasks in qBittorrent. |
+| The player did not open | Install the player and allow your browser to open external apps. You can also copy the playlist and open it in the player. |
+| Playback fails on a phone or another computer | Set an address reachable from that device under External player handoff, and check that it can open AnimeMachine. |
+| The port is already in use | Choose another port using the [port settings](reference.en.md#ports), then restart. |
+
+For more detail, open **Settings → Diagnostics / Logs** and check the component's status and recent errors. Background tasks resume retries when the network returns.

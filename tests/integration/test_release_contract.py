@@ -1,3 +1,4 @@
+import json
 import pathlib
 import re
 import subprocess
@@ -11,6 +12,42 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_artifacts_reject_local_installation_origins_in_package_metadata(self):
+        scanner = ROOT / "scripts" / "check_public_tree.py"
+        with tempfile.TemporaryDirectory() as directory:
+            release = pathlib.Path(directory) / "release.zip"
+            for name in ("app/animemachine-0.3.1.dist-info/direct_url.json",
+                         "app/dependency-1.0.dist-info/direct_url.json"):
+                with self.subTest(name=name):
+                    with zipfile.ZipFile(release, "w") as archive:
+                        archive.writestr("AnimeMachine-test/" + name,
+                                         json.dumps({"url": "file:///D:" + "/Codex/private-build"}))
+                    result = subprocess.run([sys.executable, str(scanner), str(release)], capture_output=True, text=True)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("local installation origin", result.stdout)
+            with zipfile.ZipFile(release, "w") as archive:
+                archive.writestr("AnimeMachine-test/app/dependency-1.0.dist-info/direct_url.json",
+                                 json.dumps({"url": "https://files.pythonhosted.org/packages/dependency.whl"}))
+            subprocess.run([sys.executable, str(scanner), str(release)], check=True, capture_output=True)
+
+    def test_private_development_launchers_stay_local_and_are_rejected_in_artifacts(self):
+        scanner = ROOT / "scripts" / "check_public_tree.py"
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "source"
+            source.mkdir()
+            for name in ("Start-Codex.cmd", "Start-Codex-Test.cmd", "Resume-Codex-Test.cmd"):
+                (source / name).write_text("echo local-only", encoding="utf-8")
+            (source / "AnimeMachine.cmd").write_text("echo product", encoding="utf-8")
+            subprocess.run([sys.executable, str(scanner), str(source)], check=True, capture_output=True)
+            for name in ("Start-Codex.cmd", "Resume-Codex-Test.cmd", "scripts/start-codex-test.cmd"):
+                with self.subTest(name=name):
+                    release = pathlib.Path(directory) / "release.zip"
+                    with zipfile.ZipFile(release, "w") as archive:
+                        archive.writestr("AnimeMachine-test/" + name, "echo local-only")
+                    result = subprocess.run([sys.executable, str(scanner), str(release)], capture_output=True, text=True)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn("private launcher", result.stdout)
+
     def test_config_backups_stay_local_and_are_rejected_in_release_archives(self):
         scanner = ROOT / "scripts" / "check_public_tree.py"
         with tempfile.TemporaryDirectory() as directory:
@@ -165,7 +202,7 @@ class ReleaseContractTests(unittest.TestCase):
         fourth = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", third)
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", fourth)
-        self.assertIn("wushuo894/ani-rss:v3.2.28", fourth)
+        self.assertIn("wushuo894/ani-rss:v3.2.39", fourth)
         self.assertNotIn(":latest", third + fourth)
         advanced = (root / "torrent-collector.advanced.env.example").read_text(encoding="utf-8")
         self.assertIn("TORRENT_COLLECTOR_HISTORY_ENABLED", advanced)
@@ -378,7 +415,8 @@ class ReleaseContractTests(unittest.TestCase):
 
     def test_private_and_runtime_state_are_excluded(self):
         ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
-        for value in ("/config.json", "/AGENTS.md", "/.local/", "/deploy/private/"):
+        for value in ("/config.json", "/AGENTS.md", "/.local/", "/deploy/private/",
+                      "/Start-Codex*.cmd", "/Resume-Codex*.cmd"):
             self.assertIn(value, ignored)
 
 

@@ -42,6 +42,7 @@ from ..config import credentials as credential_store
 from ..torrents import runtime as runtime_catalog
 from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss
 from . import archive_update, relation_graph, metadata_repair
+from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
 from ..library import audit as library_audit, external as external_library, history as library_history, layout as library_layout
 from ..network import (connectivity as network_connectivity, diagnostics as network_diagnostics,
@@ -55,6 +56,8 @@ from ..storage import preflight as storage_preflight
 from ..storage import path_policy
 from ..api import auth
 from .. import __version__, application_update
+from .episodes import (_episode_progress, _episode_start_number)
+from .names import search_name
 
 from ..config.loader import (REGION_COUNTRIES, REGION_KEYS, explicitly_disabled,
                              load_resource_group_catalog, region_policy_enabled)
@@ -748,6 +751,26 @@ def infer_original_language(title: str, countries: Iterable[tuple[str, str]] = (
     if script == "zh" and codes.intersection({"CN", "HK", "MO", "TW"}) and "JP" not in codes:
         return "zh"
     return "ja"
+
+
+def title_origin_language(title: str, language: str | None, japanese: bool) -> str:
+    """Disambiguate the old Japanese fallback for title visibility only."""
+    original = str(language or "ja").split("-", 1)[0]
+    if original == "ja" and not japanese and infer_language(title) == "zh":
+        return "zh"
+    return original
+
+
+def translated_title(original: str, language: str, candidate: str | None,
+                     candidate_language: str | None) -> bool:
+    base = str(candidate_language or "").split("-", 1)[0]
+    if base not in {"zh", "en", "ja"} or base == language:
+        return False
+    def normalize(value: str | None) -> str:
+        return " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).casefold()
+    value = normalize(candidate)
+    return bool(value and value != normalize(original)
+                and (base != "en" or _valid_english_display_title(str(candidate))))
 
 
 def cast_language(person_name: str, original_language: str) -> str:
@@ -2063,96 +2086,6 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
     return items
 
 
-def _legacy_episode_start_number(db: sqlite3.Connection, anime_id: int, episode_count: int) -> int | None:
-    """Infer a cumulative episode start only from an unambiguous same-format sequel chain.
-
-    Fresh Catalogs persist Bangumi Archive ``episode.sort`` directly.  This fallback keeps
-    existing Catalogs useful until their next Archive refresh without guessing across branches,
-    movies, specials, or works whose episode totals are unknown.
-    """
-    if episode_count <= 0 or not db.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_relation_edge'").fetchone():
-        return None
-    current = db.execute("SELECT media_code FROM anime_work WHERE id=?", (anime_id,)).fetchone()
-    if not current:
-        return None
-    media_code = str(current[0] or "")
-    offset = 0
-    node = anime_id
-    seen = {node}
-    while True:
-        predecessors = db.execute(
-            """SELECT e.source_anime_id,w.episode_count,w.media_code
-               FROM anime_relation_edge e JOIN anime_work w ON w.id=e.source_anime_id
-               WHERE e.target_anime_id=? AND e.relation_code='sequel' AND e.grouping=1""",
-            (node,),
-        ).fetchall()
-        if not predecessors:
-            return offset + 1 if offset else None
-        if len(predecessors) != 1:
-            return None
-        predecessor_id, predecessor_count, predecessor_media = predecessors[0]
-        predecessor_id = int(predecessor_id)
-        if predecessor_id in seen or str(predecessor_media or "") != media_code or int(predecessor_count or 0) <= 0:
-            return None
-        seen.add(predecessor_id)
-        offset += int(predecessor_count)
-        node = predecessor_id
-
-
-def _episode_start_number(db: sqlite3.Connection, anime_id: int, episode_count: int,
-                          stored: Any = None) -> int | None:
-    with contextlib.suppress(TypeError, ValueError):
-        value = int(stored)
-        if value > 0:
-            return value
-    return _legacy_episode_start_number(db, anime_id, episode_count)
-
-
-def _episode_number(raw: Any) -> int:
-    with contextlib.suppress(TypeError, ValueError, OverflowError):
-        value = float(raw or 0)
-        if math.isfinite(value) and value > 0:
-            return int(value)
-    return 0
-
-
-def _local_episode_number(raw: Any, episode_count: int, episode_start: int | None) -> int:
-    value = _episode_number(raw)
-    if value <= 0:
-        return 0
-    # Ani-RSS normally reports work-local numbers. Only reinterpret a value when it
-    # exceeds this work's known total and Archive/sequel evidence can map it back
-    # into that total. This avoids changing already-local numbering.
-    if episode_count > 0 and value > episode_count and episode_start and episode_start > 1 and value >= episode_start:
-        local = value - episode_start + 1
-        if 1 <= local <= episode_count:
-            return local
-    return value
-
-
-def _episode_progress(db: sqlite3.Connection, anime_id: int, episode_count: Any,
-                      episode_start: Any, currents: Iterable[Any], totals: Iterable[Any]) -> dict[str, int | None]:
-    known_total = _episode_number(episode_count)
-    raw_currents = list(currents)
-    raw_totals = list(totals)
-    needs_offset = known_total > 0 and any(
-        _episode_number(value) > known_total for value in [*raw_currents, *raw_totals]
-    )
-    start = _episode_start_number(db, anime_id, known_total, episode_start) if needs_offset else None
-    normalized_currents = [_local_episode_number(value, known_total, start) for value in raw_currents]
-    normalized_totals = [_local_episode_number(value, known_total, start) for value in raw_totals]
-    current = max(normalized_currents, default=0)
-    # Archive episode_count is the work-local total.  Do not let an Ani-RSS
-    # franchise-wide total replace it after current progress has been localized.
-    # Only fall back to runtime totals when Archive is evidently stale (the
-    # observed local current already exceeds its known count) or has no count.
-    if known_total > 0 and (not current or current <= known_total):
-        total = known_total
-    else:
-        valid_totals = [value for value in normalized_totals if value > 0 and (not current or value >= current)]
-        total = max(valid_totals, default=0)
-    return {"current": current or None, "total": total or None}
 
 def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_catalog_features(db_path)
@@ -2163,6 +2096,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_episode_state'").fetchone())
         has_ani_rss_release_state_table = bool(feature_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_release_state'").fetchone())
+        has_ani_rss_action_table = bool(feature_db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_action'").fetchone())
     config = config or ConfigStore(DEFAULT_CONFIG, EXAMPLE_CONFIG).read()
     config = {**config, "ui": {**config.get("ui", {}), "language": (params.get("language") or [config.get("ui", {}).get("language", "en")])[0]}}
     ani_state = ani_rss.state(db_path, config)
@@ -2181,15 +2116,36 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
 
     q = value("q")
     radar_mode = value("radar") == "1"
+    requested_sort = value("sort") or "recent_episode"
+    subscription_order = ("COALESCE((SELECT MAX(aa.rowid) FROM ani_rss_action aa "
+                          "JOIN ani_rss_subscription aps ON aps.remote_id=aa.remote_id "
+                          "WHERE aa.anime_id=w.id AND aa.action_kind='follow' AND aa.state='submitted' "
+                          "AND aps.anime_id=w.id AND aps.deleted_at IS NULL),0)"
+                          if has_ani_rss_action_table else "CAST(0 AS INTEGER)")
+    japanese_title = "EXISTS(SELECT 1 FROM anime_country tc WHERE tc.anime_id=w.id AND tc.country_code='JP')"
+    original_language_expr = f"title_origin_language(w.title_ja,w.original_language,{japanese_title})"
+    translated_expr = (
+        f"(translated_title(w.title_ja,{original_language_expr},w.title_zh_hans,'zh-Hans') "
+        f"OR translated_title(w.title_ja,{original_language_expr},w.title_en,'en') "
+        "OR EXISTS(SELECT 1 FROM anime_title tt WHERE tt.anime_id=w.id "
+        f"AND translated_title(w.title_ja,{original_language_expr},tt.title,tt.language)))"
+    )
+    if requested_sort == "recent_episode" and not radar_mode and not q:
+        where.append(f"({subscription_order}>0 OR ((EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND fc.country_code='JP') "
+                     "OR NOT EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND COALESCE(fc.country_code,'')<>'')) "
+                     f"AND {translated_expr}))")
     if radar_mode:
         hard_where.append("(EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code='JP') "
                           "OR NOT EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code!='OTHER'))")
+        hard_where.append(f"NOT ({original_language_expr}='zh' AND NOT {translated_expr})")
     keyword_clause = "EXISTS(SELECT 1 FROM anime_title t WHERE t.anime_id=w.id AND t.title LIKE ?)"
     if q:
         where.append(keyword_clause)
         values.append(f"%{q}%")
     media_types = selected_values("media_type")
-    if media_types:
+    if media_types == ["__none__"]:
+        where.append("0")
+    elif media_types:
         ordinary_media = [code for code in media_types if code != "other"]
         media_clauses: list[str] = []
         if ordinary_media:
@@ -2237,7 +2193,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         movie_start_range, movie_start_values = month_bounds("w.start_month")
         release_range, release_values = month_bounds("substr(re.release_date,1,7)")
         hard_where.append(
-            f"((w.media_code='tv' AND ({tv_range})) OR "
+            f"((w.media_code<>'movie' AND ({tv_range})) OR "
             f"(w.media_code='movie' AND (({movie_start_range}) OR EXISTS("
             "SELECT 1 FROM anime_release_event re WHERE re.anime_id=w.id "
             f"AND re.event_type IN ('theatrical','bd') AND ({release_range})))))"
@@ -2272,15 +2228,15 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     elif re.fullmatch(r"\d{4}s", era):
         base = int(era[:4]); where.append("CAST(substr(w.start_month,1,4) AS INTEGER) BETWEEN ? AND ?"); values.extend([base, base + 9])
     exists_filters = {
-        "director": ("anime_staff", "s", "s.anime_id=w.id AND s.role_type='director' AND s.name LIKE ?"),
-        "voice_actor": ("anime_cast", "c", "c.anime_id=w.id AND c.person_name LIKE ?"),
+        "director": ("anime_staff", "s", "s.anime_id=w.id AND s.role_type='director' AND search_name(s.name) LIKE ?"),
+        "voice_actor": ("anime_cast", "c", "c.anime_id=w.id AND search_name(c.person_name) LIKE ?"),
         "tag": ("anime_theme", "g", "g.anime_id=w.id AND g.theme_code=?")
     }
     for name, (table, alias, condition) in exists_filters.items():
         selected = value(name)
         if selected:
             where.append(f"EXISTS(SELECT 1 FROM {table} {alias} WHERE {condition})")
-            values.append(f"%{selected}%" if name != "tag" else selected)
+            values.append(f"%{search_name(selected)}%" if name != "tag" else selected)
 
     availability = set(selected_values("availability"))
     policy = config.get("torrentPolicy", {})
@@ -2391,7 +2347,6 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     offset = max(int(value("offset") or 0), 0)
     locale = value("language") or "zh-Hans"
     title_expr = "COALESCE(w.title_zh_hans,w.title_ja)" if locale == "zh-Hans" else ("COALESCE(w.title_en,w.title_ja)" if locale == "en" else "w.title_ja")
-    requested_sort = value("sort") or "recent_episode"
     recent_episode_available = ani_connection_ready and has_ani_rss_episode_state_table
     sort = requested_sort if requested_sort != "recent_episode" or recent_episode_available else "random"
     seed = value("seed") or instance_random_seed(db_path) or "anm"
@@ -2406,6 +2361,31 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     if has_ani_rss_release_state_table:
         episode_update_expr = (f"MAX({episode_update_expr},COALESCE((SELECT MAX(ars.last_episode_update_at) "
                                "FROM ani_rss_release_state ars WHERE ars.anime_id=w.id),''))")
+    if radar_mode and sort == "premiere":
+        primary = ("CASE WHEN length(w.raw_date)=10 AND date(w.raw_date,'+0 days')=w.raw_date "
+                   "THEN w.raw_date ELSE COALESCE(w.start_month||'-01','') END")
+    elif radar_mode and sort == "updated":
+        primary = episode_update_expr if ani_connection_ready and has_ani_rss_episode_state_table else "''"
+    elif radar_mode and sort == "subscription":
+        primary = ("CASE WHEN EXISTS(SELECT 1 FROM ani_rss_subscription ass WHERE ass.anime_id=w.id "
+                   "AND ass.deleted_at IS NULL AND ass.enabled=1) THEN 0 "
+                   "WHEN EXISTS(SELECT 1 FROM ani_rss_subscription ass WHERE ass.anime_id=w.id "
+                   "AND ass.deleted_at IS NULL) THEN 1 ELSE 2 END"
+                   if ani_connection_ready and has_ani_rss_episode_state_table else "CAST(2 AS INTEGER)")
+    elif radar_mode and sort == "progress":
+        currents = []
+        if ani_connection_ready and has_ani_rss_episode_state_table:
+            currents.append("(SELECT MAX(asp.current_episode) FROM ani_rss_subscription asp "
+                            "WHERE asp.anime_id=w.id AND asp.deleted_at IS NULL)")
+            if has_ani_rss_media_table:
+                currents.append("(SELECT MAX(amp.episode) FROM ani_rss_media amp "
+                                "JOIN ani_rss_subscription ams ON ams.remote_id=amp.remote_id "
+                                "WHERE amp.anime_id=w.id AND ams.deleted_at IS NULL)")
+            if has_ani_rss_release_state_table:
+                currents.append("(SELECT current_episode FROM ani_rss_release_state arp WHERE arp.anime_id=w.id)")
+        primary = ("MAX(0," + ",".join(
+            f"episode_sort_number(w.id,w.episode_count,w.episode_start_number,{current})" for current in currents) + ")"
+            if currents else "CAST(0 AS INTEGER)")
     radar_event_date_expr = "w.start_month"
     radar_event_order_values: list[str] = []
     if radar_mode:
@@ -2429,7 +2409,12 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     elif sort == "random":
         order = f"{pending_expr} ASC,seeded_rank(w.id,?) ASC,w.start_month,w.media_code,{title_expr}"
     else:
-        order = f"{primary} {direction},w.start_month ASC,w.media_code ASC,{title_expr} ASC"
+        order = f"{primary} {direction},w.start_month ASC,w.media_code ASC,{title_expr} ASC,w.id ASC"
+    if radar_mode and value("radar_grouped") != "0":
+        order = (f"CASE WHEN {translated_expr} THEN CASE WHEN w.media_code='tv' THEN 0 ELSE 1 END "
+                 "ELSE CASE WHEN w.media_code='tv' THEN 3 ELSE 2 END END ASC," + order)
+    elif not radar_mode and not q and requested_sort in {"recent_episode", "random"}:
+        order = f"{subscription_order} DESC," + order
     order_values = ([seed] if sort == "random" else
                     (radar_event_order_values if sort == "recent_episode" and radar_mode else []))
     predicate = " WHERE " + " AND ".join(base_where + hard_where + where)
@@ -2464,6 +2449,11 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         db.create_function("seeded_rank", 2, lambda anime_id, s: hashlib.sha256(f"{s}:{anime_id}".encode()).hexdigest(), deterministic=True)
+        db.create_function("title_origin_language", 3, title_origin_language, deterministic=True)
+        db.create_function("translated_title", 4, translated_title, deterministic=True)
+        db.create_function("search_name", 1, search_name, deterministic=True)
+        db.create_function("episode_sort_number", 4, lambda anime_id, count, start, current:
+                           _episode_progress(db, anime_id, count, start, [current], [])["current"] or 0)
         has_runtime = bool(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_work'").fetchone())
         total = db.execute(f"SELECT count(*) FROM anime_work w{predicate}", predicate_values).fetchone()[0]
         # Page first, then enrich only the visible rows.  Doing correlated
@@ -2747,12 +2737,13 @@ def people_options(db_path: Path, role: str, query: str = "", limit: int = 40) -
     ensure_catalog_features(db_path)
     limit = min(max(int(limit), 1), 100)
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+        db.create_function("search_name", 1, search_name, deterministic=True)
         if role == "director":
             sql, values = """SELECT name,COUNT(DISTINCT anime_id) n FROM anime_staff
-                WHERE role_type='director' AND name LIKE ? GROUP BY name ORDER BY n DESC,name LIMIT ?""", (f"%{query.strip()}%", limit)
+                WHERE role_type='director' AND search_name(name) LIKE ? GROUP BY name ORDER BY n DESC,name LIMIT ?""", (f"%{search_name(query)}%", limit)
         elif role == "voice_actor":
             sql, values = """SELECT person_name,COUNT(DISTINCT anime_id) n FROM anime_cast
-                WHERE person_name LIKE ? GROUP BY person_name ORDER BY n DESC,person_name LIMIT ?""", (f"%{query.strip()}%", limit)
+                WHERE search_name(person_name) LIKE ? GROUP BY person_name ORDER BY n DESC,person_name LIMIT ?""", (f"%{search_name(query)}%", limit)
         else:
             raise ValueError("role must be director or voice_actor")
         return [{"name": str(name), "works": int(count)} for name, count in db.execute(sql, values)]
@@ -4239,6 +4230,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         archive_dir=Path(os.getenv("ANM_ARCHIVE_DIR", str(db_path.parent / "archive"))),
         operation_lock=DATABASE_MAINTENANCE_LOCK,
     )
+    season_search = SeasonSearch(db_path, config_store, query_catalog, ani_rss_user_operation)
     auth_store = auth.Store(
         Path(os.getenv("ANM_AUTH_DB", str(STATE_DIR / "auth" / "auth.sqlite3"))),
         enabled=os.getenv("ANM_AUTH_ENABLED", "false").casefold() == "true",
@@ -5194,7 +5186,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 self.send_error(HTTPStatus.NOT_FOUND, "media token expired or file unavailable")
                 return
             try:
-                with playback.open_authorized_media(path, config_store.read()) as (stream, path, file_stat):
+                with playback.open_authorized_media(
+                        path, config_store.read(), subtitle_anime_id=locator.subtitle_anime_id) as (stream, path, file_stat):
                     start, end = 0, file_stat.st_size - 1
                     status = HTTPStatus.OK
                     requested = requested_header
@@ -5400,6 +5393,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if parsed.path == "/api/ani-rss/status":
                 self.json_response(ani_rss.state(db_path, config_store.read()))
+                return
+            if parsed.path == "/api/ani-rss/season-search":
+                self.json_response(season_search.status())
                 return
             match = re.fullmatch(r"/api/anime/(\d+)", parsed.path)
             if match:
@@ -5791,6 +5787,18 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 self.json_response({"started": started, **payload},
                                    HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
                 return
+            if parsed.path == "/api/ani-rss/season-search":
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict):
+                        raise ValueError("JSON object required")
+                    started = season_search.start(str(request.get("from") or ""), str(request.get("to") or ""),
+                                                  str(request.get("language") or "zh-Hans"))
+                    self.json_response({"started": started, **season_search.status()},
+                                       HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
+                except (ValueError, OSError) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             subscribe_match = re.fullmatch(r"/api/ani-rss/resources/(ar-[0-9a-f]{24})/subscribe", parsed.path)
             if subscribe_match:
                 if not submission_is_enabled():
@@ -5990,9 +5998,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             result = connectivity.probe(kind, str(request.get("endpoint") or ""), transient_key)
                     log_event("INFO" if result.get("reachable") else "ERROR", "connection_probe", result=result)
                     self.json_response(result)
-                except (ValueError, OSError, urllib.error.URLError) as exc:
+                except (ValueError, OSError, urllib.error.URLError, httpx.HTTPError) as exc:
                     log_event("ERROR", "connection_probe_failed", error=f"{type(exc).__name__}: {exc}")
-                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    self.json_response({"error": "connection_failed", "errorType": type(exc).__name__}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/connections/qbittorrent/credential":
                 try:
@@ -6108,6 +6116,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
     Handler.set_runtime_health = staticmethod(set_runtime_health)
     Handler.recover_interrupted_submissions = staticmethod(recover_interrupted_submissions)
     Handler.recover_interrupted_maintenance = staticmethod(recover_interrupted_maintenance)
+    Handler.archive_update_tick = staticmethod(archive_updater.tick)
+    Handler.close_season_search = staticmethod(season_search.close)
     return Handler
 
 
@@ -6478,6 +6488,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
         resource_scan_thread: threading.Thread | None = None
         next_resource_scan_at = 0.0
         resource_scan_epoch = 0
+        reconciled_catalog: tuple[Any, ...] | None = None
 
         def start_media_scan(source: dict[str, Any]) -> None:
             nonlocal media_scan_thread
@@ -6532,6 +6543,17 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
             interval = 30.0
             try:
                 current = config_store.read()
+                with contextlib.closing(sqlite3.connect(db_path, timeout=5)) as cache_db:
+                    catalog_stamp = tuple(cache_db.execute(
+                        "SELECT key,value FROM metadata WHERE key IN ('archive_digest','built_at') ORDER BY key"
+                    ).fetchall())
+                if catalog_stamp != reconciled_catalog:
+                    if ANI_RSS_OPERATION_LOCK.acquire(blocking=False):
+                        try:
+                            ani_rss.reconcile_cached_resources(db_path)
+                            reconciled_catalog = catalog_stamp
+                        finally:
+                            ANI_RSS_OPERATION_LOCK.release()
                 settings = current.get("components", {}).get("aniRss", {}) or {}
                 interval = min(60.0, max(15.0, float(settings.get("syncMinutes", 30)) * 15.0))
                 result: dict[str, Any] | None = None
@@ -6559,6 +6581,15 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                               subscriptions=int(result.get("subscriptions", 0)),
                               mediaItems=int(result.get("mediaItems", 0)),
                               snapshotComplete=bool(result.get("snapshotComplete", False)))
+
+                if not ANI_RSS_USER_ACTIVITY.is_set() and ANI_RSS_OPERATION_LOCK.acquire(blocking=False):
+                    try:
+                        accelerated = ani_rss.refresh_new_subscription_media(db_path, current)
+                        delay = accelerated.get("nextDelay")
+                        if delay is not None:
+                            interval = min(interval, max(5.0, float(delay)))
+                    finally:
+                        ANI_RSS_OPERATION_LOCK.release()
 
                 # Resource discovery is scheduled independently from image warm-up.
                 # This closes the first-start race where Ani-RSS becomes ready just
@@ -6629,6 +6660,16 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
             if stop_monitor.wait(30):
                 break
 
+    def monitor_archive_updates() -> None:
+        while not stop_monitor.is_set() and not restart_requested.is_set():
+            try:
+                if warmup_ready.is_set():
+                    handler.archive_update_tick()
+            except Exception as exc:
+                log_event("WARNING", "archive_schedule_failed", errorType=type(exc).__name__)
+            if stop_monitor.wait(30):
+                break
+
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="anm-web-server")
     server_thread.start()
     # The listening socket is already bound; verify that the serving loop is accepting
@@ -6654,6 +6695,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
     threading.Thread(target=monitor_network, daemon=True, name="anm-network-monitor").start()
     threading.Thread(target=monitor_qbt, daemon=True, name="anm-qbt-state-monitor").start()
     threading.Thread(target=monitor_application_updates, daemon=True, name="anm-application-update-monitor").start()
+    threading.Thread(target=monitor_archive_updates, daemon=True, name="anm-archive-update-monitor").start()
     try:
         while server_thread.is_alive() and not restart_requested.is_set():
             server_thread.join(.5)
@@ -6661,6 +6703,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
         pass
     finally:
         stop_monitor.set()
+        handler.close_season_search()
         handler.catalog_warmup.close()
         set_active_background_budget(None)
         server.shutdown()

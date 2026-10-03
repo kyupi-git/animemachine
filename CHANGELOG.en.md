@@ -1,9 +1,25 @@
 [中文](CHANGELOG.md) | [English](CHANGELOG.en.md) | [日本語](CHANGELOG.ja.md)
-[README](README.en.md) | [Deployment and Usage Guide](docs/guide.en.md) | [Architecture and Database](docs/architecture.en.md) | [Changelog](CHANGELOG.en.md)
+[README](README.en.md) | [Setup and Usage Guide](docs/guide.en.md) | [Architecture](docs/architecture.en.md) | [Changelog](CHANGELOG.en.md)
 
 # Changelog
 
-This file lists user-facing changes in reverse version order. Internal refactors, test adjustments, and details that do not affect usage are not listed separately.
+Changes affecting everyday use, with the newest release first.
+
+## 0.3.1
+
+0.3.1 improves Release radar, subscription progress, and title cards, with updated Archive checks and reorganized multilingual documentation. Existing settings and collections carry over when you upgrade.
+
+### Added and improved
+
+- Improved Release radar: added premiere dates, season-wide resource searches, and column sorting across the whole season; latest episode counts prioritize Ani-RSS records.
+- Improved title cards and subscriptions: combined status rows and added episode update times and counts; new subscriptions refresh progress and move to the front in “New Episode Follow-up” and “Random”, within the current filters.
+- Improved Archive updates: check every Thursday at 02:12 UTC+8, with one retry 24 hours later if no new archive is found or the check fails, then resume the weekly schedule.
+- Improved setup and usage guidance: reorganized all three documentation languages, added folder diagrams, and completed release attachments; initial Catalog builds show download, parsing, and database progress.
+
+### Fixed
+
+- Fixed card flickering during background refresh and dialog interactions, and display issues with mobile relationship graphs and popovers.
+- Fixed season episode numbers, resource dates and sizes, and subtitle playback for external read-only media.
 
 ## 0.3.0
 

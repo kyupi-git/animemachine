@@ -12,6 +12,21 @@ from pathlib import Path
 from typing import Any
 
 
+ARCHIVE_TIMEZONE = dt.timezone(dt.timedelta(hours=8))
+
+
+def weekly_check(now: dt.datetime) -> dt.datetime:
+    """Latest Thursday 02:12 in UTC+8, after Wednesday's 05:00 export.
+
+    Cadence: https://github.com/bangumi/Archive#archive (verified 2026-10-02).
+    A fixed upstream timezone keeps container/host timezones and DST irrelevant.
+    """
+    local = now.astimezone(ARCHIVE_TIMEZONE)
+    check = (local - dt.timedelta(days=(local.weekday() - 3) % 7)).replace(
+        hour=2, minute=12, second=0, microsecond=0)
+    return check if check <= local else check - dt.timedelta(days=7)
+
+
 class ArchiveUpdater:
     def __init__(self, db_path: Path, catalog_module: Any, config_store: Any | None = None,
                  *, archive_dir: Path | None = None,
@@ -26,7 +41,7 @@ class ArchiveUpdater:
         self._status = self._load_status()
         if self._status.get("state") in {"checking", "building", "merging"}:
             previous = str(self._status.get("state"))
-            self._status = {
+            self._status = {**self._status,
                 "state": "interrupted",
                 "previousState": previous,
                 "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -41,13 +56,10 @@ class ArchiveUpdater:
             return {"state": "idle"}
 
     def _persist_status(self, status: dict[str, Any]) -> None:
-        try:
-            self.archive_dir.mkdir(parents=True, exist_ok=True)
-            temporary = self.status_file.with_suffix(self.status_file.suffix + ".tmp")
-            temporary.write_text(json.dumps(status, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-            temporary.replace(self.status_file)
-        except OSError:
-            pass
+        self.archive_dir.mkdir(parents=True, exist_ok=True)
+        temporary = self.status_file.with_suffix(self.status_file.suffix + ".tmp")
+        temporary.write_text(json.dumps(status, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+        temporary.replace(self.status_file)
 
     def status(self) -> dict[str, Any]:
         with self.lock:
@@ -55,22 +67,63 @@ class ArchiveUpdater:
 
     def _set(self, state: str, **extra: Any) -> None:
         with self.lock:
-            self._status = {"state": state, "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(), **extra}
-            snapshot = dict(self._status)
-        self._persist_status(snapshot)
+            snapshot = {**self._status, "state": state,
+                        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(), **extra}
+            self._persist_status(snapshot)
+            self._status = snapshot
 
-    def start(self) -> bool:
+    def start(self, *, schedule: dict[str, Any] | None = None) -> bool:
         with self.lock:
             if self._status.get("state") in {"checking", "building", "merging"}:
                 return False
-            self._status = {"state": "checking", "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
-            snapshot = dict(self._status)
-        self._persist_status(snapshot)
+            snapshot = {"state": "checking", "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat()}
+            if schedule is not None or self._status.get("schedule"):
+                snapshot["schedule"] = schedule if schedule is not None else self._status["schedule"]
+            self._persist_status(snapshot)
+            self._status = snapshot
         threading.Thread(target=self._run, daemon=True, name="anm-archive-update").start()
         return True
 
     def recover_interrupted(self) -> bool:
         return self.start() if self.status().get("state") == "interrupted" else False
+
+    def tick(self, now: dt.datetime | None = None) -> bool:
+        """Start at most two checks per weekly cycle; catch up after downtime."""
+        now = now or dt.datetime.now(dt.timezone.utc)
+        cycle = weekly_check(now).isoformat()
+        status = self.status()
+        if status.get("state") in {"checking", "building", "merging", "interrupted"}:
+            return False
+        previous = status.get("schedule") or {}
+        if previous.get("cycle", "") > cycle:
+            return False  # Clock rollback must not replay a consumed cycle.
+        attempt = 1
+        if previous.get("cycle") == cycle:
+            if previous.get("finished") or not previous.get("retryAt"):
+                return False
+            if now < dt.datetime.fromisoformat(previous["retryAt"]):
+                return False
+            attempt = 2
+        return self.start(schedule={"cycle": cycle, "attempt": attempt, "finished": False})
+
+    def _finish_schedule(self, now: dt.datetime | None = None) -> None:
+        now = now or dt.datetime.now(dt.timezone.utc)
+        with self.lock:
+            schedule = dict(self._status.get("schedule") or {})
+            if not schedule or schedule.get("finished"):
+                return
+            expected = dt.datetime.fromisoformat(schedule["cycle"]) - dt.timedelta(hours=21, minutes=12)
+            try:
+                published = dt.datetime.fromisoformat(str(self._status.get("archiveCreatedAt") or "").replace("Z", "+00:00"))
+                fresh = (self._status.get("state") in {"complete", "unchanged"}
+                         and published >= expected)
+            except (ValueError, TypeError):
+                fresh = False
+            schedule["finished"] = bool(fresh or schedule["attempt"] >= 2)
+            schedule["retryAt"] = None if schedule["finished"] else (now + dt.timedelta(days=1)).isoformat()
+            snapshot = {**self._status, "schedule": schedule}
+            self._persist_status(snapshot)
+            self._status = snapshot
 
     def import_stream(self, stream: Any, length: int, filename: str) -> dict[str, Any]:
         """Install a browser-downloaded official Archive after strict verification."""
@@ -154,6 +207,7 @@ class ArchiveUpdater:
         finally:
             if temporary:
                 temporary.unlink(missing_ok=True)
+            self._finish_schedule()
 
 
 def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[str, int]:

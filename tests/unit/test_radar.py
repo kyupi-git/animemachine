@@ -2,6 +2,7 @@
 import contextlib
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -11,7 +12,7 @@ import unittest
 from unittest import mock
 import zipfile
 
-from animemachine.catalog import service
+from animemachine.catalog import archive_update, service
 from animemachine.integrations import ani_rss
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +28,7 @@ def archive_with_rows(path, rows, episodes=None):
 
 def synthetic_archive(path, count=5):
     rows = [{"id": index, "type": 2, "name": f"作品 {index}", "name_cn": f"动画 {index}",
-             "date": "2026-07-01", "platform": 1, "infobox": "", "tags": [], "summary": ""}
+             "date": "2026-07-01", "platform": 1, "infobox": "", "tags": [{"name": "日本动画"}], "summary": ""}
             for index in range(1, count + 1)]
     archive_with_rows(path, rows)
 
@@ -49,6 +50,285 @@ class RadarTests(unittest.TestCase):
                   "limit": ["50"], **overrides}
         with mock.patch.object(ani_rss, "state", return_value=self.ready):
             return service.query_catalog(self.db_path, params, self.config)
+
+    def test_radar_keeps_all_tv_before_movies_even_without_updates_or_connection(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET media_code='movie', start_month='2026-08' WHERE id=1")
+        for ready in (self.ready, {"connection_state": "failed", "credentialConfigured": False}):
+            with self.subTest(ready=ready), mock.patch.object(ani_rss, "state", return_value=ready):
+                result = service.query_catalog(self.db_path, {"radar": ["1"], "sort": ["recent_episode"]}, self.config)
+                self.assertEqual("movie", result["items"][-1]["media_code"])
+
+    def test_radar_groups_translated_tv_other_then_untranslated_other_and_tv(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET media_code='movie' WHERE id IN (3,4)")
+            db.execute("UPDATE anime_work SET media_code='ova' WHERE id=5")
+            db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL WHERE id IN (2,4)")
+            db.execute("DELETE FROM anime_title WHERE anime_id IN (2,4) AND language<>'ja'")
+        for ready in (self.ready, {"connection_state": "failed", "credentialConfigured": False}):
+            for order in ("recent_episode", "date", "random"):
+                with self.subTest(ready=ready, sort=order), mock.patch.object(ani_rss, "state", return_value=ready):
+                    rows = service.query_catalog(self.db_path, {"radar": ["1"], "sort": [order], "limit": ["all"]}, self.config)["items"]
+                    self.assertEqual(1, rows[0]["id"])
+                    self.assertEqual({3, 5}, {row["id"] for row in rows[1:3]})
+                    self.assertEqual([4, 2], [row["id"] for row in rows[-2:]])
+                    first = service.query_catalog(self.db_path, {"radar": ["1"], "sort": [order], "limit": ["2"]}, self.config)["items"]
+                    self.assertEqual([row["id"] for row in rows[:2]], [row["id"] for row in first])
+
+    def test_radar_premiere_sort_orders_the_whole_season_before_pagination(self):
+        archive = Path(self.tmp.name) / "many.zip"
+        synthetic_archive(archive, count=65)
+        self.db_path.unlink()
+        with contextlib.redirect_stdout(None):
+            service.write_database(self.db_path, service.build_items_from_archive(archive, None, {}))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            for anime_id in range(1, 66):
+                date = dt.date(2026, 6, 1) + dt.timedelta(days=anime_id - 1)
+                db.execute("UPDATE anime_work SET raw_date=?,start_month=? WHERE id=?",
+                           (date.isoformat(), date.strftime("%Y-%m"), anime_id))
+            db.execute("UPDATE anime_work SET media_code='movie',title_zh_hans=NULL,title_en=NULL WHERE id=1")
+            db.execute("DELETE FROM anime_title WHERE anime_id=1 AND language<>'ja'")
+        for ready in (self.ready, {"connection_state": "unconfigured", "credentialConfigured": False}):
+            for direction in ("asc", "desc"):
+                with self.subTest(ready=ready, direction=direction):
+                    self.ready = ready
+                    params = {"sort": ["premiere"], "radar_grouped": ["0"], "direction": [direction]}
+                    first = self.query(**params)["items"]
+                    second = self.query(**params, offset=["50"])["items"]
+                    expected = list(range(1, 66))
+                    if direction == "desc":
+                        expected.reverse()
+                    self.assertEqual(expected, [row["id"] for row in first + second])
+                    self.assertEqual(expected, [row["id"] for row in self.query(**params, limit=["all"])["items"]])
+
+    def test_radar_headers_sort_progress_subscription_and_update_evidence(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.executemany("""INSERT INTO ani_rss_subscription
+                (remote_id,anime_id,title,enabled,subscription_kind,current_episode,remote_state,
+                 first_seen_at,last_seen_at,evidence_json)
+                VALUES(?,?,?,?,'follow',?,'enabled','now','now','{}')""", [
+                ('active', 1, 'Active', 1, 76), ('paused', 2, 'Paused', 0, 3),
+            ])
+            db.execute("UPDATE anime_work SET episode_count=12,episode_start_number=73 WHERE id=1")
+            ani_rss.record_release_progress(db, 3, 1, "2026-07-02T00:00:00Z",
+                                            published_at="2026-07-01T00:00:00Z")
+            ani_rss.record_release_progress(db, 4, 2, "2026-07-03T00:00:00Z",
+                                            published_at="2026-07-02T00:00:00Z")
+        rows = self.query(sort=["progress"], direction=["desc"], radar_grouped=["0"])["items"]
+        self.assertEqual([1, 2, 4, 3, 5], [row["id"] for row in rows])
+        self.assertEqual(4, rows[0]["episode_progress"]["current"])
+        rows = self.query(sort=["subscription"], radar_grouped=["0"])["items"]
+        self.assertEqual([1, 2], [row["id"] for row in rows[:2]])
+        rows = self.query(sort=["updated"], direction=["desc"], radar_grouped=["0"])["items"]
+        self.assertEqual([4, 3], [row["id"] for row in rows[:2]])
+        self.ready = {"connection_state": "unconfigured", "credentialConfigured": False}
+        for column in ("progress", "subscription", "updated", "title", "type"):
+            with self.subTest(column=column):
+                self.assertEqual(5, len(self.query(sort=[column], radar_grouped=["0"])["items"]))
+
+    def add_subscription(self, anime_id, *, state="submitted", kind="follow"):
+        remote_id = f"subscription-{anime_id}"
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("""INSERT INTO ani_rss_subscription
+                (remote_id,anime_id,title,enabled,subscription_kind,current_episode,remote_state,
+                 first_seen_at,last_seen_at,evidence_json)
+                VALUES(?,?,?,1,'follow',1,'enabled','now','now','{}')""", (remote_id, anime_id, remote_id))
+            db.execute("INSERT INTO ani_rss_action VALUES(?,?,?,?,?,?,?,'same-second','same-second',NULL,'{}')",
+                       (remote_id, remote_id, anime_id, remote_id, remote_id, kind, state))
+
+    def test_new_subscriptions_stay_first_across_seeds_pages_and_connection_loss(self):
+        self.add_subscription(2)
+        self.add_subscription(3, state="failed")
+        self.add_subscription(4, kind="collection")
+        self.add_subscription(5)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL WHERE id=5")
+            db.execute("DELETE FROM anime_title WHERE anime_id=5 AND language<>'ja'")
+            ani_rss.record_release_progress(db, 1, 9, "2026-07-04T00:00:00Z",
+                                            published_at="2026-07-04T00:00:00Z")
+        for ready in (self.ready, {"connection_state": "error", "credentialConfigured": True}):
+            self.ready = ready
+            for sort in ("recent_episode", "random"):
+                for seed in ("first-seed", "second-seed"):
+                    with self.subTest(ready=ready, sort=sort, seed=seed):
+                        params = {"radar": ["0"], "sort": [sort], "seed": [seed]}
+                        first = self.query(**params, limit=["2"])["items"]
+                        remaining = self.query(**params, offset=["2"])["items"]
+                        self.assertEqual([5, 2], [row["id"] for row in first])
+                        self.assertEqual({1, 3, 4}, {row["id"] for row in remaining})
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET start_month='2026-08' WHERE id=1")
+        for sort in ("recent_episode", "random"):
+            rows = self.query(radar=["0"], sort=[sort], start_from=["2026-08"], start_to=["2026-08"])["items"]
+            self.assertEqual([1], [row["id"] for row in rows])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE ani_rss_subscription SET deleted_at='deleted' WHERE anime_id=5")
+        self.assertNotIn(5, {row["id"] for row in self.query(radar=["0"])["items"]})
+
+    def test_archive_translation_moves_a_work_automatically_and_preserves_subscription_order(self):
+        self.add_subscription(5)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET media_code='movie' WHERE id=3")
+            db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL WHERE id=2")
+            db.execute("DELETE FROM anime_title WHERE anime_id=2 AND language<>'ja'")
+        before = [row["id"] for row in self.query()["items"]]
+        self.assertGreater(before.index(2), before.index(3))
+        self.assertNotIn(2, {row["id"] for row in self.query(radar=["0"])["items"]})
+        archive = Path(self.tmp.name) / "translated.zip"
+        incoming = Path(self.tmp.name) / "incoming.sqlite3"
+        synthetic_archive(archive)
+        with contextlib.redirect_stdout(None):
+            service.write_database(incoming, service.build_items_from_archive(archive, None, {}),
+                                   {"name": "new.zip", "digest": "sha256:new", "created_at": "2026-10-02T00:00:00Z"})
+        with contextlib.closing(sqlite3.connect(incoming)) as db, db:
+            db.execute("UPDATE anime_work SET media_code='movie' WHERE bgm_id=3")
+        archive_update.merge_metadata(self.db_path, incoming, service)
+        after = [row["id"] for row in self.query()["items"]]
+        self.assertLess(after.index(2), after.index(3))
+        self.assertEqual(5, self.query(radar=["0"])["items"][0]["id"])
+        self.assertIn(2, {row["id"] for row in self.query(radar=["0"])["items"]})
+
+    def test_image_progress_hides_pre_1980_dates_in_all_languages(self):
+        source = (ROOT / "src/animemachine/web/static/app.js").read_text(encoding="utf-8")
+        def function(name):
+            start = source.index("function " + name + "(")
+            return source[start:source.index("\n}", start) + 2]
+        script = """const assert = require('node:assert/strict');
+let language = 'zh-Hans', startupState = null;
+const elements = new Map(), $ = (id) => {
+  if (!elements.has(id)) elements.set(id, {classList: {toggle() {}}, removeAttribute() {}});
+  return elements.get(id);
+};
+const t = (key) => key === 'imagesPreparedThrough' ? 'through {month}' : key;
+const localizedMonth = String;
+""" + function("monthParts") + function("renderScanProgress") + """
+for (language of ['zh-Hans', 'en', 'ja']) {
+  for (const month of ['2026-10', '1980-01']) {
+    renderScanProgress({}, {state:'Warming', preload:{state:'warming', preparedThroughMonth:month}});
+    assert.ok($('scanProgressText').textContent.includes(month));
+  }
+  for (const month of ['1979-12', '1892-10']) {
+    renderScanProgress({}, {state:'Warming', preload:{state:'warming', preparedThroughMonth:month}});
+    assert.equal($('scanProgressText').textContent, 'backgroundImagesComplete');
+  }
+  renderScanProgress({}, {state:'Warm', preload:{state:'warm', preparedThroughMonth:'1980-01'}});
+  assert.equal($('scanProgressText').textContent, 'backgroundImagesComplete');
+  assert.equal($('scanProgressBar').value, 100);
+}
+"""
+        subprocess.run([shutil.which("node") or "node", "-e", script], check=True, capture_output=True, text=True)
+
+    def test_catalog_poll_refreshes_after_archive_merge_and_random_subscription_sync(self):
+        source = (ROOT / "src/animemachine/web/static/app.js").read_text(encoding="utf-8")
+        start = source.index("let syncSummaryTimer,")
+        fragment = source[start:source.index("function setRecentDates(", start)]
+        script = """const assert = require('node:assert/strict');
+let stats = {record_count:5, archive_name:'same.zip', archive_digest:'first', built_at:'same-time'};
+let ani = {successful_generation:1}, startupState = null, lastAniRssGeneration = null, sort = 'random';
+let searches = [], radarLoads = 0;
+let options = {};
+const filters = {era:{value:'2026'}, studio:{value:'Unsubmitted selection'}};
+const fill = (id) => { if (filters[id]) filters[id].value = ''; };
+const personSuggestions = () => {}, renderMediaChecks = () => {};
+const dialog = {open:false}, $ = (id) => id === 'radarDialog' ? dialog : {};
+const window = {location:{reload:() => {throw Error('unexpected page reload');}}};
+const api = async (path) => path === '/api/stats' ? stats : path === '/api/ani-rss/status' ? ani : {};
+const search = async (options) => {searches.push(options);};
+const loadRadar = () => {radarLoads++;};
+const applyRecentEpisodeSortAvailability = () => {}, archiveSummary = () => '', renderScanProgress = () => {};
+const setTimeout = () => 1, clearTimeout = () => {};
+""" + fragment + """
+(async () => {
+  await pollSyncSummary();
+  assert.equal(searches.length, 0);
+  stats.archive_digest = 'second';
+  await pollSyncSummary();
+  assert.deepEqual(searches, [{background:true}]);
+  assert.equal(filters.era.value, '2026');
+  assert.equal(filters.studio.value, 'Unsubmitted selection');
+  await pollSyncSummary();
+  assert.equal(searches.length, 1);
+  dialog.open = true;
+  stats.archive_digest = 'third';
+  await pollSyncSummary();
+  assert.equal(searches.length, 2);
+  assert.equal(radarLoads, 1);
+  ani.successful_generation = 2;
+  await pollSyncSummary();
+  assert.equal(searches.length, 3);
+})().catch(error => {console.error(error);process.exitCode=1;});
+"""
+        subprocess.run([shutil.which("node") or "node", "-e", script], check=True, capture_output=True, text=True)
+
+    def test_untranslated_chinese_originals_are_excluded_without_title_blacklists(self):
+        titles = ("新大头儿子和小头爸爸之天眼系列：失控的第七天", "小猪佩奇·完美假期", "未来新增的中文作品")
+        for title in titles:
+            with self.subTest(title=title), contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+                db.execute("DELETE FROM anime_country WHERE anime_id=5")
+                db.execute("INSERT INTO anime_country VALUES(5,'OTHER','insufficient_country_evidence')")
+                db.execute("UPDATE anime_work SET title_ja=?,title_zh_hans=?,title_en=NULL,original_language='ja' WHERE id=5", (title, title + " 别名"))
+                db.execute("DELETE FROM anime_title WHERE anime_id=5")
+                db.executemany("INSERT INTO anime_title VALUES(?,?,?,?,?)", [
+                    (5, "ja", title, "primary", "bangumi-archive"),
+                    (5, "zh-Hans", title + " 别名", "alias", "bangumi-archive"),
+                    (5, "en", title + " 错标英文", "alias", "bangumi-archive"),
+                ])
+            self.assertNotIn(5, {row["id"] for row in self.query()["items"]})
+            self.assertNotIn(5, {row["id"] for row in self.query(q=[title])["items"]})
+            self.assertIn(5, {row["id"] for row in self.query(radar=["0"], q=[title])["items"]})
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("DELETE FROM anime_country WHERE anime_id=5")
+            db.execute("INSERT INTO anime_country VALUES(5,'JP','verified')")
+            db.execute("UPDATE anime_work SET title_ja='漢字',title_zh_hans=NULL,title_en=NULL WHERE id=5")
+            db.execute("DELETE FROM anime_title WHERE anime_id=5")
+        self.assertIn(5, {row["id"] for row in self.query()["items"]})
+
+    def test_first_episode_uses_ani_rss_report_even_when_resource_policy_disables_it(self):
+        client = mock.Mock()
+        client.call.side_effect = lambda path, **_: ({"weeks": [{"items": [{"url": "https://mikan.test/work", "title": "Work"}]}]}
+            if path == "mikan" else [{"label": "Disabled group", "rss": "https://mikan.test/feed",
+                                     "items": [{"title": "Unparseable release title", "episode": 1.0,
+                                                "length": 100, "pubDate": "2026-07-01T10:00:00Z"}]}])
+        with mock.patch.dict(os.environ, {"ANM_ANI_RSS_API_KEY": "test-key"}), mock.patch.object(ani_rss, "_client", return_value=client), mock.patch.object(ani_rss, "_policy_eligibility_and_rank", return_value=(False, 0)):
+            result = ani_rss.search(self.db_path, 1, self.config)
+        row = next(row for row in self.query()["items"] if row["id"] == 1)
+        self.assertEqual(0, result["eligible"])
+        self.assertEqual(1, row["episode_progress"]["current"])
+        self.assertEqual("2026-07-01T10:00:00+00:00", row["last_episode_update_at"])
+
+    def test_followup_defaults_leave_hidden_regions_and_untranslated_works_searchable(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("DELETE FROM anime_country")
+            db.execute("UPDATE anime_work SET title_ja='シンサク3' WHERE id=3")
+            db.executemany("INSERT INTO anime_country VALUES(?,?,?)", [(1, "JP", "test"), (2, "CN", "test"),
+                                                                       (4, "OTHER", "test"), (5, "JP", "test")])
+            db.execute("UPDATE anime_work SET title_zh_hans=title_ja,title_en=NULL WHERE id=5")
+            db.execute("DELETE FROM anime_title WHERE anime_id=5 AND language<>'ja'")
+        result = self.query(radar=["0"])
+        self.assertEqual({1, 3}, {row["id"] for row in result["items"]})
+        for anime_id in (2, 4, 5):
+            found = self.query(radar=["0"], q=[f"作品 {anime_id}"])
+            self.assertIn(anime_id, {row["id"] for row in found["items"]})
+        self.assertEqual(5, self.query(radar=["0"], sort=["date"])["total"])
+
+    def test_card_update_and_premiere_date_render_verified_evidence_only(self):
+        source = (ROOT / "src/animemachine/web/static/app.js").read_text(encoding="utf-8")
+        fragment = source[source.index("function episodeUpdate("):source.index("function completeBadge(")]
+        script = '''const assert = require('node:assert/strict');
+const esc = (value) => String(value), t = () => '第{episode}话', localMonth = () => 'month';
+''' + fragment + '''
+const item = {episode_progress: {current: 4}, last_episode_update_at: '2026-10-02T08:15:00Z'};
+assert.ok(episodeUpdate(item).includes('2026-10-02 08:15'));
+assert.ok(episodeUpdate(item).includes('第4话'));
+assert.equal(episodeUpdate({...item, last_episode_update_at: null}), '');
+assert.equal(episodeUpdate({...item, last_episode_update_at: 'invalid'}), '');
+assert.equal(episodeUpdate({...item, episode_progress: {current: null}}), '');
+assert.equal(radarStartDate({raw_date: '2026-10-02'}), '2026-10-02');
+assert.equal(radarStartDate({raw_date: '2026-02-30'}), 'month');
+assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
+'''
+        subprocess.run([shutil.which("node") or "node", "-e", script],
+                       env={**os.environ, "TZ": "UTC"}, check=True, capture_output=True, text=True)
 
     def test_unsubscribed_frontier_advances_once_and_promotes_latest_work(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
@@ -129,7 +409,7 @@ class RadarTests(unittest.TestCase):
                 db_path = Path(self.tmp.name) / f"cumulative-{bgm_id}.sqlite3"
                 archive_with_rows(archive, [{
                     "id": bgm_id, "type": 2, "name": title, "name_cn": title,
-                    "date": air_date, "platform": 1, "infobox": "", "tags": [], "summary": "",
+                    "date": air_date, "platform": 1, "infobox": "", "tags": [{"name": "日本动画"}], "summary": "",
                 }], [
                     {"id": bgm_id * 100 + index, "subject_id": bgm_id, "type": 0,
                      "sort": first_episode + index - 1}
@@ -170,7 +450,7 @@ class RadarTests(unittest.TestCase):
         self.assertEqual({"current": 11, "total": 11}, row["episode_progress"])
 
 
-    def test_radar_limits_results_to_tv_or_movie_and_japan_or_unknown_region(self):
+    def test_radar_limits_results_to_japan_or_unknown_region(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET media_code='movie' WHERE id=1")
             db.execute("DELETE FROM anime_country WHERE anime_id IN (2,3,4,5)")
@@ -178,6 +458,7 @@ class RadarTests(unittest.TestCase):
             db.execute("INSERT INTO anime_country VALUES(3,'JP','test')")
             db.execute("INSERT INTO anime_country VALUES(3,'US','test')")
             db.execute("INSERT INTO anime_country VALUES(4,'OTHER','insufficient_country_evidence')")
+            db.execute("UPDATE anime_work SET title_ja='シンサク4' WHERE id=4")
             db.execute("INSERT INTO anime_country VALUES(5,'BR','test')")
             db.execute("INSERT INTO anime_country VALUES(5,'OTHER','insufficient_country_evidence')")
         ids = {row["id"] for row in self.query()["items"]}
@@ -189,9 +470,10 @@ class RadarTests(unittest.TestCase):
             db.execute("INSERT INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(1,'bd','2026-07-15','bangumi-archive:infobox:BD発売日')")
             db.execute("UPDATE anime_work SET media_code='web' WHERE id=2")
             db.execute("UPDATE anime_work SET start_month='2026-09' WHERE id=3")
+            db.execute("DELETE FROM anime_country WHERE anime_id=4")
             db.execute("INSERT INTO anime_country VALUES(4,'CN','test')")
         ids = {row["id"] for row in self.query(q=["作品"], media_type=["web"])["items"]}
-        self.assertEqual({1, 5}, ids)
+        self.assertEqual({1, 2, 5}, ids)
 
     def test_movie_reenters_quarter_by_explicit_bd_event_without_duplication(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:

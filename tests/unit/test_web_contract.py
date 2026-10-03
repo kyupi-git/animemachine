@@ -1,8 +1,22 @@
 import re
+import contextlib
+import json
+import os
+import sqlite3
+import tempfile
+import threading
+import urllib.error
+import urllib.request
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
+import httpx
+
+from animemachine.catalog import service
 from animemachine.catalog.service import requires_admin
+from animemachine.config.policy import ConfigStore
 
 
 ROOT = Path(__file__).resolve().parent
@@ -11,6 +25,36 @@ STATIC = PROJECT / "src" / "animemachine" / "web" / "static"
 
 
 class WebContractTests(unittest.TestCase):
+    def test_optional_connection_error_returns_json_and_server_remains_available(self):
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {
+                "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw) / "auth.sqlite3")}):
+            root = Path(raw)
+            database = root / "catalog.sqlite3"
+            with contextlib.closing(sqlite3.connect(database)) as db, db:
+                db.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
+            handler = service.make_handler(database, ConfigStore(root / "config.json", service.EXAMPLE_CONFIG),
+                                           submission_enabled=False, start_warmup=False)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                request = urllib.request.Request(base + "/api/connections/test", method="POST",
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps({"kind": "qbittorrent", "endpoint": "http://127.0.0.1:9"}).encode())
+                with mock.patch.object(service.connectivity, "probe", side_effect=httpx.ConnectError("offline")):
+                    with self.assertRaises(urllib.error.HTTPError) as failed:
+                        urllib.request.urlopen(request, timeout=5)
+                    with failed.exception as response:
+                        self.assertEqual(400, response.status)
+                        self.assertEqual({"error": "connection_failed", "errorType": "ConnectError"}, json.load(response))
+                with urllib.request.urlopen(base + "/api/auth/session", timeout=5) as response:
+                    self.assertEqual(200, response.status)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(2)
+
     def test_three_language_dictionary_keys_are_identical(self):
         script = (STATIC / "app.js").read_text(encoding="utf-8")
         starts = {
@@ -210,7 +254,7 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('id="viewToggle"', html)
         self.assertNotIn('id="cardsView"', html)
         self.assertNotIn('id="tableView"', html)
-        self.assertIn('aniRssManaged: "Ani-RSS 媒体已存在"', script)
+        self.assertIn('aniRssManaged: "Ani-RSS 已订阅"', script)
         self.assertIn('aniRssResources: "Ani-RSS 资源可用"', script)
         self.assertIn('if (season === "winter") return { from: `${y - 1}-12`, to: `${y}-02` };', script)
         self.assertIn('select.disabled = !enabled', script)

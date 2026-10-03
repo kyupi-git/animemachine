@@ -54,7 +54,8 @@ class FakeAniRss(BaseHTTPRequestHandler):
             data = {"weeks": [{"items": [{"url": "https://mikan.test/Home/Bangumi/1", "title": "作品"}]}]}
         elif path == "/api/mikanGroup":
             data = [{"label": "SubsPlease", "rss": "https://mikan.test/RSS/Bangumi?subgroupid=1",
-                     "items": [{"title": "[SubsPlease] Work - 01 (1080p) [WEB-DL]", "size": 100}]}]
+                     "items": self.resource_items if self.resource_items is not None else
+                     [{"title": "[SubsPlease] Work - 01 (1080p) [WEB-DL]", "size": 100}]}]
         elif path == "/api/rssToAni":
             data = {"id": "remote-1", "title": "作品", "url": body["url"], "enable": True}
         elif path == "/api/playList":
@@ -137,7 +138,7 @@ class AniRssTest(unittest.TestCase):
             """)
             db.execute("INSERT INTO anime_work VALUES(1,123,'作品','作品','Work','2026-07',12)")
             db.execute("INSERT INTO anime_title VALUES(1,'作品')")
-        FakeAniRss.subscriptions = []; FakeAniRss.seen_keys = []; FakeAniRss.delete_paths = []; FakeAniRss.disconnect_once = False; FakeAniRss.fail_file_requests = 0; FakeAniRss.file_requests = 0; FakeAniRss.list_total_override = None
+        FakeAniRss.subscriptions = []; FakeAniRss.seen_keys = []; FakeAniRss.delete_paths = []; FakeAniRss.disconnect_once = False; FakeAniRss.fail_file_requests = 0; FakeAniRss.file_requests = 0; FakeAniRss.list_total_override = None; FakeAniRss.resource_items = None
         with ani_rss._COVER_FAILURE_LOCK:
             ani_rss._COVER_FAILURES.clear()
         FakeAniRss.media = {
@@ -165,6 +166,142 @@ class AniRssTest(unittest.TestCase):
         self.assertEqual("saved-key", os.environ["ANM_ANI_RSS_API_KEY"])
         self.assertTrue(FakeAniRss.seen_keys)
         self.assertTrue(all(key == "temporary-key" for key in FakeAniRss.seen_keys))
+
+    def _follow_waiting_for_media(self):
+        FakeAniRss.media = {}
+        ani_rss.search(self.db_path, 1, self.config)
+        result = ani_rss.subscribe(self.db_path, ani_rss.resources(self.db_path, 1)[0]["resourceId"], self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            probe = json.loads(db.execute("SELECT evidence_json FROM ani_rss_action WHERE action_id=?", (result["actionId"],)).fetchone()[0])["mediaProbe"]
+        return result, dt.datetime.fromisoformat(probe["nextAt"])
+
+    def test_new_follow_probes_only_its_playlist_and_keeps_regular_cadence(self):
+        result, due = self._follow_waiting_for_media()
+        client = mock.Mock()
+        client.play_list.return_value = [{"filename": "/remote/Work - 01.mkv", "name": "Work - 01.mkv", "size": 100}]
+        before = ani_rss.state(self.db_path, self.config)
+        with mock.patch.object(ani_rss, "_client", return_value=client):
+            refreshed = ani_rss.refresh_new_subscription_media(self.db_path, self.config, now=due)
+            ani_rss.refresh_new_subscription_media(self.db_path, self.config, now=due + dt.timedelta(seconds=5))
+        self.assertEqual(1, refreshed["refreshed"])
+        client.play_list.assert_called_once()
+        client.subscriptions.assert_not_called()
+        client.call.assert_not_called()
+        after = ani_rss.state(self.db_path, self.config)
+        self.assertEqual(before["last_success_at"], after["last_success_at"])
+        self.assertFalse(ani_rss.sync_due(self.db_path, self.config, now=due))
+        self.assertGreater(after["successful_generation"], before["successful_generation"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(1, db.execute("SELECT COUNT(*) FROM ani_rss_media WHERE remote_id=?", (result["remoteId"],)).fetchone()[0])
+
+    def test_new_follow_retry_deadlines_survive_calls_and_eventually_stop(self):
+        _, due = self._follow_waiting_for_media()
+        client = mock.Mock()
+        client.play_list.side_effect = RuntimeError("offline")
+        with mock.patch.object(ani_rss, "_client", return_value=client):
+            for attempt in range(len(ani_rss._NEW_MEDIA_DELAYS)):
+                ani_rss.refresh_new_subscription_media(self.db_path, self.config, now=due)
+                with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+                    probe = json.loads(db.execute("SELECT evidence_json FROM ani_rss_action").fetchone()[0])["mediaProbe"]
+                self.assertEqual(attempt + 1, probe["attempts"])
+                if probe["state"] == "pending":
+                    ani_rss.refresh_new_subscription_media(self.db_path, self.config, now=due + dt.timedelta(seconds=1))
+                due = dt.datetime.fromisoformat(probe["nextAt"])
+            ani_rss.refresh_new_subscription_media(self.db_path, self.config, now=due)
+        self.assertEqual(len(ani_rss._NEW_MEDIA_DELAYS), client.play_list.call_count)
+        self.assertEqual("expired", probe["state"])
+
+    def test_new_follow_probe_does_not_follow_a_changed_credential(self):
+        _, due = self._follow_waiting_for_media()
+        os.environ["ANM_ANI_RSS_API_KEY"] = "different-key"
+        with mock.patch.object(ani_rss, "_client", side_effect=AssertionError("must not use a different provider")):
+            self.assertEqual(0, ani_rss.refresh_new_subscription_media(self.db_path, self.config, now=due)["refreshed"])
+
+    def test_http_search_uses_ani_rss_episode_publication_and_length_fields(self):
+        published = dt.datetime(2026, 7, 1, 10, tzinfo=dt.timezone.utc)
+        FakeAniRss.resource_items = [{"title": "A release with no number in its title", "episode": 1.0,
+                                     "length": 123, "pubDate": int(published.timestamp() * 1000)}]
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((1, published.isoformat()), db.execute(
+                "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state WHERE anime_id=1").fetchone())
+            self.assertEqual((1, 123), db.execute(
+                "SELECT sequence_last,total_bytes FROM ani_rss_resource WHERE anime_id=1").fetchone())
+
+    def test_http_report_backfills_known_publication_without_repromoting_episodes(self):
+        published = dt.datetime(2026, 7, 1, 10, tzinfo=dt.timezone.utc)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            ani_rss.migrate(db)
+            ani_rss.record_release_progress(db, 1, 1, "2026-07-02T00:00:00Z")
+        FakeAniRss.resource_items = [{"title": "No episode in this title", "episode": 1.0,
+                                     "pubDate": int(published.timestamp() * 1000)}]
+        ani_rss.search(self.db_path, 1, self.config)
+        FakeAniRss.resource_items[0]["pubDate"] += 86400000
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((1, published.isoformat()), db.execute(
+                "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state WHERE anime_id=1").fetchone())
+
+    def _sequel_evidence(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.executescript("""
+                ALTER TABLE anime_work ADD COLUMN media_code TEXT DEFAULT 'tv';
+                ALTER TABLE anime_work ADD COLUMN episode_start_number INTEGER DEFAULT 1;
+                CREATE TABLE anime_relation_edge(source_anime_id INTEGER,target_anime_id INTEGER,relation_code TEXT,grouping INTEGER);
+                INSERT INTO anime_work(id,title_ja,episode_count) VALUES(2,'First season',14);
+                INSERT INTO anime_relation_edge VALUES(2,1,'sequel',1);
+            """)
+
+    def test_real_mikan_fields_and_mixed_season_numbering(self):
+        self._sequel_evidence()
+        FakeAniRss.resource_items = [
+            {"title": "[Group] Work S2 [15][1080P][WEB-DL]", "createdAt": "2026-10-01 18:03:00",
+             "formatSize": "707.5 MB", "torrent": "https://mikan.test/15.torrent"},
+            {"title": "[Group] Work S2 - 01 [1080P][WEB-DL]", "createdAt": "2026-10-01 18:16:00",
+             "formatSize": "410.57 MB", "torrent": "https://mikan.test/01.torrent"},
+        ]
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((1, "2026-10-01T10:03:00+00:00"), db.execute(
+                "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state WHERE anime_id=1").fetchone())
+            self.assertEqual((1, 1, int(707.5 * 1048576) + int(410.57 * 1048576)), db.execute(
+                "SELECT sequence_first,sequence_last,total_bytes FROM ani_rss_resource WHERE resource_kind='follow'").fetchone())
+            self.assertEqual(12, db.execute("SELECT episode_count FROM anime_work WHERE id=1").fetchone()[0])
+
+    def test_cached_resource_evidence_is_repaired_offline_and_idempotently(self):
+        self._sequel_evidence()
+        FakeAniRss.resource_items = [{"title": "Work - 15 [1080P]", "createdAt": "2026-10-01 18:03:00",
+                                     "formatSize": "707.5 MB"}]
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE ani_rss_resource SET sequence_first=15,sequence_last=15,total_bytes=0")
+            db.execute("UPDATE ani_rss_release_state SET current_episode=15,last_episode_update_at=NULL")
+        with mock.patch.object(ani_rss, "_client", side_effect=AssertionError("must use cache")):
+            repaired = ani_rss.reconcile_cached_resources(self.db_path)
+            repeated = ani_rss.reconcile_cached_resources(self.db_path)
+        self.assertEqual(1, repaired["updated"])
+        self.assertEqual(0, repeated["updated"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((1, "2026-10-01T10:03:00+00:00"), db.execute(
+                "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state").fetchone())
+
+    def test_ambiguous_sequel_chain_does_not_guess_an_episode_offset(self):
+        self._sequel_evidence()
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("INSERT INTO anime_work(id,title_ja,episode_count) VALUES(3,'Other predecessor',14)")
+            db.execute("INSERT INTO anime_relation_edge VALUES(3,1,'sequel',1)")
+        FakeAniRss.resource_items = [{"title": "Work - 15 [1080P]"}]
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(15, db.execute("SELECT current_episode FROM ani_rss_release_state").fetchone()[0])
+
+    def test_formatted_sizes_and_dates_reject_malformed_evidence(self):
+        for invalid in (", MB", "NaN", -1, True, "2 XB", "1,2 MB", "1e99"):
+            self.assertEqual(0, ani_rss._resource_size({"formatSize": invalid}), invalid)
+        self.assertEqual(1024, ani_rss._resource_size({"length": 0, "formatSize": "1 KiB"}))
+        self.assertEqual(1234567, ani_rss._resource_size({"formatSize": "1,234,567 B"}))
+        self.assertEqual("2026-10-01T10:03:00+00:00", ani_rss._resource_published_at({"createdAt": "2026-10-01T18:03:00+08:00"}))
+        self.assertIsNone(ani_rss._resource_published_at({"pubDate": "2026-10-01 18:03:00"}))
 
     def test_search_records_unsubscribed_new_episode_without_repromoting_repeats(self):
         episode = 1
@@ -1367,6 +1504,31 @@ class AniRssTest(unittest.TestCase):
         self.assertEqual({1, 2}, set(ordered[:2]))
         self.assertLess(ordered.index(3), ordered.index(4))
         self.assertNotIn(5, ordered)
+
+    def test_background_search_checks_this_seasons_tv_before_older_or_other_works(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("ALTER TABLE anime_work ADD COLUMN media_code TEXT DEFAULT 'tv'")
+            db.executemany("INSERT INTO anime_work VALUES(?,?,?,?,?,?,?,?)", [
+                (2, 124, 'Movie', None, None, '2026-10', 1, 'movie'),
+                (3, 125, 'TV', None, None, '2026-10', 12, 'tv'),
+                (4, 126, 'Future', None, None, '2026-11', 12, 'tv'),
+            ])
+        self.assertEqual([3, 2, 1], ani_rss.automatic_search_ids(self.db_path, today=dt.date(2026, 10, 2)))
+
+    def test_reported_episode_is_preferred_and_fractional_specials_are_not_rounded(self):
+        for value, expected in ((1.0, 1), ("2", 2), (1.5, None), (float("inf"), None)):
+            with self.subTest(episode=value):
+                self.assertEqual(expected, ani_rss._resource_episode({"episode": value, "title": "Work - 09 [1080p]"}))
+        self.assertEqual(9, ani_rss._resource_episode({"title": "Work - 09 [1080p]"}))
+
+    def test_first_report_without_update_timestamp_changes_progress_generation(self):
+        ani_rss.sync(self.db_path, self.config)
+        before = ani_rss.state(self.db_path, self.config)["release_progress_generation"]
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            ani_rss.record_release_progress(db, 1, 1, "2026-09-01T00:00:00Z")
+        after = ani_rss.state(self.db_path, self.config)
+        self.assertNotEqual(before, after["release_progress_generation"])
+        self.assertIsNone(after["last_release_update_at"])
 
     def test_remote_playback_without_media_mount_supports_range_queue_and_resume(self):
         FakeAniRss.subscriptions = [{

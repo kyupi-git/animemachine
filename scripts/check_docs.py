@@ -16,6 +16,7 @@ TRANSLATED_FAMILIES = (
     ("README.md", "README.en.md", "README.ja.md"),
     ("docs/guide.md", "docs/guide.en.md", "docs/guide.ja.md"),
     ("docs/architecture.md", "docs/architecture.en.md", "docs/architecture.ja.md"),
+    ("docs/reference.md", "docs/reference.en.md", "docs/reference.ja.md"),
 )
 
 

@@ -14,6 +14,7 @@ AnimeMachine 是通用的动画目录、文件组织和下载编排工具，只�
 | [7-Zip](https://www.7-zip.org/) | Docker 镜像安装 7-Zip，用于安全解压支持的字幕压缩包；本地部署可使用用户自行安装并配置的版本。 |
 | [truststore](https://github.com/sethmlarson/truststore) | 使用操作系统证书库完成经过验证的 HTTPS 连接（MIT）。 |
 | [certifi](https://github.com/certifi/python-certifi) | 为经过验证的 HTTPS 提供可移植的 Mozilla CA 备用证书集（MPL-2.0）。 |
+| [OpenCC](https://github.com/BYVoid/OpenCC/tree/ver.1.1.9) | 仅使用 1.1.9 的 `TSCharacters` 和 `JPVariants` 字典生成离线姓名检索字形表，不嵌入转换库，不改写人物身份或原名。派生字形表省略有歧义的日文字形，来源地址、原文件 SHA-256 和完整 Apache-2.0 许可证保留在 `person-name-fold.json` 中。 |
 
 对于官方 Archive 资源，无论使用直连、已配置代理，还是由用户先通过浏览器下载 ZIP 再导入，AnimeMachine 都会按照官方描述文件给出的精确大小和 SHA-256 进行校验。TLS 校验不会被关闭；如果网络环境使用私有 HTTPS 中间 CA，可以通过 `ANM_CA_BUNDLE` 单独提供，不要求安装到整个操作系统。
 

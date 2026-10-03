@@ -70,6 +70,28 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(set(directors).issubset({"导演", "总导演", "联合导演"}))
             self.assertGreater(len(directors), 0)
 
+    def test_person_search_folds_characters_without_rewriting_original_names(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "catalog.sqlite3"
+            shutil.copyfile(DB, path)
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
+                db.execute("UPDATE anime_staff SET name='宮崎駿' WHERE role_type='director'")
+                db.execute("UPDATE anime_cast SET person_name='花澤香菜'")
+            for role, simplified, original in (("director", "宫崎骏", "宮崎駿"), ("voice_actor", "花泽香菜", "花澤香菜")):
+                folded = catalog.query_catalog(path, {role: [simplified], "sort": ["date"]})
+                exact = catalog.query_catalog(path, {role: [original], "sort": ["date"]})
+                self.assertGreater(folded["total"], 0)
+                self.assertEqual(exact["total"], folded["total"])
+                self.assertEqual(original, catalog.people_options(path, role, simplified)[0]["name"])
+            self.assertEqual("滨田岳", catalog.search_name("浜田岳"))
+            self.assertEqual(catalog.search_name("濱田岳"), catalog.search_name("浜田岳"))
+
+    def test_explicit_empty_media_selection_matches_other_empty_filters(self):
+        for name in ("media_type", "availability", "library_state"):
+            with self.subTest(filter=name):
+                self.assertEqual(0, catalog.query_catalog(DB, {name: ["__none__"], "sort": ["date"]})["total"])
+        self.assertGreater(catalog.query_catalog(DB, {"sort": ["date"]})["total"], 0)
+
     def test_catalog_filters_and_detail(self):
         result = catalog.query_catalog(DB, {"decade": ["2020s"]})
         self.assertGreaterEqual(result["total"], 1)
@@ -1086,8 +1108,8 @@ class CatalogTests(unittest.TestCase):
         baseline = catalog.query_catalog(DB, {"limit": ["all"]})
         ignored_region = catalog.query_catalog(DB, {"country": ["JP"], "limit": ["all"]})
         self.assertEqual([item["id"] for item in baseline["items"]], [item["id"] for item in ignored_region["items"]])
-        series = catalog.query_catalog(DB, {"series": ["yes"], "limit": ["all"]})
-        standalone = catalog.query_catalog(DB, {"series": ["no"], "limit": ["all"]})
+        series = catalog.query_catalog(DB, {"series": ["yes"], "limit": ["all"], "sort": ["date"]})
+        standalone = catalog.query_catalog(DB, {"series": ["no"], "limit": ["all"], "sort": ["date"]})
         self.assertTrue(all(item["series_member_count"] > 1 for item in series["items"]))
         self.assertTrue(all(item["series_member_count"] == 1 for item in standalone["items"]))
         self.assertEqual(series["total"] + standalone["total"], 10)
@@ -1288,7 +1310,7 @@ class CatalogTests(unittest.TestCase):
                 db.execute("""INSERT INTO external_media_file VALUES(
                     'ext','/external/E01.mkv',1,1,?,'verified','External',2026,'tv',1,1,'{}','now')""", (ids[2],))
             expected = {ids[0]: "local", ids[1]: "submitted", ids[2]: "external", ids[3]: "not_in_library"}
-            result = catalog.query_catalog(path, {"library_state": ["local", "external", "submitted", "not_in_library"], "limit": ["all"]})
+            result = catalog.query_catalog(path, {"library_state": ["local", "external", "submitted", "not_in_library"], "limit": ["all"], "sort": ["date"]})
             states = {int(item["id"]): item["library_state"] for item in result["items"] if int(item["id"]) in expected}
             self.assertEqual(states, expected)
             legacy = catalog.query_catalog(path, {"library_state": ["queued"], "limit": ["all"]})

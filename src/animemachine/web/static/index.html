@@ -261,8 +261,13 @@
     <dialog id="radarDialog" aria-labelledby="radarTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div class="radar-shell">
-        <h2 id="radarTitle" data-i18n="radar">新作雷达</h2>
-        <p class="muted" data-i18n="radarHint">TV 优先按新集更新时间，电影按本季度作品/发行事件日期排列；换季前七天自动滚动至下一季。</p>
+        <div class="radar-heading">
+          <h2 id="radarTitle" data-i18n="radar">新作雷达</h2>
+          <button id="radarSearch" class="text-button radar-button" type="button" data-i18n="radarSearch">检索本季度资源</button>
+        </div>
+        <div class="radar-toolbar">
+          <span id="radarSearchStatus" class="muted" role="status" aria-live="polite"></span>
+        </div>
         <div id="radarTabs" class="radar-tabs" role="tablist" data-i18n-aria-label="season"></div>
         <div id="radarPanel" class="radar-panel" role="tabpanel" tabindex="0">
           <p id="radarStatus" class="muted" role="status"></p>

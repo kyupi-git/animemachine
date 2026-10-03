@@ -43,6 +43,10 @@ try {
     }
     & $python -m pip install --disable-pip-version-check --no-compile --target (Join-Path $release 'app') $root
     if ($LASTEXITCODE) { throw 'Unable to install AnimeMachine into Release staging.' }
+    foreach ($metadata in Get-ChildItem -LiteralPath (Join-Path $release 'app') -Directory -Filter 'animemachine-*.dist-info') {
+        $localOrigin = Join-Path $metadata.FullName 'direct_url.json'
+        if (Test-Path -LiteralPath $localOrigin) { Remove-Item -LiteralPath $localOrigin }
+    }
     & $python -m pip wheel --disable-pip-version-check --no-deps --wheel-dir (Join-Path $release 'packages') $root
     if ($LASTEXITCODE) { throw 'Unable to build the portable AnimeMachine wheel.' }
     $sourcePackage = Join-Path $root 'src\animemachine'
@@ -71,7 +75,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $root "scripts\unix\$name") -Destination (Join-Path $release $name)
     }
     Copy-Item -LiteralPath (Join-Path $root 'deploy\local\.env.local.example') -Destination (Join-Path $release '.env.local.example')
-    foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
+    foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','CHANGELOG.en.md','CHANGELOG.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
         Copy-Item -LiteralPath (Join-Path $root $name) -Destination $release
     }
     Get-ChildItem -LiteralPath (Join-Path $root 'docs') -Filter '*.md' -File |

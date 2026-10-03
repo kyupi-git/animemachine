@@ -22,6 +22,7 @@ COPY pyproject.toml VERSION README.md LICENSE THIRD-PARTY.md ./
 COPY src/ ./src/
 COPY packaging/docker/entrypoint.py /opt/animemachine/docker-entrypoint.py
 RUN python -m pip install --no-cache-dir --disable-pip-version-check . \
+    && find /usr/local/lib -path '*/animemachine-*.dist-info/direct_url.json' -delete \
     && python -m pip uninstall --yes pip setuptools msgpack \
     && mkdir -p /Config /Data/state /Imports /Library /Torrents /External /Media /CollectorState \
     && chown -R anm:anm /Config /Data /Imports /Library /Torrents /External /Media /CollectorState /opt/animemachine

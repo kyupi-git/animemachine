@@ -4,6 +4,8 @@ import unittest
 import contextlib
 import sqlite3
 import tempfile
+import os
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -66,6 +68,34 @@ class PlaybackTokenTests(unittest.TestCase):
             subtitle.write_bytes(b"subtitle")
             item = playback.PlaybackItem(playback.MediaLocator.local(media, 5), media.stem, 1.0, 5, "preexisting")
             self.assertEqual(subtitle, playback._subtitle_for(item, 1))
+
+    def test_cached_external_subtitle_token_authorizes_only_that_work_and_subtitle(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {"ANM_STATE_DIR": raw}):
+            root = Path(raw)
+            media_root = root / "media"
+            media_root.mkdir()
+            media = media_root / "Show - 01.mkv"
+            media.write_bytes(b"video")
+            cached = root / "subtitles/external/1/Show - 01.zh-cn.srt"
+            cached.parent.mkdir(parents=True)
+            cached.write_bytes(b"subtitle")
+            private = root / "credentials.json"
+            private.write_bytes(b"private")
+            config = {"deployment": {"libraryUncRoot": str(media_root)}}
+            item = playback.PlaybackItem(playback.MediaLocator.local(media, 5), "Episode 1", 1.0, 5, "external")
+            registry = playback.MediaTokenRegistry()
+            payload, _ = playback.playlist_payload(root / "unused.sqlite3", 1, config, registry,
+                                                   "http://localhost", items=[item], force_http=True)
+            subtitle_line = next(line for line in payload.decode().splitlines() if line.startswith("#EXTVLCOPT:input-slave="))
+            token = urllib.parse.urlparse(subtitle_line.split("=", 1)[1]).path.split("/")[4]
+            locator = registry.resolve(token)
+            self.assertEqual(1, locator.subtitle_anime_id)
+            with playback.open_authorized_media(locator.local_path, config, subtitle_anime_id=locator.subtitle_anime_id) as (stream, _, _):
+                self.assertEqual(b"subtitle", stream.read())
+            for path, identity in ((cached, None), (cached, 2), (private, 1)):
+                with self.subTest(path=path, identity=identity), self.assertRaises(playback.path_policy.PathAuthorizationError):
+                    with playback.open_authorized_media(path, config, subtitle_anime_id=identity):
+                        self.fail("unauthorized path opened")
 
     def test_selected_library_source_limits_playlist(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -140,4 +170,3 @@ class PlaybackTokenTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

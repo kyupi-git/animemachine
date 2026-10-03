@@ -13,6 +13,7 @@ import contextlib
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -31,6 +32,7 @@ from ..network import tls as tls_support
 from ..network import transport as network_transport
 from ..network import validators as network_validators
 from ..torrents import runtime as runtime_catalog
+from ..catalog.episodes import _episode_number, _episode_start_number, _local_episode_number
 from .. import __version__
 
 from ..config.loader import (archive_group_enabled, canonical_resolution, option_enabled,
@@ -41,7 +43,7 @@ from ..config.loader import (archive_group_enabled, canonical_resolution, option
 MODES = {"prefer": "prefer", "fallback": "fallback", "manual": "manual"}
 COLLECTION = re.compile(r"(?i)(?:\b(?:batch|complete|collection)\b|合集|全集|全卷|全话|全話|一括)")
 EPISODE = re.compile(r"(?i)(?:\b(?:ep(?:isode)?|e)[ ._-]*(\d{1,4})\b|第\s*(\d{1,4})\s*[话話集])")
-RELEASE_EPISODE = re.compile(r"(?i)(?:\bS\d{1,3}E(\d{1,4})(?:v\d+)?\b|\s-\s(\d{1,3})(?:v\d+)?(?=\s*(?:$|[\[(])))")
+RELEASE_EPISODE = re.compile(r"(?i)(?:\bS\d{1,3}E(\d{1,4})(?:v\d+)?\b|\s-\s(\d{1,3})(?:v\d+)?(?=\s*(?:$|[\[(]))|\[(\d{1,3})(?:v\d+)?\])")
 RESOLUTION = re.compile(r"(?i)(2160|1080|720|576|540|480)[pi]")
 SOURCE_CLASS = re.compile(r"(?i)\b(BD(?:Rip)?|DVD(?:Rip)?|WEB[ ._-]?(?:DL|Rip)|HDTV[ ._-]?Rip|TV[ ._-]?Rip)\b")
 
@@ -49,6 +51,8 @@ _BACKGROUND_RESOURCE_SCAN_LOCK = threading.Lock()
 _COVER_FAILURE_LOCK = threading.Lock()
 _COVER_FAILURES: dict[tuple[str, str], tuple[int | None, float]] = {}
 _COVER_FAILURE_COOLDOWN_SECONDS = 30.0
+_NEW_MEDIA_DELAYS = (5, 15, 30, 60, 120, 240)
+_NEW_MEDIA_WINDOW_SECONDS = 600
 
 
 @contextlib.contextmanager
@@ -239,18 +243,23 @@ def background_search_due(db_path: Path, anime_id: int, config: dict[str, Any], 
 
 
 def automatic_search_ids(db_path: Path, *, today: dt.date | None = None) -> list[int]:
-    """Return IDs in recent-6-month-first, then month-7..24 order."""
+    """Current-season TV first, then recent six months and months 7..24."""
     current = today or dt.date.today()
     current_index = current.year * 12 + current.month - 1
     cutoff_index = current_index - 23
     current_month = f"{current_index // 12:04d}-{current_index % 12 + 1:02d}"
     recent_start_index = current_index - 5
     recent_start = f"{recent_start_index // 12:04d}-{recent_start_index % 12 + 1:02d}"
+    season_start = f"{current.year:04d}-{((current.month - 1) // 3) * 3 + 1:02d}"
     cutoff = f"{cutoff_index // 12:04d}-{cutoff_index % 12 + 1:02d}"
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(anime_work)")}
+        tv = "media_code='tv'" if "media_code" in columns else "1"
         recent = [int(row[0]) for row in db.execute(
-            "SELECT id FROM anime_work WHERE start_month>=? AND start_month<=? ORDER BY id",
-            (recent_start, current_month),
+            "SELECT id FROM anime_work WHERE start_month>=? AND start_month<=? "
+            f"ORDER BY CASE WHEN start_month>=? AND {tv} THEN 0 WHEN start_month>=? THEN 1 ELSE 2 END,"
+            "start_month DESC,id",
+            (recent_start, current_month, season_start, season_start),
         )]
         older = [int(row[0]) for row in db.execute(
             "SELECT id FROM anime_work WHERE start_month>=? AND start_month<? ORDER BY start_month DESC,id",
@@ -1133,18 +1142,7 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             migrate(db)
             for remote_id, items in media_results.items():
                 anime_id = anime_by_remote[remote_id]
-                db.execute("DELETE FROM ani_rss_media WHERE remote_id=?", (remote_id,))
-                db.executemany("""INSERT INTO ani_rss_media
-                    (remote_id,anime_id,filename,episode,title,name,size,extension,last_seen_at)
-                    VALUES(?,?,?,?,?,?,?,?,?)""", [
-                    (remote_id, anime_id, item.filename, item.episode, item.title, item.name,
-                     item.size, item.extension, stamp) for item in items
-                ])
-                playable = [float(item.episode) for item in items if item.episode is not None]
-                if playable:
-                    db.execute("""UPDATE ani_rss_subscription
-                        SET current_episode=MAX(COALESCE(current_episode,0),?) WHERE remote_id=?""",
-                               (int(max(playable)), remote_id))
+                _publish_media(db, remote_id, anime_id, items, stamp)
     # Remote deletion cleanup must not depend on any remaining subscription
     # returning a non-empty media result in this particular generation.
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
@@ -1174,6 +1172,92 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             "resourceRefreshRequired": resource_refresh_required}
 
 
+def _publish_media(db: sqlite3.Connection, remote_id: str, anime_id: int,
+                   items: list[RemotePlaybackItem], stamp: str) -> None:
+    db.execute("DELETE FROM ani_rss_media WHERE remote_id=?", (remote_id,))
+    db.executemany("""INSERT INTO ani_rss_media
+        (remote_id,anime_id,filename,episode,title,name,size,extension,last_seen_at)
+        VALUES(?,?,?,?,?,?,?,?,?)""", [
+        (remote_id, anime_id, item.filename, item.episode, item.title, item.name,
+         item.size, item.extension, stamp) for item in items
+    ])
+    playable = [float(item.episode) for item in items if item.episode is not None]
+    if playable:
+        db.execute("""UPDATE ani_rss_subscription
+            SET current_episode=MAX(COALESCE(current_episode,0),?) WHERE remote_id=?""",
+                   (int(max(playable)), remote_id))
+
+
+def refresh_new_subscription_media(db_path: Path, config: dict[str, Any],
+                                   *, now: dt.datetime | None = None) -> dict[str, Any]:
+    """Probe only a newly added follow, with durable deadlines and bounded retries."""
+    current = now or dt.datetime.now(dt.timezone.utc)
+    stamp = current.replace(microsecond=0).isoformat()
+    key = _secret()
+    settings = _settings(config)
+    fingerprint = _credential_fingerprint(key, settings["endpoint"]) if key else None
+    next_delay: float | None = None
+    chosen: tuple[dict[str, Any], dict[str, Any], dict[str, Any], str] | None = None
+    with contextlib.closing(sqlite3.connect(db_path, timeout=10)) as db, db:
+        db.row_factory = sqlite3.Row
+        migrate(db)
+        rows = db.execute("""SELECT * FROM ani_rss_action WHERE state='submitted' AND action_kind='follow'
+            AND remote_id IS NOT NULL AND julianday(requested_at)>=julianday(?)-10.0/1440
+            ORDER BY requested_at,action_id""", (stamp,)).fetchall()
+        for row in rows:
+            evidence = json.loads(row["evidence_json"])
+            probe = evidence.get("mediaProbe")
+            if not isinstance(probe, dict) or probe.get("state") != "pending":
+                continue
+            expires = dt.datetime.fromisoformat(probe["expiresAt"])
+            due = dt.datetime.fromisoformat(probe["nextAt"])
+            attempts = int(probe.get("attempts", 0))
+            completed = bool(db.execute("SELECT 1 FROM ani_rss_media WHERE remote_id=? LIMIT 1", (row["remote_id"],)).fetchone())
+            stale = not key or probe.get("fingerprint") != fingerprint or probe.get("endpoint") != settings["endpoint"]
+            if completed or stale or current >= expires or attempts >= len(_NEW_MEDIA_DELAYS):
+                probe["state"] = "complete" if completed else "stale" if stale else "expired"
+                db.execute("UPDATE ani_rss_action SET evidence_json=? WHERE action_id=?",
+                           (json.dumps(evidence, separators=(",", ":")), row["action_id"]))
+                continue
+            delay = max(0.0, (due - current).total_seconds())
+            if next_delay is None or delay < next_delay:
+                next_delay = delay
+            subscription = db.execute("SELECT * FROM ani_rss_subscription WHERE remote_id=? AND anime_id=? AND deleted_at IS NULL",
+                                      (row["remote_id"], row["anime_id"])).fetchone()
+            if delay <= 0 and chosen is None and subscription:
+                url = str(json.loads(subscription["evidence_json"]).get("url") or "")
+                if url:
+                    chosen = (dict(row), evidence, probe, url)
+    if chosen is None:
+        return {"refreshed": 0, "nextDelay": next_delay}
+    row, evidence, probe, url = chosen
+    items: list[RemotePlaybackItem] | None = None
+    try:
+        items = _normalize_play_list(_client(config, key).play_list(url, timeout=8))
+    except (OSError, ValueError, RuntimeError, urllib.error.URLError, httpx.HTTPError) as exc:
+        probe["errorType"] = type(exc).__name__
+    probe["attempts"] = int(probe.get("attempts", 0)) + 1
+    probe["state"] = "complete" if items else "expired" if probe["attempts"] >= len(_NEW_MEDIA_DELAYS) else "pending"
+    delay = _NEW_MEDIA_DELAYS[min(probe["attempts"], len(_NEW_MEDIA_DELAYS) - 1)]
+    probe["nextAt"] = (current + dt.timedelta(seconds=delay)).replace(microsecond=0).isoformat()
+    with contextlib.closing(sqlite3.connect(db_path, timeout=10)) as db, db:
+        migrate(db)
+        origin = db.execute("SELECT endpoint,credential_fingerprint FROM ani_rss_state WHERE singleton=1").fetchone()
+        mapped = db.execute("SELECT 1 FROM ani_rss_subscription WHERE remote_id=? AND anime_id=? AND deleted_at IS NULL",
+                            (row["remote_id"], row["anime_id"])).fetchone()
+        if (not origin or tuple(origin) != (settings["endpoint"], fingerprint) or not mapped
+                or _credential_fingerprint(_secret(), settings["endpoint"]) != fingerprint):
+            return {"refreshed": 0, "nextDelay": None}
+        if items:
+            _publish_media(db, row["remote_id"], row["anime_id"], items, stamp)
+            # Updating the overlay generation keeps the UI fresh without moving
+            # last_success_at, which schedules the regular complete snapshot.
+            db.execute("UPDATE ani_rss_state SET successful_generation=successful_generation+1 WHERE singleton=1")
+        db.execute("UPDATE ani_rss_action SET evidence_json=? WHERE action_id=?",
+                   (json.dumps(evidence, separators=(",", ":")), row["action_id"]))
+    return {"refreshed": int(bool(items)), "nextDelay": delay if probe["state"] == "pending" else next_delay}
+
+
 def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
     settings = _settings(config)
     key = _secret()
@@ -1188,7 +1272,8 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
             "SELECT value FROM metadata WHERE key='ani_rss_route_revision'"
         ).fetchone() if metadata_table else None
         release_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_release_state'").fetchone()
-        release_update = db.execute("SELECT MAX(last_episode_update_at) FROM ani_rss_release_state").fetchone()[0] if release_table else None
+        release = db.execute("SELECT MAX(last_episode_update_at),COUNT(*),COALESCE(SUM(current_episode),0) "
+                             "FROM ani_rss_release_state").fetchone() if release_table else (None, 0, 0)
     if not row:
         return {"endpoint": settings["endpoint"],
                 "connection_state": "unconfigured" if not credential_configured else "unknown",
@@ -1196,7 +1281,8 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
                 "credentialConfigured": credential_configured, "error": None}
     result = {k: row[k] for k in row.keys() if k not in {"last_error", "credential_fingerprint"}}
     result["credentialConfigured"] = credential_configured
-    result["last_release_update_at"] = release_update
+    result["last_release_update_at"] = release[0]
+    result["release_progress_generation"] = f"{release[1]}:{release[2]}"
     result["error"] = row["last_error"] and row["last_error"].split(":", 1)[0]
     # A previously healthy endpoint must not keep Ani-RSS logically enabled
     # after its credential is removed or the configured endpoint/mode changes.
@@ -1288,15 +1374,143 @@ def _resource_fields(title: str) -> tuple[str, int | None, int | None]:
     return source_class, int(resolution.group(1)) if resolution else None, number
 
 
-def record_release_progress(db: sqlite3.Connection, anime_id: int, episode: int, stamp: str) -> None:
+def _resource_episode(item: dict[str, Any]) -> int | None:
+    """Prefer Ani-RSS's parsed episode number over guessing from the title."""
+    value = item.get("episode")
+    if value is not None and not isinstance(value, bool):
+        try:
+            number = float(value)
+            if number > 0:
+                return int(number) if number.is_integer() and number <= 9999 else None
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return _resource_fields(str(item.get("title") or ""))[2]
+
+
+def _resource_published_at(item: dict[str, Any]) -> str | None:
+    for field in ("pubDate", "createdAt"):
+        value = item.get(field)
+        numeric = _remote_timestamp(value)
+        if numeric:
+            return numeric
+        try:
+            moment = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if moment.tzinfo is None:
+            if field != "createdAt":
+                continue
+            # mikanGroup copies Mikan's China-local publication wall clock.
+            moment = moment.replace(tzinfo=dt.timezone(dt.timedelta(hours=8)))
+        if moment > dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1):
+            continue
+        return moment.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat()
+    return None
+
+
+def _resource_size(item: dict[str, Any]) -> int:
+    for field in ("length", "size", "formatSize"):
+        value = item.get(field)
+        if value is None or isinstance(value, bool):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            match = re.fullmatch(r"\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*([KMGT]?I?B)\s*", str(value), re.IGNORECASE)
+            if not match:
+                continue
+            number = float(match.group(1).replace(",", ""))
+            unit = match.group(2).upper().replace("I", "")
+            number *= 1024 ** {"B": 0, "KB": 1, "MB": 2, "GB": 3, "TB": 4}[unit]
+        if math.isfinite(number) and 0 < number <= 2 ** 63 - 1:
+            return int(number)
+    return 0
+
+
+def _catalog_episode_hints(db: sqlite3.Connection, anime_id: int) -> tuple[int, int | None]:
+    row = db.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+    if row is None:
+        return 0, None
+    work = dict(row)
+    count = _episode_number(work.get("episode_count"))
+    return count, _episode_start_number(db, anime_id, count, work.get("episode_start_number")) if count else None
+
+
+def _resource_observations(items: list[dict[str, Any]], count: int, start: int | None) -> list[tuple[int, str | None]]:
+    return [(_local_episode_number(episode, count, start), _resource_published_at(item))
+            for item in items for episode in [_resource_episode(item)] if episode is not None]
+
+
+def _reconcile_release_progress(db: sqlite3.Connection, anime_id: int, count: int, start: int | None,
+                                observed: list[tuple[int, str | None]], stamp: str) -> None:
+    prior = db.execute("SELECT current_episode FROM ani_rss_release_state WHERE anime_id=?", (anime_id,)).fetchone()
+    if prior:
+        normalized = _local_episode_number(prior[0], count, start)
+        if normalized != prior[0]:
+            db.execute("UPDATE ani_rss_release_state SET current_episode=? WHERE anime_id=?", (normalized, anime_id))
+    frontier = max((episode for episode, _ in observed), default=0)
+    published = min((date for episode, date in observed if episode == frontier and date), default=None)
+    record_release_progress(db, anime_id, frontier, stamp, published_at=published)
+
+
+def reconcile_cached_resources(db_path: Path) -> dict[str, int]:
+    """Upgrade resource evidence from cached responses without another remote scan."""
+    with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db, db:
+        db.row_factory = sqlite3.Row
+        migrate(db)
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_work'").fetchone():
+            return {"examined": 0, "updated": 0}
+        rows = db.execute("SELECT * FROM ani_rss_resource ORDER BY anime_id,resource_id").fetchall()
+        hints: dict[int, tuple[int, int | None]] = {}
+        observations: dict[int, list[tuple[int, str | None]]] = {}
+        updated = 0
+        for row in rows:
+            anime_id = int(row["anime_id"])
+            try:
+                payload = json.loads(row["payload_json"])
+                items = _strict_mapping_list(payload.get("items"), "cached resource items")
+            except (ValueError, RuntimeError, AttributeError):
+                continue
+            if anime_id not in hints:
+                hints[anime_id] = _catalog_episode_hints(db, anime_id)
+            count, start = hints[anime_id]
+            pairs = _resource_observations(items, count, start)
+            first = _local_episode_number(row["sequence_first"], count, start) or None
+            last = _local_episode_number(row["sequence_last"], count, start) or None
+            size = row["total_bytes"]
+            if row["resource_kind"] == "follow":
+                observations.setdefault(anime_id, []).extend(pairs)
+                if len(items) == row["item_count"]:
+                    first = min((episode for episode, _ in pairs), default=0) or None
+                    last = max((episode for episode, _ in pairs), default=0) or None
+                    size = sum(_resource_size(item) for item in items)
+            elif row["resource_kind"] == "collection":
+                matching = next((item for item in items if str(item.get("torrent")) == payload.get("torrentUrl")), None)
+                if matching:
+                    size = _resource_size(matching)
+            if (first, last, size) != (row["sequence_first"], row["sequence_last"], row["total_bytes"]):
+                db.execute("UPDATE ani_rss_resource SET sequence_first=?,sequence_last=?,total_bytes=? WHERE resource_id=?",
+                           (first, last, size, row["resource_id"]))
+                updated += 1
+        stamp = utcnow()
+        for anime_id, pairs in observations.items():
+            count, start = hints[anime_id]
+            _reconcile_release_progress(db, anime_id, count, start, pairs, stamp)
+        return {"examined": len(rows), "updated": updated}
+
+
+def record_release_progress(db: sqlite3.Connection, anime_id: int, episode: int, stamp: str,
+                            *, published_at: str | None = None) -> None:
     """Keep a monotonic observed frontier; the first scan establishes a baseline."""
     if episode <= 0:
         return
-    db.execute("""INSERT INTO ani_rss_release_state VALUES(?,?,NULL)
+    db.execute("""INSERT INTO ani_rss_release_state VALUES(?,?,?)
         ON CONFLICT(anime_id) DO UPDATE SET
         current_episode=MAX(current_episode,excluded.current_episode),
         last_episode_update_at=CASE WHEN excluded.current_episode>current_episode
-            THEN ? ELSE last_episode_update_at END""", (anime_id, episode, stamp))
+            THEN ? WHEN excluded.current_episode=current_episode AND last_episode_update_at IS NULL
+            THEN excluded.last_episode_update_at ELSE last_episode_update_at END""",
+               (anime_id, episode, published_at, published_at or stamp))
 
 
 def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any]:
@@ -1312,13 +1526,14 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
     expires = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=max(24, poll_minutes / 30))).replace(microsecond=0).isoformat()
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
         db.row_factory = sqlite3.Row; migrate(db)
-        work = db.execute("SELECT id,bgm_id,title_ja,title_zh_hans,title_en,start_month FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+        work = db.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if not work:
             raise ValueError("anime work not found")
         db.execute("""INSERT INTO ani_rss_search_state(anime_id,last_attempt_at,last_success_at,result_count,error_text) VALUES(?,?,NULL,0,NULL)
             ON CONFLICT(anime_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,error_text=NULL""", (anime_id, stamp))
         names = [str(work[key] or "").strip() for key in ("title_zh_hans", "title_ja", "title_en")]
         names = list(dict.fromkeys(name for name in names if name))
+        episode_count, episode_start = _catalog_episode_hints(db, anime_id)
     def record_failure(exc: BaseException) -> None:
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as failure_db, failure_db:
             migrate(failure_db)
@@ -1356,6 +1571,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
         if found:
             break
     resources: list[dict[str, Any]] = []
+    observed: list[tuple[int, str | None]] = []
     for item_url, item in found.items():
         groups = mapping_list(
             remote_call("mikanGroup", expected_type=list, params={"url": item_url}, timeout=60) or [],
@@ -1367,7 +1583,9 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             items = mapping_list(group.get("items"), "mikanGroup[].items")
             if not rss:
                 continue
-            episodes = [ep for entry in items for ep in [_resource_fields(str(entry.get("title") or ""))[2]] if ep is not None]
+            observations = _resource_observations(items, episode_count, episode_start)
+            episodes = [episode for episode, _ in observations]
+            observed.extend(observations)
             combined_title = " ".join(str(entry.get("title") or "") for entry in items)
             source_class, resolution, _ = _resource_fields(combined_title)
             eligible, policy_rank = _policy_eligibility_and_rank(combined_title, label, source_class, resolution, config)
@@ -1377,7 +1595,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             resources.append({"resource_id": rid, "kind": "follow", "title": f"{label} · {item.get('title') or names[0]}",
                               "group": label, "source": source_class, "resolution": resolution,
                               "first": min(episodes) if episodes else None, "last": max(episodes) if episodes else None,
-                              "count": len(items), "bytes": sum(int(entry.get("size") or 0) for entry in items),
+                              "count": len(items), "bytes": sum(_resource_size(entry) for entry in items),
                               "eligible": eligible, "policyRank": policy_rank, "payload": payload})
             for entry in items:
                 entry_title = str(entry.get("title") or "")
@@ -1391,7 +1609,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                     entry_title, label, source_class, resolution, config)
                 resources.append({"resource_id": collection_id, "kind": "collection", "title": entry_title,
                                   "group": label, "source": source_class, "resolution": resolution,
-                                  "first": None, "last": None, "count": 1, "bytes": int(entry.get("size") or 0),
+                                  "first": None, "last": None, "count": 1, "bytes": _resource_size(entry),
                                   "eligible": collection_eligible, "policyRank": collection_rank,
                                   "payload": collection_payload})
     def rank(item: dict[str, Any]) -> tuple[Any, ...]:
@@ -1409,9 +1627,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                 or current_route_revision != provider_route_revision):
             return {"animeId": anime_id, "found": 0, "eligible": 0, "stale": True}
         db.execute("DELETE FROM ani_rss_resource WHERE anime_id=?", (anime_id,))
-        frontier = max((int(item["last"] or 0) for item in resources
-                        if item["kind"] == "follow" and item["eligible"]), default=0)
-        record_release_progress(db, anime_id, frontier, stamp)
+        _reconcile_release_progress(db, anime_id, episode_count, episode_start, observed, stamp)
         for index, item in enumerate(resources):
             db.execute("INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (item["resource_id"], anime_id, "ani-rss", item["kind"], item["title"], item["group"],
@@ -1544,12 +1760,26 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[s
             client.call("startCollection", body={"torrent": base64.b64encode(torrent).decode("ascii"), "ani": ani}, timeout=180)
             state_value = "submitted"
         evidence = {"provider": "ani-rss", "resourceKind": kind, "credentialStored": False}
+        if kind == "follow" and same is None:
+            current = dt.datetime.now(dt.timezone.utc)
+            evidence["mediaProbe"] = {
+                "state": "pending", "attempts": 0,
+                "nextAt": (current + dt.timedelta(seconds=_NEW_MEDIA_DELAYS[0])).isoformat(),
+                "expiresAt": (current + dt.timedelta(seconds=_NEW_MEDIA_WINDOW_SECONDS)).isoformat(),
+                "endpoint": _settings(config)["endpoint"],
+                "fingerprint": _credential_fingerprint(_secret(), _settings(config)["endpoint"]),
+            }
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
             migrate(db); db.execute("INSERT OR REPLACE INTO ani_rss_action VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (action_id, idempotency, anime_id, resource_id, remote_id or None, kind, state_value,
                  stamp, utcnow(), None, json.dumps(evidence, separators=(",", ":"))))
         if kind == "follow":
-            sync(db_path, config)
+            try:
+                sync(db_path, config)
+            except (OSError, ValueError, RuntimeError, urllib.error.URLError, httpx.HTTPError):
+                # The remote add has succeeded; an optional status refresh must
+                # not turn it into a failed action or cause a duplicate add.
+                pass
         return {"actionId": action_id, "state": state_value, "remoteId": remote_id or None, "idempotent": False}
     except Exception as exc:
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:

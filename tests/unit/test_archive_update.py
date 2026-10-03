@@ -5,6 +5,7 @@ import unittest
 import contextlib
 import hashlib
 import io
+import datetime as dt
 from unittest import mock
 from pathlib import Path
 
@@ -16,6 +17,55 @@ SAMPLE = Path(__file__).resolve().parents[1] / "fixtures" / "anime-catalog.sqlit
 
 
 class ArchiveUpdateTests(unittest.TestCase):
+    def test_weekly_schedule_uses_upstream_timezone_and_exact_boundary(self):
+        zone = archive_update.ARCHIVE_TIMEZONE
+        before = dt.datetime(2026, 10, 1, 2, 11, 59, tzinfo=zone)
+        after = before + dt.timedelta(seconds=1)
+        self.assertEqual(dt.datetime(2026, 9, 24, 2, 12, tzinfo=zone), archive_update.weekly_check(before))
+        self.assertEqual(after, archive_update.weekly_check(after.astimezone(dt.timezone.utc)))
+
+    def test_delayed_archive_gets_one_retry_after_24_hours_across_restart(self):
+        now = dt.datetime(2026, 10, 1, 2, 12, tzinfo=archive_update.ARCHIVE_TIMEZONE)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(archive_update.threading, "Thread"):
+            path = Path(folder) / "catalog.sqlite3"
+            updater = archive_update.ArchiveUpdater(path, catalog)
+            self.assertTrue(updater.tick(now))
+            updater._set("unchanged", archiveCreatedAt="2026-09-22T21:03:37Z")
+            updater._finish_schedule(now)
+            updater = archive_update.ArchiveUpdater(path, catalog)
+            self.assertFalse(updater.tick(now + dt.timedelta(hours=23, minutes=59)))
+            self.assertTrue(updater.tick(now + dt.timedelta(days=1)))
+            self.assertEqual(2, updater.status()["schedule"]["attempt"])
+            updater._set("unchanged", archiveCreatedAt="2026-09-22T21:03:37Z")
+            updater._finish_schedule(now + dt.timedelta(days=1))
+            self.assertFalse(updater.tick(now + dt.timedelta(days=2)))
+            self.assertFalse(updater.tick(now - dt.timedelta(days=7)))
+            self.assertTrue(updater.tick(now + dt.timedelta(days=7)))
+
+    def test_already_current_archive_finishes_weekly_cycle_without_retry(self):
+        now = dt.datetime(2026, 10, 1, 2, 12, tzinfo=archive_update.ARCHIVE_TIMEZONE)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(archive_update.threading, "Thread"):
+            updater = archive_update.ArchiveUpdater(Path(folder) / "catalog.sqlite3", catalog)
+            updater.tick(now)
+            updater._set("unchanged", archiveCreatedAt="2026-09-29T21:03:37Z")
+            updater._finish_schedule(now)
+            self.assertTrue(updater.status()["schedule"]["finished"])
+            self.assertFalse(updater.tick(now + dt.timedelta(days=1)))
+
+    def test_failed_or_invalid_descriptor_is_retryable_and_single_worker(self):
+        now = dt.datetime(2026, 10, 1, 2, 12, tzinfo=archive_update.ARCHIVE_TIMEZONE)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(archive_update.threading, "Thread"):
+            updater = archive_update.ArchiveUpdater(Path(folder) / "catalog.sqlite3", catalog)
+            self.assertTrue(updater.tick(now))
+            self.assertFalse(updater.tick(now + dt.timedelta(minutes=1)))
+            updater._set("failed", error="offline")
+            updater._finish_schedule(now)
+            self.assertFalse(updater.status()["schedule"]["finished"])
+            self.assertTrue(updater.tick(now + dt.timedelta(days=1)))
+            updater._set("unchanged", archiveCreatedAt="invalid")
+            updater._finish_schedule(now + dt.timedelta(days=1))
+            self.assertTrue(updater.status()["schedule"]["finished"])
+
     def test_import_stream_verifies_official_descriptor(self):
         payload = b"official archive"
         descriptor = {"name": "dump-2026-01-01.000000Z.zip", "size": len(payload),
@@ -82,4 +132,3 @@ class ArchiveUpdateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -5,6 +5,8 @@
 /archive/
 /audit/
 /.codex/
+/Start-Codex*.cmd
+/Resume-Codex*.cmd
 /config.json
 /config.json.*
 /state/
@@ -23,6 +25,7 @@
 **/edge-debug-profile/
 *.lnk
 /.local/
+/.venv/
 **/*.pid.json
 **/*.py[cod]
 **/__pycache__/

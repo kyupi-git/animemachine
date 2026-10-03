@@ -46,6 +46,7 @@ class MediaLocator:
     extension: str = ""
     size: int = 0
     remote_id: str = ""
+    subtitle_anime_id: int | None = None
 
     @classmethod
     def local(cls, path: Path, size: int = 0) -> "MediaLocator":
@@ -307,8 +308,14 @@ def authorize_media_path(path: Path | str, config: dict[str, Any]) -> Path:
     return path_policy.authorize_existing(path, configured_media_roots(config))
 
 
-def open_authorized_media(path: Path | str, config: dict[str, Any]):
-    return path_policy.open_authorized(path, configured_media_roots(config))
+def open_authorized_media(path: Path | str, config: dict[str, Any], *, subtitle_anime_id: int | None = None):
+    roots = configured_media_roots(config)
+    if subtitle_anime_id and subtitle_anime_id > 0 and Path(path).suffix.casefold() in SUBTITLE_SUFFIXES:
+        state_root = Path(os.getenv("ANM_STATE_DIR", "/Data/state"))
+        cache_root = state_root / "subtitles" / "external" / str(subtitle_anime_id)
+        if path_policy.is_within(cache_root, state_root):
+            roots.append(cache_root)
+    return path_policy.open_authorized(path, roots)
 
 
 def _allowed(path: Path, config: dict[str, Any]) -> bool:
@@ -517,7 +524,9 @@ def playlist_payload(db_path: Path, anime_id: int, config: dict[str, Any], regis
             token_locators.append(item.locator); media_token_indexes.append(index)
     for index, path in enumerate(subtitles):
         if path and not mapped_subtitles[index]:
-            token_locators.append(MediaLocator.local(path, path.stat().st_size)); subtitle_token_indexes.append(index)
+            token_locators.append(dataclasses.replace(
+                MediaLocator.local(path, path.stat().st_size), subtitle_anime_id=anime_id))
+            subtitle_token_indexes.append(index)
     issued = iter(registry.issue_many(token_locators, idle, maximum)) if token_locators else iter(())
     media_tokens = {index: next(issued) for index in media_token_indexes}
     subtitle_tokens = {index: next(issued) for index in subtitle_token_indexes}
