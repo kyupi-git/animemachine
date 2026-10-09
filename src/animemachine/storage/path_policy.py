@@ -12,6 +12,16 @@ class PathAuthorizationError(ValueError):
     pass
 
 
+def is_junction(path: Path | str) -> bool:
+    """Identify Windows mount-point links without following their targets."""
+    try:
+        info = Path(path).lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    tag = getattr(info, "st_reparse_tag", None)
+    return tag is not None and tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+
+
 def canonical_existing(path: Path | str) -> Path:
     candidate = Path(path)
     try:

@@ -19,7 +19,7 @@ from typing import Any, Callable, Iterable
 from ..torrents import runtime as runtime_catalog
 from ..config.policy import ConfigStore
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
-from ..storage.path_policy import PathAuthorizationError, authorize_existing, open_authorized
+from ..storage.path_policy import PathAuthorizationError, authorize_existing, is_junction, open_authorized
 
 
 EPISODE = re.compile(r"(?i)(?:^|[^a-z0-9])(?:ep?|episode|第)?\s*(\d{1,4})(?:\s*[-_. ]?v\d+)?(?:[^a-z0-9]|$)")
@@ -129,7 +129,7 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
                 with os.scandir(directory) as entries:
                     for item in entries:
                         lowered = item.name.casefold()
-                        if Path(item.path).is_junction():
+                        if is_junction(item.path):
                             continue
                         if item.is_dir(follow_symlinks=False):
                             if lowered not in {".anm-history", ".anm-staging"}:

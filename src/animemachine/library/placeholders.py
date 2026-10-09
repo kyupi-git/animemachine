@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from ..catalog.migrations import migrate as migrate_operational
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
+from ..storage.path_policy import is_junction
 from ..torrents import mapper, runtime, scanner
 from . import history, layout
 
@@ -22,7 +23,7 @@ def _guard(root: Path, target: Path) -> None:
     current = root
     for part in relative.parts:
         current = current / part
-        if current.is_symlink() or current.is_junction():
+        if current.is_symlink() or is_junction(current):
             raise ValueError("library target contains a linked directory")
         if current.exists() and not current.is_dir():
             raise ValueError("library target conflicts with an existing file")

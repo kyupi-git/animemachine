@@ -98,13 +98,13 @@ class LibraryPlaceholderTests(unittest.TestCase):
             placeholders._guard(self.library, self.root / "outside")
         with self.assertRaises(ValueError):
             placeholders._guard(self.library, self.library / ".." / "escape")
-        with mock.patch.object(Path, "is_junction", return_value=True):
+        with mock.patch.object(placeholders, "is_junction", return_value=True):
             with self.assertRaises(ValueError):
                 placeholders._guard(self.library, self.library / "linked" / "child")
 
     def test_existing_path_index_skips_linked_top_directories(self):
         (self.library / "『1995_10』『新世紀エヴァンゲリオン』").mkdir()
-        with mock.patch.object(Path, "is_junction", return_value=True):
+        with mock.patch.object(layout, "is_junction", return_value=True):
             self.assertEqual(layout.ExistingPathIndex(self.library).rows, [])
 
     def test_database_failure_rolls_back_only_new_empty_directories(self):

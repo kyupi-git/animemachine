@@ -15,6 +15,7 @@ from typing import Any
 from pathlib import Path
 
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
+from ..storage.path_policy import is_junction
 
 
 SUPPLEMENT_RE = re.compile(
@@ -251,14 +252,14 @@ class ExistingPathIndex:
             raise StorageUnavailableError(f"library storage unavailable: {root}")
         try:
             for top in root.iterdir():
-                if top.is_symlink() or top.is_junction() or not stat.S_ISDIR(top.lstat().st_mode) or is_ignored_library_container(top.name, ignored):
+                if top.is_symlink() or is_junction(top) or not stat.S_ISDIR(top.lstat().st_mode) or is_ignored_library_container(top.name, ignored):
                     continue
                 # The generic work pattern also matches a series directory.  Test
                 # the more specific grammar first or every series is indexed as a
                 # single top-level work and all of its children become invisible.
                 if SERIES_DIRECTORY_RE.fullmatch(top.name):
                     for child in top.iterdir():
-                        match = WORK_DIRECTORY_RE.fullmatch(child.name) if not child.is_symlink() and not child.is_junction() and stat.S_ISDIR(child.lstat().st_mode) else None
+                        match = WORK_DIRECTORY_RE.fullmatch(child.name) if not child.is_symlink() and not is_junction(child) and stat.S_ISDIR(child.lstat().st_mode) else None
                         if match:
                             self._append(child, top, match.group("date"), match.group("title"))
                     continue
@@ -275,7 +276,7 @@ class ExistingPathIndex:
             while pending and not has_media:
                 with os.scandir(pending.pop()) as entries:
                     for item in entries:
-                        if Path(item.path).is_junction():
+                        if is_junction(item.path):
                             continue
                         if item.is_dir(follow_symlinks=False):
                             pending.append(item.path)
