@@ -285,7 +285,7 @@ const setTimeout = () => 1, clearTimeout = () => {};
 
     def test_first_episode_uses_ani_rss_report_even_when_resource_policy_disables_it(self):
         client = mock.Mock()
-        client.call.side_effect = lambda path, **_: ({"weeks": [{"items": [{"url": "https://mikan.test/work", "title": "Work"}]}]}
+        client.call.side_effect = lambda path, **_: ({"weeks": [{"items": [{"url": "https://mikan.test/work", "title": "Work", "bgmId": "1"}]}]}
             if path == "mikan" else [{"label": "Disabled group", "rss": "https://mikan.test/feed",
                                      "items": [{"title": "Unparseable release title", "episode": 1.0,
                                                 "length": 100, "pubDate": "2026-07-01T10:00:00Z"}]}])

@@ -21,20 +21,9 @@ def image_bytes(data: bytes, mime: str, *, limit: int = 12 * 1024 * 1024,
                 max_pixels: int = 40_000_000) -> tuple[bytes, str]:
     if not data or len(data) > limit or not data.startswith(IMAGE_MAGIC):
         raise ValueError("invalid or oversized image response")
-    from PIL import Image
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as image:
-                if image.width <= 0 or image.height <= 0 or image.width * image.height > max_pixels:
-                    raise ValueError("image pixel count exceeds safety limit")
-                image.load()
-                image.thumbnail((1600, 2400))
-                output = io.BytesIO()
-                image.convert("RGB").save(output, "WEBP", quality=88, method=4)
-        return output.getvalue(), "image/webp"
-    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise ValueError("image pixel count exceeds safety limit") from exc
+    # Validate the decoded content and detected format, preserving the original
+    # bytes. Covers must not lose detail every time they cross an integration.
+    return cached_image_bytes(data, mime, limit=limit, max_pixels=max_pixels)
 
 
 def cached_image_bytes(data: bytes, mime: str, *, limit: int = 12 * 1024 * 1024,

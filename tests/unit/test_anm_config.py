@@ -13,6 +13,16 @@ from animemachine.config.policy import ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
+    def test_duplicate_subtitle_provider_ids_are_rejected(self):
+        config = json.loads((PROJECT_ROOT / "config/config.example.json").read_text(encoding="utf-8"))
+        provider = {"id": "assrt", "enabled": True, "endpoints": ["https://subtitles.invalid"]}
+        config["subtitles"]["providers"] = [provider, {**provider, "endpoints": ["https://other.invalid"]}]
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw)/"config.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "unique provider ids"):
+                load_config(path, None)
+
     def test_project_config_contains_policy_not_work_history(self) -> None:
         source = PROJECT_ROOT / "config" / "config.example.json"
         with tempfile.TemporaryDirectory() as directory:
@@ -41,7 +51,7 @@ class ConfigTests(unittest.TestCase):
         source = PROJECT_ROOT / "config" / "config.example.json"
         config, _metadata = load_config(source, None)
         self.assertEqual(
-            {"enabled": False, "mode": "notify", "time": "04:35"},
+            {"enabled": True, "mode": "notify", "time": "04:35"},
             config["applicationUpdate"]["automaticCheck"],
         )
         base = json.loads(source.read_text(encoding="utf-8"))

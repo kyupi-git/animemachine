@@ -112,10 +112,10 @@ A card's resource and subscription labels describe available releases or subscri
 
 [Connect Ani-RSS](#ani-rss), then:
 
-1. Open **Release radar** and choose the previous, current, or next season.
-2. Click **Search this season's releases** beside the title. It checks the selected season's works in sequence and shows progress. If a title fails, the scan continues with the others.
+1. Open **Release radar** and choose the previous, current, or next season. Each season appears on one page.
+2. Click **Sync** to refresh subscriptions, media, and releases for the selected season. **Search** checks the current season in sequence and shows progress immediately. If a title fails, the scan continues; click again to retry unfinished titles.
 3. Click **Subscribe** for a title, choose a release or group, and confirm.
-4. Ani-RSS handles downloading. Subscription status and media progress sync back to AnimeMachine automatically.
+4. Ani-RSS handles downloading. You can close the window and keep browsing during submission. Subscription status and media progress sync back automatically; releases excluded by download settings show the reason.
 
 The latest count in “Latest / total episodes” prioritizes Ani-RSS resource and subscription records. “Episode updated” appears when a timestamp is available. Click a column such as “Premiere date” to sort the entire season; click again to reverse the order.
 
@@ -133,6 +133,12 @@ Put existing `.torrent` files in your **Torrent pool** folder. The full Compose 
 Plans compare releases with existing files and select content to fill gaps. Adjust your preferences under **Settings → Resource priority / Release groups**.
 
 After a single-episode or single-volume task finishes, **Settings → Subscriptions** can track later releases. New matches appear for your confirmation.
+
+### Create subscription folders and verify your library
+
+After connecting a writable library and saving the settings, click **Folders** in Release radar to create placeholder folders for subscribed titles. Existing folders are reused; repeating the operation skips folders already created.
+
+The same action is available under **Settings → General → Library**, alongside **Verify all local resources**. Both run in the background and show progress and results. Completeness is assessed against the files currently present.
 
 ### Relationship graph
 
@@ -213,7 +219,7 @@ Choose your language, theme, layout, and browsing filters. Administrators manage
 
 AnimeMachine checks Bangumi Archive for catalog updates each week. Use **Settings → General → Check for catalog update** to check immediately, or **Import downloaded catalog base** to use an Archive ZIP you already downloaded. See [network settings](reference.en.md#ANM_CA_BUNDLE) for proxies and custom certificates.
 
-Open **Settings → Updates** to update the app. Check for a release, read its notes, then confirm the update. Enable scheduled checks if you want them.
+Open **Settings → Updates** to update the app. Read the release notes, then confirm the update. Daily checks and notifications are enabled by default; you can change the check time or choose automatic installation here.
 
 To update a complete Docker image, run the following in the original Compose folder. If your configuration pins a version, change its image tag to your target version first:
 
@@ -242,7 +248,7 @@ To restore, put these files back in their corresponding locations and start with
 | The library is empty | Follow initialization progress and wait for title data to import. Check the network and archive status in Diagnostics. |
 | Titles appear without covers | Covers load in the background. Keep browsing and check progress in Diagnostics. |
 | Existing anime is missing | Check that AnimeMachine's host can read the media folder. In Docker, check the mount and the corresponding container path, such as `/External`. |
-| Episode counts or subscriptions are stale | Test the Ani-RSS connection, search the season's releases, and check that subscription in Ani-RSS. |
+| Episode counts or subscriptions are stale | Test the Ani-RSS connection, click **Sync** in Release radar, and check that subscription in Ani-RSS. |
 | qBittorrent tasks have not started | Check that the plan was submitted, then start its stopped tasks in qBittorrent. |
 | The player did not open | Install the player and allow your browser to open external apps. You can also copy the playlist and open it in the player. |
 | Playback fails on a phone or another computer | Set an address reachable from that device under External player handoff, and check that it can open AnimeMachine. |

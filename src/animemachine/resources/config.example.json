@@ -671,7 +671,7 @@
   },
   "applicationUpdate": {
     "automaticCheck": {
-      "enabled": false,
+      "enabled": true,
       "mode": "notify",
       "time": "04:35"
     }

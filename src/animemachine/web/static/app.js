@@ -127,7 +127,7 @@ const i18n = {
     updatePortableRequired: "在线升级仅对官方便携 Release 启用；源码部署仍可检测新版本。",
     updateUnavailable: "当前平台缺少可用的在线升级包。",
     updateTab: "检查更新",
-    updateDetailsHint: "检查 GitHub Release 与可用代理线路，并显示下载与校验状态。不可用线路会进入健康冷却，后续检查优先使用已验证的快速线路。",
+    updateDetailsHint: "检查新版，查看下载进度和安装结果。",
     currentVersionLabel: "当前版本",
     latestVersionLabel: "最新版本",
     downloadSourceLabel: "下载源",
@@ -140,7 +140,7 @@ const i18n = {
     updateNotifyOnly: "仅通知",
     updateAutoInstall: "自动安装并重启",
     updateCheckTime: "每日检查时间",
-    automaticUpdateHint: "默认关闭。启用后按运行设备的本地时间每天检查一次；自动安装仍要求 Release 包和 SHA-256 校验均可用。",
+    automaticUpdateHint: "默认每天按运行设备的本地时间检查一次，发现新版时通知。可选择自动安装并重启；安装前会校验 Release 包和 SHA-256。",
     updateNetworkSources: "更新线路",
     shaPending: "等待下载校验",
     shaVerified: "已通过",
@@ -158,10 +158,10 @@ const i18n = {
     upgradeStatusInstalling: "正在自动安装",
     updateSourceDirect: "直连",
     updateSourceProxy: "代理",
-    aboutLead: "AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据、Torrent 池、媒体目录和外部只读媒体库整理到同一套本地 Catalog 与状态体系。",
-    aboutDetail: "程序连续完成资源筛选、下载投料、多级目录规划、系列关系整理、收藏核验、Web 浏览与长期贮存；qBittorrent、Ani-RSS 与 Torrent Collector 均为可选组件。",
-    aboutRelations: "作品关系图根据 Bangumi Archive 及辅助证据组织前作、续作、总集篇、番外、衍生、不同演绎和跨系列关联，并在可接受的计算时间内优化节点布局与关系线轨道。",
-    aboutComponents: "AnimeMachine 本身不提供动画检索或下载，也不内置 Torrent、磁力链接或媒体内容。外部媒体目录按只读来源处理；实际下载与订阅由用户连接的外部组件完成。",
+    aboutLead: "AnimeMachine 帮助你浏览动画、订阅新作，并自动整理本地收藏库。",
+    aboutDetail: "在作品详情中查看资源、核验收藏和播放媒体；通过下载计划确认需要新增或替换的文件。",
+    aboutRelations: "作品关系图展示前作、续作、番外和衍生作品，便于按系列查找和收藏。",
+    aboutComponents: "可按需连接 Ani-RSS、qBittorrent 和外部媒体库，使用订阅、下载和远程播放功能。",
     aboutArchiveSource: "提供本地动画元数据底包与作品关系基础。",
     aboutBangumiSource: "用于补全底包中缺失或明显异常的公开元数据。",
     aboutAniRssSource: "提供可选的新番订阅、状态同步与远程播放能力；AnimeMachine 通过其 HTTP API 连接。",
@@ -273,7 +273,7 @@ const i18n = {
     stagedReplacement: "旧文件会保留；新版完成下载和校验前只进入暂存区。",
     sizeConflict: "同一路径的既有文件大小不同，且候选资源没有充分的修订证据。",
     summary: "简介",
-    settingsHint: "配置会持久保存；页面录入的服务凭据保存在受限凭据文件中，不写入配置文件，也不会通过接口回显。",
+    settingsHint: "修改后点击“保存”生效。",
     acceptedContent: "允许的资源类别",
     stopped: "停止",
     save: "保存",
@@ -397,6 +397,12 @@ const i18n = {
     radarEmpty: "这一季暂无作品。", radarLoading: "正在加载…",
     radarSubscriptionDone: "订阅已提交；状态将在同步后更新。", radarSubscriptionPending: "等待同步",
     radarSearchTimeout: "资源检索仍在后台运行，请稍后重新打开。",
+    radarSync: "与 Ani-RSS 同步", radarSyncShort: "同步状态", radarSearchShort: "检索资源", radarFoldersShort: "建立目录", radarRetryShort: "重试", radarSyncing: "正在同步订阅与媒体状态…",
+    radarChecking: "正在检索…", radarComplete: "检索完成", radarRetry: "重试未完成作品",
+    radarSubmitting: "正在提交订阅…", radarSubmittingHint: "正在提交至 Ani-RSS，可关闭此窗口继续浏览。",
+    radarPolicyExcluded: "资源不符合下载设置", radarWorks: "{count} 部作品",
+    radarTaskProgress: "检索进度",
+    retryAction: "重试",
     recentEpisodeRequiresAniRss: "连接 Ani-RSS 后可用",
     random: "随机",
     sortDate: "年月",
@@ -450,7 +456,7 @@ const i18n = {
     diagnosticsTab: "诊断",
     diagnosticsHint: "只显示当前运行状态和近期结果；不会显示密钥、媒体内容或完整文件路径。",
     systemHealth: "系统健康",
-    systemHealthHint: "这里只汇总关键状态；各组件的详细信息仍在“诊断”页。",
+    systemHealthHint: "网络、图片和播放详情可在“诊断”中查看。",
     healthLoading: "正在汇总运行状态…",
     healthOverallNormal: "系统主要链路正常",
     healthOverallWarning: "存在需要关注的运行状态",
@@ -571,7 +577,7 @@ const i18n = {
     subscriptionsTab: "订阅",
     logsTab: "日志",
     historyTab: "历史记录",
-    subscriptionsHint: "已完成的单集或单卷任务会按精确资源指纹监视后续发布；发现更新后只生成待确认项。",
+    subscriptionsHint: "本地下载完成后，会继续检查同一来源的后续发布；发现新资源后等待确认。",
     noWatches: "暂无监视任务。",
     removeWatch: "删除监视",
     externalSource: "外部来源",
@@ -599,7 +605,7 @@ const i18n = {
     qbtApiKeyHint: "保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。",
     qbtCredentialConfigured: "API Key 已保存到受限凭据存储",
     torrentPoolPath: "Torrent 池路径",
-    torrentPoolHint: "AnimeMachine 只监视此目录中的种子文件；种子由用户或外部工具自行放入。",
+    torrentPoolHint: "将 .torrent 文件放入此目录，AnimeMachine 会自动读取。",
     libraryPath: "动画收藏库路径",
     qbtLibraryPath: "qBittorrent 容器内路径",
     testConnection: "测试连接",
@@ -630,9 +636,10 @@ const i18n = {
     openSubtitlesKey: "OpenSubtitles API Key",
     subtitleSourcesHint: "只使用已配置的正式 API；按当前界面语言排序，低置信度结果必须由用户选择。",
     searchSubtitles: "检索字幕", useSubtitle: "使用该字幕", subtitlePresent: "字幕已存在",
+    searchSubtitlesShort: "查找", useSubtitleShort: "应用",
     subtitleEmbedded: "媒体已内嵌字幕", subtitleNotFound: "未找到可靠字幕", subtitleApplied: "字幕已安装",
-    logsHint: "仅显示近期的重要状态、警告和错误；不会显示密钥。",
-    historyHint: "显示对用户原有内容执行的移动、改名与可恢复移除；AnimeMachine 自行创建的控制文件不占用此列表。",
+    logsHint: "近期运行状态、警告和错误。",
+    historyHint: "查看文件移动、改名和移除记录，恢复可撤销的操作。",
     noHistory: "暂无用户内容变更记录。",
     historyMove: "移动",
     historyRename: "重命名",
@@ -643,6 +650,16 @@ const i18n = {
     noLogs: "暂无重要日志。",
     auditLibrary: "核验全部本地资源",
     auditStarted: "本地资源核验已在后台分批启动。",
+    createPlaceholders: "建立订阅目录",
+    createPlaceholdersHint: "为已订阅作品建立占位目录，沿用本地库已有目录。",
+    placeholdersProgress: "已处理 {done}/{total} · 新建 {created} · 已有 {existing}",
+    placeholdersResult: "新建 {created} · 已有 {existing} · 跳过 {skipped} · 失败 {failed}",
+    placeholdersConnectionRequired: "请在设置中连接可读写的本地库后重试。",
+    auditProgress: "已核验 {done}/{total} · 更新 {updated} · 跳过 {skipped}",
+    maintenanceRunning: "正在后台处理…",
+    maintenanceFailed: "处理失败",
+    maintenanceFinished: "处理完成",
+    maintenanceSkippedHint: "部分作品未处理，请查看日志。",
     automation: "自动化与容量",
     pollMinutes: "资源池扫描间隔（分钟）",
     minimumFree: "最低保留空间（TiB）",
@@ -701,7 +718,7 @@ const i18n = {
     updatePortableRequired: "Online update is enabled only for official portable Releases; source installs can still check for new versions.",
     updateUnavailable: "No compatible online-update package is available for this platform.",
     updateTab: "Updates",
-    updateDetailsHint: "Checks GitHub Releases and available proxy routes, with download and verification state. Unhealthy routes enter cooldown so later checks prefer proven fast routes.",
+    updateDetailsHint: "Check for a new version and view download progress and installation results.",
     currentVersionLabel: "Current version",
     latestVersionLabel: "Latest version",
     downloadSourceLabel: "Download source",
@@ -714,7 +731,7 @@ const i18n = {
     updateNotifyOnly: "Notify only",
     updateAutoInstall: "Install automatically and restart",
     updateCheckTime: "Daily check time",
-    automaticUpdateHint: "Off by default. When enabled, checks once a day using the host's local time. Automatic installation still requires a valid Release asset and SHA-256 verification.",
+    automaticUpdateHint: "Checks once a day using the host's local time and notifies you of new versions by default. You can choose automatic installation and restart; the Release asset and SHA-256 are verified before installation.",
     updateNetworkSources: "Update routes",
     shaPending: "Awaiting download verification",
     shaVerified: "Verified",
@@ -732,10 +749,10 @@ const i18n = {
     upgradeStatusInstalling: "Installing automatically",
     updateSourceDirect: "Direct",
     updateSourceProxy: "Proxy",
-    aboutLead: "AnimeMachine is an automated anime-library system that organizes anime metadata, torrent pools, media directories and external read-only libraries under one local Catalog and state model.",
-    aboutDetail: "It handles resource screening, download handoff, multi-level directory planning, series relationships, collection verification, Web browsing and long-term storage. qBittorrent, Ani-RSS and Torrent Collector are optional components.",
-    aboutRelations: "The relationship graph uses Bangumi Archive and supporting evidence to organize prequels, sequels, recaps, side stories, derivatives, alternate adaptations and cross-series links, while optimizing node placement and edge tracks within practical runtime limits.",
-    aboutComponents: "AnimeMachine does not provide anime search or downloads and does not bundle torrents, magnet links or media content. External media directories remain read-only; actual downloads and subscriptions are handled by components connected by the user.",
+    aboutLead: "AnimeMachine helps you browse anime, follow new releases and organize your local library automatically.",
+    aboutDetail: "View releases, verify your collection and play media from a title’s details. Review download plans before adding or replacing files.",
+    aboutRelations: "The relationship graph connects prequels, sequels, side stories and spin-offs so you can explore and collect a series.",
+    aboutComponents: "Connect Ani-RSS, qBittorrent or an external media library as needed for subscriptions, downloads and remote playback.",
     aboutArchiveSource: "supplies the local catalog base and relationship evidence.",
     aboutBangumiSource: "fills public metadata that is missing or clearly inconsistent in the archive.",
     aboutAniRssSource: "provides optional seasonal subscriptions, state synchronization and remote playback through its HTTP API.",
@@ -851,8 +868,7 @@ const i18n = {
     sizeConflict:
       "A file at the same target has a different size and the candidate lacks sufficient revision evidence.",
     summary: "Summary",
-    settingsHint:
-      "Settings persist; service credentials entered here are stored in restricted credential files, never in configuration or API responses.",
+    settingsHint: "Click Save to apply your changes.",
     acceptedContent: "Allowed release classes",
     stopped: "Stopped",
     save: "Save",
@@ -976,6 +992,12 @@ const i18n = {
     radarEmpty: "No works in this season yet.", radarLoading: "Loading…",
     radarSubscriptionDone: "Subscription submitted; status will update after synchronization.", radarSubscriptionPending: "Awaiting sync",
     radarSearchTimeout: "Release search is still running in the background. Reopen this window later.",
+    radarSync: "Sync with Ani-RSS", radarSyncShort: "Sync", radarSearchShort: "Search", radarFoldersShort: "Folders", radarRetryShort: "Retry", radarSyncing: "Syncing subscriptions and media…",
+    radarChecking: "Searching…", radarComplete: "Search complete", radarRetry: "Retry unfinished titles",
+    radarSubmitting: "Subscribing…", radarSubmittingHint: "Sending to Ani-RSS. You can close this window and keep browsing.",
+    radarPolicyExcluded: "Releases excluded by download settings", radarWorks: "{count} titles",
+    radarTaskProgress: "Search progress",
+    retryAction: "Retry",
     recentEpisodeRequiresAniRss: "Available when Ani-RSS is connected",
     random: "Random",
     sortDate: "Date",
@@ -1029,7 +1051,7 @@ const i18n = {
     diagnosticsTab: "Diagnostics",
     diagnosticsHint: "Shows current runtime state and recent results only; secrets, media content, and full file paths are not exposed.",
     systemHealth: "System health",
-    systemHealthHint: "Only key states are summarized here; component details remain on Diagnostics.",
+    systemHealthHint: "See Diagnostics for network, image and playback details.",
     healthLoading: "Summarizing runtime status…",
     healthOverallNormal: "Core system paths are healthy",
     healthOverallWarning: "Some runtime states need attention",
@@ -1150,7 +1172,7 @@ const i18n = {
     subscriptionsTab: "Subscriptions",
     logsTab: "Logs",
     historyTab: "History",
-    subscriptionsHint: "Completed episode or volume jobs watch for later releases with the exact same release fingerprint. Matches remain pending for confirmation.",
+    subscriptionsHint: "After a local download completes, later releases from the same source are checked and held for confirmation.",
     noWatches: "No active watches.",
     removeWatch: "Remove watch",
     externalSource: "External source",
@@ -1178,7 +1200,7 @@ const i18n = {
     qbtApiKeyHint: "Saved keys survive restart without being written to config.json, browser storage, or API responses. Deployment environment/Secret credentials retain precedence.",
     qbtCredentialConfigured: "API Key saved to restricted credential storage",
     torrentPoolPath: "Torrent pool path",
-    torrentPoolHint: "AnimeMachine only watches this directory. Torrents are supplied by the user or an external tool.",
+    torrentPoolHint: "Place .torrent files in this directory for AnimeMachine to read automatically.",
     libraryPath: "Anime library path",
     qbtLibraryPath: "Path inside qBittorrent",
     testConnection: "Test connection",
@@ -1209,12 +1231,12 @@ const i18n = {
     openSubtitlesKey: "OpenSubtitles API key",
     subtitleSourcesHint: "Only configured official APIs are used. Results follow the UI language; low-confidence matches require manual selection.",
     searchSubtitles: "Find subtitles", useSubtitle: "Use subtitle", subtitlePresent: "Subtitles available",
+    searchSubtitlesShort: "Find", useSubtitleShort: "Apply",
     subtitleEmbedded: "Embedded subtitles detected", subtitleNotFound: "No reliable subtitles found", subtitleApplied: "Subtitles installed",
-    logsHint:
-      "Recent important status, warnings and errors only; secrets are never shown.",
+    logsHint: "Recent status messages, warnings and errors.",
     refresh: "Refresh",
     noLogs: "No important events yet.",
-    historyHint: "Shows moves, renames and recoverable removals of pre-existing user content. AnimeMachine-created control files are omitted.",
+    historyHint: "Review file moves, renames and removals, and restore reversible changes.",
     noHistory: "No user-content changes yet.",
     historyMove: "Move",
     historyRename: "Rename",
@@ -1223,6 +1245,16 @@ const i18n = {
     restoreHistory: "Restore",
     auditLibrary: "Verify all local resources",
     auditStarted: "Local verification started in background batches.",
+    createPlaceholders: "Create subscription folders",
+    createPlaceholdersHint: "Create placeholder folders for subscriptions, reusing existing library folders.",
+    placeholdersProgress: "Processed {done}/{total} · Created {created} · Existing {existing}",
+    placeholdersResult: "Created {created} · Existing {existing} · Skipped {skipped} · Failed {failed}",
+    placeholdersConnectionRequired: "Connect a writable local library in Settings, then retry.",
+    auditProgress: "Verified {done}/{total} · Updated {updated} · Skipped {skipped}",
+    maintenanceRunning: "Working in the background…",
+    maintenanceFailed: "Operation failed",
+    maintenanceFinished: "Completed",
+    maintenanceSkippedHint: "Some works were not processed. See the logs.",
     automation: "Automation & capacity",
     pollMinutes: "Pool scan interval (minutes)",
     regionPriority: "Region",
@@ -1281,7 +1313,7 @@ const i18n = {
     updatePortableRequired: "オンライン更新は公式ポータブル Release のみ有効です。ソース環境でも新しいバージョンの確認はできます。",
     updateUnavailable: "このプラットフォーム向けのオンライン更新パッケージはありません。",
     updateTab: "更新を確認",
-    updateDetailsHint: "GitHub Release と利用可能なプロキシ経路を確認し、ダウンロードと検証の状態を表示します。異常な経路はクールダウンし、以後は実績のある高速な経路を優先します。",
+    updateDetailsHint: "新しいバージョンを確認し、ダウンロードの進捗と更新結果を表示します。",
     currentVersionLabel: "現在のバージョン",
     latestVersionLabel: "最新バージョン",
     downloadSourceLabel: "ダウンロード元",
@@ -1294,7 +1326,7 @@ const i18n = {
     updateNotifyOnly: "通知のみ",
     updateAutoInstall: "自動インストールして再起動",
     updateCheckTime: "毎日の確認時刻",
-    automaticUpdateHint: "初期設定では無効です。有効にすると実行端末のローカル時刻で1日1回確認します。自動インストールには有効な Release パッケージと SHA-256 検証が必要です。",
+    automaticUpdateHint: "既定では端末のローカル時刻で1日1回確認し、新しいバージョンを通知します。自動インストールと再起動も選択でき、インストール前に Release パッケージと SHA-256 を検証します。",
     updateNetworkSources: "更新経路",
     shaPending: "ダウンロード検証待ち",
     shaVerified: "検証済み",
@@ -1312,10 +1344,10 @@ const i18n = {
     upgradeStatusInstalling: "自動インストール中",
     updateSourceDirect: "直結",
     updateSourceProxy: "プロキシ",
-    aboutLead: "AnimeMachine は、アニメのメタデータ、Torrent プール、メディアディレクトリ、外部の読み取り専用ライブラリを、一つのローカル Catalog と状態モデルに整理する全自動アニメライブラリシステムです。",
-    aboutDetail: "リソース選別、ダウンロード引き渡し、多階層ディレクトリ計画、シリーズ関係、所蔵検証、Web 閲覧、長期保管を扱います。qBittorrent、Ani-RSS、Torrent Collector は任意のコンポーネントです。",
-    aboutRelations: "作品関係図は Bangumi Archive と補助根拠から前作、続編、総集編、番外、派生、別解釈、シリーズ横断関係を整理し、実用的な計算時間内でノード配置と関係線の経路を最適化します。",
-    aboutComponents: "AnimeMachine 自体はアニメの検索やダウンロードを提供せず、Torrent、マグネットリンク、メディア内容も内蔵しません。外部メディアディレクトリは読み取り専用で扱い、実際のダウンロードと購読はユーザーが接続した外部コンポーネントが実行します。",
+    aboutLead: "AnimeMachine は、アニメの閲覧、新作の購読、ローカルライブラリの自動整理を支援します。",
+    aboutDetail: "作品の詳細でリリースの確認、所蔵の検証、動画の再生ができます。追加・置換するファイルはダウンロード計画で確認します。",
+    aboutRelations: "作品関連図で前作、続編、番外編、スピンオフを確認し、シリーズごとに作品を探して集められます。",
+    aboutComponents: "必要に応じて Ani-RSS、qBittorrent、外部メディアライブラリを接続し、購読、ダウンロード、リモート再生を利用できます。",
     aboutArchiveSource: "ローカルカタログのベースと作品関係の根拠を提供します。",
     aboutBangumiSource: "アーカイブで欠落または明らかに不整合な公開メタデータを補完します。",
     aboutAniRssSource: "HTTP API を通じて、任意の新番購読、状態同期、リモート再生機能を提供します。",
@@ -1431,8 +1463,7 @@ const i18n = {
     sizeConflict:
       "同じ対象パスの既存ファイルはサイズが異なり、候補に十分な更新根拠がありません。",
     summary: "あらすじ",
-    settingsHint:
-      "設定は保存されます。画面で入力したサービス認証情報は制限付きの資格情報ファイルに保存し、設定ファイルや API 応答には出力しません。",
+    settingsHint: "変更後に「保存」を押すと設定が反映されます。",
     acceptedContent: "許可するリリース種別",
     stopped: "停止",
     save: "保存",
@@ -1556,6 +1587,12 @@ const i18n = {
     radarEmpty: "このシーズンの作品はまだありません。", radarLoading: "読み込み中…",
     radarSubscriptionDone: "購読を送信しました。同期後に状態が更新されます。", radarSubscriptionPending: "同期待ち",
     radarSearchTimeout: "バックグラウンドで検索中です。後でこの画面を開き直してください。",
+    radarSync: "Ani-RSS と同期", radarSyncShort: "同期", radarSearchShort: "検索", radarFoldersShort: "フォルダー", radarRetryShort: "再検索", radarSyncing: "購読とメディアの状態を同期中…",
+    radarChecking: "検索中…", radarComplete: "検索完了", radarRetry: "未完了の作品を再検索",
+    radarSubmitting: "購読を登録中…", radarSubmittingHint: "Ani-RSS に登録中です。この画面を閉じて閲覧を続けられます。",
+    radarPolicyExcluded: "ダウンロード設定の対象外です", radarWorks: "{count} 作品",
+    radarTaskProgress: "検索の進捗",
+    retryAction: "再試行",
     recentEpisodeRequiresAniRss: "Ani-RSS 接続時に利用できます",
     random: "ランダム",
     sortDate: "年月",
@@ -1609,7 +1646,7 @@ const i18n = {
     diagnosticsTab: "診断",
     diagnosticsHint: "現在の実行状態と直近の結果のみを表示します。キー、メディア内容、完全なファイルパスは表示しません。",
     systemHealth: "システム状態",
-    systemHealthHint: "ここでは主要状態のみを集約し、各コンポーネントの詳細は「診断」に表示します。",
+    systemHealthHint: "ネットワーク、画像、再生の詳細は「診断」で確認できます。",
     healthLoading: "実行状態を集約中…",
     healthOverallNormal: "主要なシステム経路は正常です",
     healthOverallWarning: "確認が必要な実行状態があります",
@@ -1730,7 +1767,7 @@ const i18n = {
     subscriptionsTab: "購読",
     logsTab: "ログ",
     historyTab: "履歴",
-    subscriptionsHint: "完了した単話・単巻タスクと同一のリリース指紋で後続リリースを監視し、確認待ちとして表示します。",
+    subscriptionsHint: "ローカルへのダウンロード完了後も、同じ配信元の続きが公開されているか確認し、新しいリリースを確認待ちにします。",
     noWatches: "監視タスクはありません。",
     removeWatch: "監視を削除",
     externalSource: "外部ソース",
@@ -1758,7 +1795,7 @@ const i18n = {
     qbtApiKeyHint: "保存したキーは再起動後も有効で、config.json、ブラウザ保存領域、API 応答には書き出しません。デプロイ環境変数／Secret がある場合はそちらを優先します。",
     qbtCredentialConfigured: "API Key を制限付き資格情報ストレージへ保存済み",
     torrentPoolPath: "Torrent プールのパス",
-    torrentPoolHint: "AnimeMachine はこのディレクトリを監視するだけです。Torrent はユーザーまたは外部ツールが配置します。",
+    torrentPoolHint: "このフォルダーに .torrent ファイルを入れると、AnimeMachine が自動で読み込みます。",
     libraryPath: "アニメライブラリのパス",
     qbtLibraryPath: "qBittorrent コンテナ内のパス",
     testConnection: "接続テスト",
@@ -1789,12 +1826,12 @@ const i18n = {
     openSubtitlesKey: "OpenSubtitles APIキー",
     subtitleSourcesHint: "設定済みの公式APIだけを使用します。日本語では字幕なしも許容し、低信頼の候補は手動選択とします。",
     searchSubtitles: "字幕を検索", useSubtitle: "この字幕を使用", subtitlePresent: "字幕あり",
+    searchSubtitlesShort: "検索", useSubtitleShort: "適用",
     subtitleEmbedded: "内蔵字幕を検出", subtitleNotFound: "信頼できる字幕が見つかりません", subtitleApplied: "字幕を導入しました",
-    logsHint:
-      "最近の重要な状態・警告・エラーのみ表示します。秘密情報は表示しません。",
+    logsHint: "最近の動作状況、警告、エラーを表示します。",
     refresh: "更新",
     noLogs: "重要なログはまだありません。",
-    historyHint: "既存のユーザーコンテンツに対する移動、名称変更、復元可能な削除を表示します。AnimeMachine が作成した制御ファイルは除外します。",
+    historyHint: "ファイルの移動、名前変更、削除の履歴を確認し、元に戻せる操作を復元します。",
     noHistory: "ユーザーコンテンツの変更履歴はありません。",
     historyMove: "移動",
     historyRename: "名称変更",
@@ -1803,6 +1840,16 @@ const i18n = {
     restoreHistory: "復元",
     auditLibrary: "ローカルリソースをすべて確認",
     auditStarted: "ローカル確認をバックグラウンドで分割開始しました。",
+    createPlaceholders: "購読作品のフォルダーを作成",
+    createPlaceholdersHint: "購読作品の空フォルダーを作成します。既存のライブラリフォルダーはそのまま使います。",
+    placeholdersProgress: "処理 {done}/{total} · 作成 {created} · 既存 {existing}",
+    placeholdersResult: "作成 {created} · 既存 {existing} · スキップ {skipped} · 失敗 {failed}",
+    placeholdersConnectionRequired: "設定で書き込み可能なローカルライブラリを接続してから、再度お試しください。",
+    auditProgress: "確認 {done}/{total} · 更新 {updated} · スキップ {skipped}",
+    maintenanceRunning: "バックグラウンドで処理中…",
+    maintenanceFailed: "処理に失敗しました",
+    maintenanceFinished: "完了",
+    maintenanceSkippedHint: "処理できなかった作品があります。ログをご確認ください。",
     automation: "自動化・容量",
     pollMinutes: "プール走査間隔（分）",
     regionPriority: "地域",
@@ -2150,7 +2197,7 @@ function localizeStaticUi() {
   document.documentElement.lang = language;
   document
     .querySelectorAll("[data-i18n]")
-    .forEach((e) => (e.textContent = t(e.dataset.i18n)));
+    .forEach((e) => (e.textContent = interpolate(t(e.dataset.i18n), JSON.parse(e.dataset.i18nValues || "{}")) + (e.dataset.i18nSuffix ? ` · ${t(e.dataset.i18nSuffix)}` : "")));
   document
     .querySelectorAll("[data-i18n-placeholder]")
     .forEach((e) => (e.placeholder = t(e.dataset.i18nPlaceholder)));
@@ -2474,12 +2521,13 @@ function reportPerformanceEvent(event) {
 
 const sourceBadge = (x, compact = false) => {
     const count = Number(x.usable_torrent_count || 0);
-    const aniCount = Number(x.ani_rss_resource_count || 0);
+    const aniCount = Number(x.ani_rss_available_resource_count ?? x.ani_rss_resource_count ?? 0);
     const badges = [];
     if (count) badges.push(`<span class="badge">${esc(`${t("torrentSource")} · ${fmt(count)}`)}</span>`);
     if (x.ani_rss_managed || aniCount) {
       const detail = x.ani_rss_managed ? t("aniRssManaged") : `${fmt(aniCount)} ${t("aniRssResources")}`;
-      badges.push(`<span class="badge ${x.ani_rss_managed ? "ani-rss-managed" : "ani-rss-resource"}" title="${esc(detail)}">${esc(detail)}</span>`);
+        const hint = !x.ani_rss_managed && aniCount && !x.ani_rss_resource_count ? t("radarPolicyExcluded") : detail;
+        badges.push(`<span class="badge ${x.ani_rss_managed ? "ani-rss-managed" : "ani-rss-resource"}" title="${esc(hint)}">${esc(detail)}</span>`);
     }
     if (!badges.length) badges.push(`<span class="badge muted-badge">${esc(t("noAvailableSource"))}</span>`);
     return badges.join(compact ? " " : "");
@@ -2505,7 +2553,7 @@ const sourceBadge = (x, compact = false) => {
       : `<label class="pick"><input type="checkbox" disabled></label>`,
   relationButton = (x) =>
     Number(x.series_member_count || 1) > 1
-      ? `<button class="relation-button" data-relations="${x.id}" type="button" title="${esc(t("viewRelations"))}"><span aria-hidden="true">⑂</span><span class="relation-label">${t("viewRelations")} · ${fmt(x.series_member_count)}</span></button>`
+      ? `<button class="relation-button" data-icon="graph" data-relations="${x.id}" type="button" title="${esc(t("viewRelations"))}"><span class="relation-label">${t("viewRelations")} · ${fmt(x.series_member_count)}</span></button>`
       : "";
 function episodeUpdate(x) {
   const episode = Number(x.episode_progress?.current), stamp = new Date(x.last_episode_update_at || "");
@@ -2569,6 +2617,7 @@ function releaseCoverElement(target) {
     URL.revokeObjectURL(url);
     coverBatch?.objectUrls.delete(url);
     delete target.dataset.coverObjectUrl;
+    delete target.dataset.coverEtag;
   }
   coverObserver?.unobserve(target);
 }
@@ -2756,18 +2805,22 @@ function pumpCoverLoads(batch) {
       cache: "no-cache",
     }).then(async (response) => {
       if (!response.ok) throw new Error(`cover ${response.status}`);
-      return { blob: await response.blob(), status: response.headers.get("X-AnimeMachine-Image-Status") || "available" };
-    }).then(({ blob, status }) => {
+      return { blob: await response.blob(), status: response.headers.get("X-AnimeMachine-Image-Status") || "available",
+        pending: response.headers.get("X-AnimeMachine-Image-Pending") === "1", etag: response.headers.get("ETag") };
+    }).then(({ blob, status, pending, etag }) => {
       if (coverBatch !== batch || !target.isConnected) return;
       const modal = topModalDialog();
       if (modal && !modal.contains(target)) {
         target.dataset.coverQueued = "0";
         return;
       }
-      applyCoverBlob(target, blob, batch);
+      if (!etag || !target.dataset.coverObjectUrl || target.dataset.coverEtag !== etag) {
+        applyCoverBlob(target, blob, batch);
+        target.dataset.coverEtag = etag || "";
+      }
       setCoverState(target, status);
       if (status === "available") reportPerformanceEvent("firstCover");
-      if (status === "loading" || status === "retrying") {
+      if (pending || status === "loading" || status === "retrying") {
         const attempt = Number(target.dataset.coverAttempt || 0) + 1;
         target.dataset.coverAttempt = String(attempt);
         const timer = setTimeout(() => {
@@ -2883,12 +2936,12 @@ const suffix = (c) =>
               ? ` · ${y.fileCount} ${t("files")}`
               : y.expectedFiles != null ? ` · ${y.observedFiles}/${y.expectedFiles} ${t("files")}` : "",
             needsAudit = y.state === "existing" && ["not_inspected_preexisting", "catalog_state_only", "none"].includes(y.inspectionMode);
-          return `<div class="library-resource"><div class="inventory"><span><b>${esc(mappedPath || y.path)}</b><div class="inventory-foot"><small>${status}${count}${needsAudit ? ` <button type="button" class="text-button audit-work" data-anime-id="${animeId}">${t("verifyWork")}</button>` : ""}</small><button type="button" class="text-button copy-library-path" data-copy-path="${esc(mappedPath || "")}" ${mappedPath ? "" : "disabled"}>${t("copyPath")}</button></div></span></div></div>`;
+          return `<div class="library-resource"><div class="inventory"><span><b>${esc(mappedPath || y.path)}</b><div class="inventory-foot"><small>${status}${count}${needsAudit ? ` <button type="button" class="text-button audit-work" data-icon="check" data-anime-id="${animeId}">${t("verifyWork")}</button>` : ""}</small><button type="button" class="text-button copy-library-path" data-icon="copy" data-copy-path="${esc(mappedPath || "")}" ${mappedPath ? "" : "disabled"}>${t("copyPath")}</button></div></span></div></div>`;
         }).join("")
       : "";
   },
   subtitleToolsHtml = (target) => target
-    ? `<div class="subtitle-tools detail-subtitle-tools" data-subtitle-target="${esc(target.path)}"><b>${t("subtitleActions")}</b><button type="button" class="tool dark-tool search-subtitles">${t("searchSubtitles")}</button><select class="subtitle-candidates" disabled><option>${t("subtitleNotFound")}</option></select><button type="button" class="tool dark-tool apply-subtitle" disabled>${t("useSubtitle")}</button><small class="muted subtitle-state"></small></div>`
+    ? `<div class="subtitle-tools detail-subtitle-tools" data-subtitle-target="${esc(target.path)}"><b>${t("subtitleActions")}</b><button type="button" class="tool dark-tool search-subtitles" data-icon="search" title="${esc(t("searchSubtitles"))}" aria-label="${esc(t("searchSubtitles"))}">${t("searchSubtitlesShort")}</button><select class="subtitle-candidates" disabled><option>${t("subtitleNotFound")}</option></select><button type="button" class="tool dark-tool apply-subtitle" data-icon="check" title="${esc(t("useSubtitle"))}" aria-label="${esc(t("useSubtitle"))}" disabled>${t("useSubtitleShort")}</button><small class="muted subtitle-state"></small></div>`
     : "",
   playbackSourceHtml = (targets, subscriptions, selected) => {
     const choices = [
@@ -4759,7 +4812,7 @@ function renderRelationGraph(graph) {
       })
       .join("");
   $("relationGraph").innerHTML =
-    `<header class="relation-heading"><div><p class="eyebrow">${esc(t("relationGraph"))}</p><h2>${esc(graphTitle(nodesById.get(graph.rootAnimeId)) || graph.seriesTitle)}</h2><p>${t("relationHint")}</p>${graph.contextTruncated ? `<p class="relation-context-note">${t("graphContextTruncated")}</p>` : ""}<div class="relation-legend">${legend}</div></div><div class="relation-heading-actions"><b>${esc(t("relatedWorksCount").replace("{count}", fmt(graph.strictMemberCount)))}</b><div class="relation-export-actions"><button type="button" class="relation-fullscreen" data-relation-export="png">${t("exportPng")}</button><button type="button" class="relation-fullscreen" data-relation-export="svg">${t("exportSvg")}</button><button type="button" class="relation-fullscreen" data-relation-fullscreen>${t("fullscreenGraph")}</button></div></div></header><div class="relation-scroll"><div class="relation-stage" style="width:${width}px;height:${height}px"><svg class="relation-lines" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true"><defs><marker id="relation-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z"/></marker></defs><g transform="translate(${shiftX} ${shiftY})">${edges}</g></svg>${edgeLabels}${nodes}</div></div>`;
+    `<header class="relation-heading"><div><p class="eyebrow">${esc(t("relationGraph"))}</p><h2>${esc(graphTitle(nodesById.get(graph.rootAnimeId)) || graph.seriesTitle)}</h2><p>${t("relationHint")}</p>${graph.contextTruncated ? `<p class="relation-context-note">${t("graphContextTruncated")}</p>` : ""}<div class="relation-legend">${legend}</div></div><div class="relation-heading-actions"><b>${esc(t("relatedWorksCount").replace("{count}", fmt(graph.strictMemberCount)))}</b><div class="relation-export-actions"><button type="button" class="relation-fullscreen" data-relation-export="png" data-icon="download" title="${esc(t("exportPng"))}" aria-label="${esc(t("exportPng"))}">PNG</button><button type="button" class="relation-fullscreen" data-relation-export="svg" data-icon="download" title="${esc(t("exportSvg"))}" aria-label="${esc(t("exportSvg"))}">SVG</button><button type="button" class="relation-fullscreen" data-relation-fullscreen data-icon="expand">${t("fullscreenGraph")}</button></div></div></header><div class="relation-scroll"><div class="relation-stage" style="width:${width}px;height:${height}px"><svg class="relation-lines" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true"><defs><marker id="relation-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z"/></marker></defs><g transform="translate(${shiftX} ${shiftY})">${edges}</g></svg>${edgeLabels}${nodes}</div></div>`;
   const fullscreenButton = $("relationGraph").querySelector(
     "[data-relation-fullscreen]",
   );
@@ -4941,7 +4994,7 @@ function playbackHtml(state) {
     return `<section class="playback-panel unavailable"><p class="muted">${t("noPlayableMedia")}</p></section>`;
   const platform = navigator.userAgent || "",
     episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join("");
-  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions"><button type="button" class="tool dark-tool player-action" data-player="copy">${t("copyPlaylist")}</button><span class="playback-divider" aria-hidden="true">/</span><button type="button" class="tool dark-tool player-action" data-player="system">${t("systemPlayer")}</button><button type="button" class="tool dark-tool player-action" data-player="vlc">${playerIcon("vlc")}<span>${t("openVlc")}</span></button>${/Windows/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="potplayer">${playerIcon("potplayer")}<span>${t("openPotPlayer")}</span></button>` : ""}${/(Macintosh|Mac OS X)/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="iina">${playerIcon("iina")}<span>${t("openIina")}</span></button>` : ""}</div></section>`;
+  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions"><button type="button" class="tool dark-tool player-action" data-player="copy" data-icon="copy">${t("copyPlaylist")}</button><button type="button" class="tool dark-tool player-action" data-player="system" data-icon="download">${t("systemPlayer")}</button><button type="button" class="tool dark-tool player-action" data-player="vlc">${playerIcon("vlc")}<span>${t("openVlc")}</span></button>${/Windows/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="potplayer">${playerIcon("potplayer")}<span>${t("openPotPlayer")}</span></button>` : ""}${/(Macintosh|Mac OS X)/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="iina">${playerIcon("iina")}<span>${t("openIina")}</span></button>` : ""}</div></section>`;
 }
 
 function playerIcon(kind) {
@@ -5028,13 +5081,25 @@ async function handoffPlayback(kind, animeId, button) {
 function aniSubscriptionManagementHtml(subscription) {
   const progress = subscription.episodeProgress || {},
     state = t(subscription.enabled ? "radarSubscribed" : "radarPaused");
-  return `<div class="ani-rss-playback-management"><small>${esc(subscription.title)} · ${state} · ${progress.current ? fmt(progress.current) : "?"} / ${progress.total ? fmt(progress.total) : "?"}</small><button type="button" class="text-button ani-rss-delete" data-ani-rss-delete="${esc(subscription.remoteId)}">${t("aniRssDelete")}</button></div>`;
+  return `<div class="ani-rss-playback-management"><small>${esc(subscription.title)} · ${state} · ${progress.current ? fmt(progress.current) : "?"} / ${progress.total ? fmt(progress.total) : "?"}</small><button type="button" class="text-button ani-rss-delete" data-icon="remove" data-ani-rss-delete="${esc(subscription.remoteId)}">${t("aniRssDelete")}</button></div>`;
 }
 
 let detailGeneration = 0;
+detailDialog.addEventListener("close", () => { detailGeneration++; });
 async function showDetail(id) {
   const generation = ++detailGeneration;
-  const x = await api(`/api/anime/${id}?language=${encodeURIComponent(language)}`);
+  if ($("detail").dataset.animeId !== String(id)) {
+    $("detail").dataset.animeId = String(id);
+    $("detail").innerHTML = `<p class="detail-loading" role="status">${esc(t("radarLoading"))}</p>`;
+  }
+  showModalDialog(detailDialog);
+  const x = await api(`/api/anime/${id}?language=${encodeURIComponent(language)}`).catch((error) => {
+    if (generation === detailGeneration) {
+      $("detail").innerHTML = `<p class="detail-loading error" role="status">${esc(error.message)}</p><button class="text-button detail-retry" data-icon="refresh" type="button">${esc(t("retryAction"))}</button>`;
+      $("detail").querySelector(".detail-retry").onclick = () => showDetail(id).catch(() => {});
+    }
+    throw error;
+  });
   if (generation !== detailGeneration) return;
   const
     libraryTargets = (x.library?.targets || []).filter((target) => target.origin !== "ani-rss_api"),
@@ -5111,7 +5176,7 @@ async function showDetail(id) {
         })
         .join("") || "<li>—</li>",
     detailRelationButton = Number(x.series_member_count || 1) > 1
-      ? `<button id="detailRelations" class="tool dark-tool detail-action" type="button"><span aria-hidden="true">⑂</span>${t("viewRelations")} · ${fmt(x.series_member_count)}</button>`
+      ? `<button id="detailRelations" data-icon="graph" class="tool dark-tool detail-action" type="button">${t("viewRelations")} · ${fmt(x.series_member_count)}</button>`
       : "",
     originalTitle = secondaryTitle(x),
     detailSubtitleRow = originalTitle || detailRelationButton
@@ -5128,22 +5193,21 @@ async function showDetail(id) {
     currentEpisode = Number(x.episode_progress?.current || 0),
     totalEpisode = Number(x.episode_progress?.total || 0),
     episodes = currentEpisode || totalEpisode ? `${currentEpisode ? fmt(currentEpisode) : "?"} / ${totalEpisode ? fmt(totalEpisode) : "?"}` : "",
-    factHtml = (className, labelText, value) => `<div class="fact ${className}"><b>${esc(labelText)}</b><span class="fact-value" title="${esc(value)}">${esc(value)}</span></div>`,
+    factHtml = (className, labelText, value) => value ? `<div class="fact ${className}${value.length > 48 ? " wide-fact" : ""}"><b>${esc(labelText)}</b><span class="fact-value" title="${esc(value)}">${esc(value)}</span></div>` : "",
     summary = localizedSummary(x),
     aniResources = x.ani_rss?.resources || [],
     subtitleTarget = playableTargets.find((item) => item.path === selectedPlaybackSource && item.subtitleApplicable !== false)
       || playableTargets.find((item) => item.subtitleApplicable !== false),
     libraryContent = libraryHtml({ ...x.library, targets: libraryTargets }, x.id)
-      || (playableAniSubscriptions.length ? `<p class="muted">${t("aniRssRemoteOnlyLibrary")}</p>` : `<p class="muted">—</p>`),
+      || (playableAniSubscriptions.length ? `<p class="muted">${t("aniRssRemoteOnlyLibrary")}</p>` : `<p class="muted">${t("notInLibrary")}</p>`),
     playbackSourceSelector = playbackSourceHtml(playableTargets, playableAniSubscriptions, selectedPlaybackSource),
     aniRssManagement = aniSubscriptions.map(aniSubscriptionManagementHtml).join(""),
     resourceList = `${torrentGroups(x.torrents).map((group) => torrentGroupHtml(group, x.id)).join("")}${aniResources.map((y) => aniResourceHtml(y, x.id)).join("")}`,
     hasEligibleResource = (x.torrents || []).some((y) => y.eligible) || aniResources.some((y) => y.eligible);
   if (generation !== detailGeneration) return;
   $("detail").innerHTML =
-    `${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}">${t("reloadImage")}</button></div>` : ""}<span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("tags-fact", t("tag"), displayTags)}</div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `<div class="detail-hero"><header class="detail-intro"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
-  if (imagesEnabled) queueCoverElement($("detail").querySelector("[data-cover]"), coverBatch, true);
   $("detail")
     .querySelectorAll(`input[name="resource-${id}"]`)
     .forEach(
@@ -5288,12 +5352,12 @@ async function showDetail(id) {
     button.onclick = () => handoffPlayback(button.dataset.player, id, button).catch((error) => alert(error.message));
   });
   showModalDialog(detailDialog);
+  if (imagesEnabled) {
+    covers();
+    queueCoverElement($("detail").querySelector("[data-cover]"), coverBatch, true);
+  }
   requestAnimationFrame(() => {
-    if (detailDialog.scrollHeight <= detailDialog.clientHeight) return;
-    const cover = $("detail").querySelector(".detail-cover");
-    if (!cover) { detailDialog.scrollTop = 0; return; }
-    const loaded = Boolean(cover.dataset.coverObjectUrl);
-    detailDialog.scrollTop = loaded ? 0 : Math.min(cover.offsetTop + cover.offsetHeight, detailDialog.scrollHeight - detailDialog.clientHeight);
+    detailDialog.scrollTop = 0;
   });
 }
 function updateSelection() {
@@ -5360,10 +5424,10 @@ async function createPlan(routingMode = "default", originalRequest = null) {
       skippedJobs = (p.skippedWorks || [])
         .map((work) => `<div class="plan-job disabled"><b>${esc(preferred(work) || work.title_ja || `#${work.id}`)}</b><small>${t("torrentUnavailable")}</small></div>`)
         .join(""),
-      routeButtons = `<div class="plan-route-actions"><button type="button" class="tool ${routingMode === "ani-rss" ? "active" : ""}" data-plan-route="ani-rss">${t("planUseAniRss")}</button><button type="button" class="tool ${routingMode === "torrent" ? "active" : ""}" data-plan-route="torrent">${t("planUseTorrent")}</button><button type="button" class="tool ${routingMode === "default" ? "active" : ""}" data-plan-route="default">${t("planRestoreDefault")}</button></div>`,
+      routeButtons = `<div class="plan-route-actions"><button type="button" class="tool ${routingMode === "ani-rss" ? "active" : ""}" data-plan-route="ani-rss" data-icon="subscribe">${t("planUseAniRss")}</button><button type="button" class="tool ${routingMode === "torrent" ? "active" : ""}" data-plan-route="torrent" data-icon="download">${t("planUseTorrent")}</button><button type="button" class="tool ${routingMode === "default" ? "active" : ""}" data-plan-route="default" data-icon="refresh">${t("planRestoreDefault")}</button></div>`,
       stoppedNotice = (p.aniRssJobs || []).length ? "" : `<p class="notice">${t("planStopped")}</p>`,
       submitButton = capabilities.submissionEnabled
-        ? `<button id="submitStoppedPlan" class="primary" ${p.taskCount ? "" : "disabled"}>${t("submitStopped")}</button>`
+        ? `<button id="submitStoppedPlan" data-icon="download" class="primary" ${p.taskCount ? "" : "disabled"}>${t("submitStopped")}</button>`
         : `<p class="muted">${t("submissionDisabled")}</p>`;
     $("plan").innerHTML =
       `<h2>${t("plan")}</h2>${stoppedNotice}<div class="plan-summary-row"><p><b>${p.taskCount}</b> ${t("tasks")} · ${fmt(p.totalBytes)} bytes</p>${routeButtons}</div>${p.taskCount ? "" : `<p class="notice safe">${t("planNoDownload")}</p>`}${assessments}${jobs}${aniRssJobs}${skippedJobs}${submitButton}`;
@@ -5661,7 +5725,7 @@ function openSettings() {
   $("archiveAssetProxyTemplates").value = (network.archiveAssetProxyTemplates || []).join("\n");
   $("bangumiApiEndpoints").value = (network.bangumiApiEndpoints || []).join("\n");
   const automaticUpdate = config.applicationUpdate?.automaticCheck || {};
-  $("automaticUpdateEnabled").checked = automaticUpdate.enabled === true;
+  $("automaticUpdateEnabled").checked = automaticUpdate.enabled !== false;
   $("automaticUpdateMode").value = automaticUpdate.mode || "notify";
   $("automaticUpdateTime").value = automaticUpdate.time || "04:35";
   refreshArchiveStatus();
@@ -5876,23 +5940,59 @@ async function importArchive(file) {
     $("archiveFile").value = "";
   }
 }
-async function runMaintenance(kind) {
-  if (kind !== "metadata") throw new Error(t("maintenanceUnsupported"));
-  await api("/api/metadata/repair", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-  const poll = setInterval(async () => {
-    try {
-      const status = (await api("/api/maintenance/status")).metadata;
-      $("maintenanceStatus").textContent = `${t("repairMetadata")} · ${fmt(status.repaired)}/${fmt(status.processed)}`;
-      if (status.state === "running") return;
-      clearInterval(poll);
-      $("repairMetadata").disabled = false;
-    } catch (error) {
-      clearInterval(poll);
-      $("repairMetadata").disabled = false;
-      $("maintenanceStatus").textContent = error.message;
+const maintenanceTasks = new Set();
+function interpolate(template, values) {
+  return template.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
+}
+async function runMaintenance(kind, source = "settings") {
+  const definitions = {
+    metadata: { endpoint: "/api/metadata/repair", buttons: ["repairMetadata"], status: "maintenanceStatus" },
+    library: { endpoint: "/api/library/audit", buttons: ["auditLibrary"], status: "libraryMaintenanceStatus" },
+    placeholders: { endpoint: "/api/library/placeholders", buttons: ["createPlaceholders", "radarPlaceholders"], status: source === "radar" ? "radarPlaceholderStatus" : "libraryMaintenanceStatus" },
+  };
+  const task = definitions[kind];
+  if (!task) throw new Error(t("maintenanceUnsupported"));
+  if (maintenanceTasks.has(kind)) return;
+  const statusNode = $(task.status);
+  maintenanceTasks.add(kind);
+  task.buttons.forEach((id) => { $(id).disabled = true; });
+  statusNode.classList.remove("error");
+  statusNode.dataset.i18n = "maintenanceRunning";
+  delete statusNode.dataset.i18nValues;
+  delete statusNode.dataset.i18nSuffix;
+  statusNode.textContent = t("maintenanceRunning");
+  try {
+    if (kind === "placeholders" && !config.deployment?.libraryUncRoot) throw new Error(t("placeholdersConnectionRequired"));
+    await api(task.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    for (;;) {
+      const status = (await api("/api/maintenance/status"))[kind];
+      if (status.state === "failed") throw new Error(kind === "placeholders" && /read-only|unavailable|writable|connect/i.test(status.error || "") ? t("placeholdersConnectionRequired") : status.error || t("maintenanceFailed"));
+      const values = Object.fromEntries(Object.entries(status).map(([key, value]) => [key, typeof value === "number" ? fmt(value) : value]));
+      if (kind !== "metadata") {
+        statusNode.dataset.i18n = status.state === "running" && !status.total ? "maintenanceRunning" : kind === "library" ? "auditProgress" : status.state === "running" ? "placeholdersProgress" : "placeholdersResult";
+        statusNode.dataset.i18nValues = JSON.stringify(values);
+      } else delete statusNode.dataset.i18n;
+      if (status.state === "running" && !status.total && kind !== "metadata") statusNode.textContent = t("maintenanceRunning");
+      else if (kind === "metadata") statusNode.textContent = `${t("repairMetadata")} · ${fmt(status.repaired)}/${fmt(status.processed)}`;
+      else statusNode.textContent = interpolate(t(kind === "library" ? "auditProgress" : status.state === "running" ? "placeholdersProgress" : "placeholdersResult"), Object.fromEntries(Object.entries(status).map(([key, value]) => [key, typeof value === "number" ? fmt(value) : value])));
+      if (status.state !== "running") {
+        statusNode.dataset.i18nSuffix = status.skipped || status.failed ? "maintenanceSkippedHint" : "maintenanceFinished";
+        statusNode.textContent += ` · ${t(statusNode.dataset.i18nSuffix)}`;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     }
-  }, 1500);
-  $("repairMetadata").disabled = true;
+  } catch (error) {
+    delete statusNode.dataset.i18n;
+    delete statusNode.dataset.i18nValues;
+    delete statusNode.dataset.i18nSuffix;
+    if (error.message === t("placeholdersConnectionRequired")) statusNode.dataset.i18n = "placeholdersConnectionRequired";
+    statusNode.classList.add("error");
+    statusNode.textContent = error.message;
+  } finally {
+    maintenanceTasks.delete(kind);
+    task.buttons.forEach((id) => { $(id).disabled = false; });
+  }
 }
 async function testConnection(kind) {
   const isAniRss = kind === "ani-rss",
@@ -5938,7 +6038,7 @@ async function loadHistory() {
           const destination = item.operation === "remove" ? item.backupPath : item.targetPath;
           const operation = item.state === "restored" ? t("historyRestored") : t({ move: "historyMove", rename: "historyRename", remove: "historyRemove" }[item.operation] || "historyMove");
           const restore = item.operation === "remove" && item.state === "applied"
-            ? `<button type="button" class="text-button restore-history" data-event="${item.eventId}">${t("restoreHistory")}</button>` : "";
+            ? `<button type="button" class="text-button restore-history" data-icon="refresh" data-event="${item.eventId}">${t("restoreHistory")}</button>` : "";
           return `<div class="log"><time>${esc(new Intl.DateTimeFormat(localeForLanguage(), { dateStyle: "short", timeStyle: "medium" }).format(new Date(item.createdAt)))}</time><b>${esc(operation)}</b><span>${esc(item.sourcePath || "—")}</span><small>→ ${esc(destination || "—")} · ${esc(fmt(item.bytes || 0))} B</small>${restore}</div>`;
         }).join("")
       : `<p class="muted">${t("noHistory")}</p>`;
@@ -5954,7 +6054,7 @@ async function loadWatches() {
   try {
     const r = await api(`/api/watches?language=${encodeURIComponent(language)}`);
     $("watchList").innerHTML = r.items.length
-      ? r.items.map((x) => `<div class="log"><b>${esc(x.title)}</b><span>${esc(sourceClassText(x.sourceClass))} · ${esc(x.resourceGroup || t("other"))} · ${esc(x.resolution ? `${x.resolution}p` : t("other"))} · ${esc(x.subtitle || t("other"))}</span><small>${esc(x.releaseUnit)} #${x.lastSequence} · ${x.pendingCount}</small><button type="button" class="text-button remove-watch" data-watch="${x.watchId}">${t("removeWatch")}</button></div>`).join("")
+      ? r.items.map((x) => `<div class="log"><b>${esc(x.title)}</b><span>${esc(sourceClassText(x.sourceClass))} · ${esc(x.resourceGroup || t("other"))} · ${esc(x.resolution ? `${x.resolution}p` : t("other"))} · ${esc(x.subtitle || t("other"))}</span><small>${esc(x.releaseUnit)} #${x.lastSequence} · ${x.pendingCount}</small><button type="button" class="text-button remove-watch" data-icon="remove" data-watch="${x.watchId}">${t("removeWatch")}</button></div>`).join("")
       : `<p class="muted">${t("noWatches")}</p>`;
     document.querySelectorAll(".remove-watch").forEach((button) => button.onclick = async () => {
       await api(`/api/watches/${button.dataset.watch}`, { method: "DELETE" });
@@ -6144,6 +6244,7 @@ function renderImagePreload(payload) {
   if (document.activeElement !== $("imagePreloadBandwidth")) $("imagePreloadBandwidth").value = Number(controls.bandwidthKiBps || 0);
   const paused = Boolean(controls.paused);
   $("toggleImagePreload").dataset.paused = paused ? "1" : "0";
+  $("toggleImagePreload").dataset.icon = paused ? "play" : "pause";
   $("toggleImagePreload").textContent = t(paused ? "resumePreload" : "pausePreload");
   $("imagePreloadStatus").textContent = paused ? t("preloadPaused")
     : payload?.state === "waiting_network" ? t("preloadWaitingNetwork")
@@ -6368,8 +6469,8 @@ function ensureEraYearOption(year) {
   option.dataset.generatedYear = "1";
   select.insertBefore(option, select.options[1] || null);
 }
-// Radar has independent filters and bounded pages; catalog selections stay intact.
-let radarSeason = 1, radarPage = 0, radarTimer, radarController, radarGeneration = 0;
+// Radar filters are independent from the catalog's filters and selections.
+let radarSeason = 1, radarTimer, radarController, radarGeneration = 0;
 let radarQuarterKey = "", radarSubscribeGeneration = 0, radarRefreshPending = false;
 let radarSort = "", radarDirection = "asc";
 const radarPendingSubscriptions = new Set();
@@ -6407,9 +6508,16 @@ function radarSeasons(now = new Date()) {
     return { year, season, ...seasonDateRange(year, season) };
   });
 }
-function radarSeasonLabel(season, index) {
+function radarSeasonLabel(season) {
   const key = "season" + season.season[0].toUpperCase() + season.season.slice(1);
-  return `${t(["radarPrevious", "radarCurrent", "radarNext"][index])} · ${season.year} ${t(key)}`;
+  return `${season.year} · ${t(key).replace(/\s*[（(].*$/, "")}`;
+}
+function updateRadarSeasonCount(button, season, count) {
+  if (!button || button.dataset.from !== season.from || !Number.isInteger(count) || count < 0) return;
+  button.dataset.count = String(count);
+  const countText = t("radarWorks").replace("{count}", fmt(count));
+  button.querySelector(".radar-season-count").textContent = language === "en" ? ` (${countText})` : `（${countText.replace(/ /g, "")}）`;
+  button.setAttribute("aria-label", `${t(["radarPrevious", "radarCurrent", "radarNext"][Number(button.dataset.season)])} · ${radarSeasonLabel(season)} · ${countText}`);
 }
 function renderRadarTable(markup) {
   const root = $("radarResults");
@@ -6442,6 +6550,7 @@ function radarHeader(sortKey, labelKey, className = "") {
 async function loadRadar() {
   if (!$("radarDialog").open) return;
   clearTimeout(radarTimer);
+  radarTimer = null;
   if (topModalDialog() !== $("radarDialog")) {
     radarRefreshPending = true;
     radarTimer = setTimeout(loadRadar, 30000);
@@ -6452,43 +6561,70 @@ async function loadRadar() {
   const controller = new AbortController(), generation = ++radarGeneration;
   radarController = controller;
   const seasons = radarSeasons(), quarterKey = seasons[1].from;
-  if (quarterKey !== radarQuarterKey) { radarQuarterKey = quarterKey; radarPage = 0; }
+  radarQuarterKey = quarterKey;
+  const previousCounts = seasons.map((item, index) => {
+    const button = $(`radarTab${index}`);
+    return button?.dataset.from === item.from && button.dataset.count !== undefined ? Number(button.dataset.count) : null;
+  });
   const tabsMarkup = seasons.map((item, index) =>
-    `<button id="radarTab${index}" class="tab ${index === radarSeason ? "active" : ""}" role="tab" aria-controls="radarPanel" aria-selected="${index === radarSeason}" tabindex="${index === radarSeason ? 0 : -1}" data-season="${index}">${esc(radarSeasonLabel(item, index))}</button>`).join("");
+    `<button id="radarTab${index}" class="tab ${index === radarSeason ? "active" : ""}" role="tab" aria-controls="radarPanel" aria-selected="${index === radarSeason}" aria-label="${esc(t(["radarPrevious", "radarCurrent", "radarNext"][index]) + " · " + radarSeasonLabel(item))}" tabindex="${index === radarSeason ? 0 : -1}" data-season="${index}" data-from="${item.from}"><span>${esc(radarSeasonLabel(item))}</span><span class="radar-season-count"></span></button>`).join("");
   if (renderedContents.get($("radarTabs")) !== tabsMarkup) {
     $("radarTabs").innerHTML = tabsMarkup;
     renderedContents.set($("radarTabs"), tabsMarkup);
   }
+  seasons.forEach((item, index) => updateRadarSeasonCount($(`radarTab${index}`), item, previousCounts[index]));
   $("radarPanel").setAttribute("aria-labelledby", `radarTab${radarSeason}`);
   $("radarTabs").querySelectorAll("button").forEach((button) => {
-    button.onclick = () => { radarSeason = Number(button.dataset.season); radarPage = 0; loadRadar(); };
+    button.onclick = () => { radarSeason = Number(button.dataset.season); loadRadar(); };
     button.onkeydown = (event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
       radarSeason = event.key === "Home" ? 0 : event.key === "End" ? 2 :
         (radarSeason + (event.key === "ArrowRight" ? 1 : 2)) % 3;
-      radarPage = 0; loadRadar(); $(`radarTab${radarSeason}`).focus();
+      loadRadar(); $(`radarTab${radarSeason}`).focus();
     };
   });
   const season = seasons[radarSeason];
+  // Count requests use the same view filters and do not delay the selected quarter.
+  seasons.forEach((item, index) => {
+    if (index === radarSeason) return;
+    const countQuery = new URLSearchParams({ radar: "1", language, start_from: item.from, start_to: item.to, limit: "1" });
+    api(`/api/anime?${countQuery}`, { signal: controller.signal }).then((data) => {
+      if (generation === radarGeneration && $("radarDialog").open && topModalDialog() === $("radarDialog"))
+        updateRadarSeasonCount($(`radarTab${index}`), item, data.total);
+    }).catch(() => {}); // Keep the previous count when this optional request fails.
+  });
   if (!$("radarResults").firstElementChild) $("radarStatus").textContent = t("radarLoading");
   $("radarResults").setAttribute("aria-busy", "true");
   try {
     const query = new URLSearchParams({ sort: radarSort || "recent_episode", direction: radarDirection,
       radar_grouped: radarSort ? "0" : "1", radar: "1", language, start_from: season.from,
-      start_to: season.to, limit: "50", offset: String(radarPage * 50) });
+      start_to: season.to, limit: "all" });
     const [data, scan] = await Promise.all([
       api(`/api/anime?${query}`, { signal: controller.signal }),
       api("/api/ani-rss/season-search", { signal: controller.signal }),
     ]);
     if (generation !== radarGeneration || !$("radarDialog").open) return;
     if (topModalDialog() !== $("radarDialog")) { radarRefreshPending = true; return; }
-    if (radarPage && radarPage * 50 >= data.total) { radarPage = 0; return loadRadar(); }
     const available = data.recentEpisodeSortAvailable;
     $("radarSearch").disabled = !available || scan.state === "running";
+    $("radarSync").disabled = !available || scan.state === "running";
+    const searchLabel = $("radarSearch").querySelector("[data-i18n]");
+    searchLabel.dataset.i18n = scan.failed && scan.state !== "running" ? "radarRetryShort" : "radarSearchShort";
+    searchLabel.textContent = t(searchLabel.dataset.i18n);
+    $("radarSearch").title = t(scan.failed && scan.state !== "running" ? "radarRetry" : "radarSearch");
+    $("radarSearchProgress").hidden = scan.state !== "running";
+    if (scan.total && scan.phase !== "sync") {
+      $("radarSearchProgress").max = scan.total;
+      $("radarSearchProgress").value = scan.done || 0;
+    } else $("radarSearchProgress").removeAttribute("value");
     $("radarSearchStatus").textContent = scan.state === "idle" ? "" :
-      `${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "failed" || scan.state === "interrupted" ? ` · ${t("failed")}` : ""}`;
+      scan.state === "running" && scan.phase === "sync" ? t("radarSyncing") :
+      `${t(scan.state === "complete" ? "radarComplete" : scan.state === "running" ? "radarChecking" : "failed")} · ${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "running" && scan.currentTitle ? ` · ${scan.currentTitle}` : ""}${scan.error ? ` · ${scan.error}` : ""}`;
+    $("radarSearchStatus").title = $("radarSearchStatus").textContent;
+    updateRadarSeasonCount($(`radarTab${radarSeason}`), season, data.total);
     $("radarStatus").textContent = available ? "" : t("recentEpisodeRequiresAniRss");
+    if (scan.state === "running") radarTimer = setTimeout(loadRadar, 2000);
     renderRadarTable(data.items.length ? `<table class="data-table radar-table"><thead><tr>
       ${radarHeader("title", "radarTitleColumn")}${radarHeader("type", "radarMediaType", "radar-media")}${radarHeader("premiere", "radarStart", "radar-start")}${radarHeader("progress", "radarProgress")}${radarHeader("subscription", "radarSubscription")}${radarHeader("updated", "radarUpdated")}
       </tr></thead><tbody>${data.items.map((item) => {
@@ -6498,7 +6634,7 @@ async function loadRadar() {
         const stamp = item.last_episode_update_at ? new Date(item.last_episode_update_at) : null;
         const subscription = pending ? esc(t("radarSubscriptionPending")) : state === "active" ?
           `<span class="radar-subscribed">${t("radarSubscribed")}</span>` : state === "paused" ? esc(t("radarPaused")) :
-          `<button class="text-button" data-subscribe="${item.id}" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("radarSubscribe")}</button>`;
+          `<button class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("radarSubscribe")}</button>`;
         const updateToken = radarUpdateToken(item), seenKey = radarSeenKey(item);
         return `<tr data-radar-id="${item.id}" data-radar-seen-key="${esc(seenKey)}" data-radar-update="${esc(updateToken)}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}"><td><button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button></td>
           <td class="radar-media" data-label="${esc(t("radarMediaType"))}">${esc(label("media", item.media_code))}</td>
@@ -6511,7 +6647,6 @@ async function loadRadar() {
         const column = button.dataset.radarSort;
         radarDirection = radarSort === column && radarDirection === "asc" ? "desc" : "asc";
         radarSort = column;
-        radarPage = 0;
         loadRadar();
       };
     });
@@ -6524,16 +6659,13 @@ async function loadRadar() {
     $("radarResults").querySelectorAll("[data-subscribe]").forEach((b) => {
       b.onclick = () => openRadarSubscription(Number(b.dataset.subscribe));
     });
-    $("radarPage").textContent = `${data.total ? radarPage + 1 : 0} / ${Math.ceil(data.total / 50)}`;
-    $("radarPrev").disabled = radarPage === 0;
-    $("radarNext").disabled = (radarPage + 1) * 50 >= data.total;
   } catch (error) {
     if (generation === radarGeneration && !controller.signal.aborted) {
       $("radarStatus").textContent = `${t("failed")}: ${error.message}`;
     }
   } finally {
     if (generation === radarGeneration) $("radarResults").removeAttribute("aria-busy");
-    if (generation === radarGeneration && $("radarDialog").open)
+    if (generation === radarGeneration && $("radarDialog").open && !radarTimer)
       radarTimer = setTimeout(loadRadar, 30000);
   }
 }
@@ -6546,12 +6678,15 @@ async function openRadarSubscription(animeId) {
   $("radarSubscribeSubmit").disabled = true;
   $("radarSubscribeForm").dataset.animeId = String(animeId);
   $("radarSubscribeStatus").textContent = t("radarLoading");
+  $("radarSubscribeWork").textContent = "";
+  $("radarSubscribeSubmit").textContent = t("radarSubscribe");
   showModalDialog(dialog);
   try {
     let detail = await api(`/api/anime/${animeId}?language=${encodeURIComponent(language)}`);
     if (!active()) return;
-    const eligible = (value) => (value.ani_rss?.resources || []).filter((r) => r.eligible && r.kind === "follow");
-    if (!eligible(detail).length) {
+    $("radarSubscribeWork").textContent = preferred(detail);
+    const follow = (value) => (value.ani_rss?.resources || []).filter((r) => r.kind === "follow");
+    if (!follow(detail).length) {
       const existingJob = await api(`/api/anime/${animeId}/ani-rss/search`);
       if (existingJob.state !== "running") {
         try {
@@ -6573,30 +6708,38 @@ async function openRadarSubscription(animeId) {
       detail = await api(`/api/anime/${animeId}?language=${encodeURIComponent(language)}`);
     }
     if (!active()) return;
-    const resources = eligible(detail);
+    const resources = follow(detail);
     $("radarResource").innerHTML = resources.map((r) =>
-      `<option value="${esc(r.resourceId)}">${esc([r.title, r.resolution ? r.resolution + "p" : ""].filter(Boolean).join(" · "))}</option>`).join("");
-    $("radarSubscribeStatus").textContent = resources.length ? t("radarSubscribeHint") : t("radarNoResources");
-    $("radarSubscribeSubmit").disabled = !resources.length;
+      `<option value="${esc(r.resourceId)}" ${r.eligible ? "" : "disabled"}>${esc([r.title, r.resolution ? r.resolution + "p" : "", !r.eligible ? t("radarPolicyExcluded") : ""].filter(Boolean).join(" · "))}</option>`).join("");
+    const selectedResource = resources.find((r) => r.eligible);
+    if (selectedResource) $("radarResource").value = selectedResource.resourceId;
+    $("radarSubscribeStatus").textContent = selectedResource ? t("radarSubscribeHint") : resources.length ? t("radarPolicyExcluded") : t("radarNoResources");
+    $("radarSubscribeSubmit").disabled = !selectedResource;
   } catch (error) {
     if (active()) $("radarSubscribeStatus").textContent = error.message;
   }
 }
-$("radarButton").onclick = () => { radarSeason = 1; radarPage = 0; showModalDialog($("radarDialog")); loadRadar(); };
-$("radarSearch").onclick = async () => {
+$("radarButton").onclick = () => { radarSeason = 1; showModalDialog($("radarDialog")); loadRadar(); };
+async function startRadarSearch(synchronize = false) {
   $("radarSearch").disabled = true;
+  $("radarSync").disabled = true;
+  $("radarSearchStatus").textContent = t(synchronize ? "radarSyncing" : "radarChecking");
+  $("radarSearchProgress").hidden = false;
+  $("radarSearchProgress").removeAttribute("value");
   try {
-    const season = radarSeasons()[1];
-    await api("/api/ani-rss/season-search", { method: "POST", body: JSON.stringify({ from: season.from, to: season.to, language }) });
-    radarSeason = 1; radarPage = 0;
+    const season = radarSeasons()[synchronize ? radarSeason : 1];
+    await api("/api/ani-rss/season-search", { method: "POST", body: JSON.stringify({ from: season.from, to: season.to, language, synchronize }) });
+    if (!synchronize) radarSeason = 1;
     await loadRadar();
   } catch (error) {
     $("radarSearchStatus").textContent = `${t("failed")}: ${error.message}`;
     $("radarSearch").disabled = false;
+    $("radarSync").disabled = false;
+    $("radarSearchProgress").hidden = true;
   }
-};
-$("radarPrev").onclick = () => { radarPage = Math.max(0, radarPage - 1); loadRadar(); };
-$("radarNext").onclick = () => { radarPage++; loadRadar(); };
+}
+$("radarSearch").onclick = () => startRadarSearch();
+$("radarSync").onclick = () => startRadarSearch(true);
 $("radarDialog").addEventListener("close", () => { clearTimeout(radarTimer); radarController?.abort(); radarGeneration++; });
 $("radarSubscribeDialog").addEventListener("close", () => { radarSubscribeGeneration++; });
 $("radarSubscribeForm").onsubmit = async (event) => {
@@ -6607,6 +6750,8 @@ $("radarSubscribeForm").onsubmit = async (event) => {
   const generation = radarSubscribeGeneration;
   radarSubmittingSubscriptions.add(animeId);
   button.disabled = true;
+  button.textContent = t("radarSubmitting");
+  $("radarSubscribeStatus").textContent = t("radarSubmittingHint");
   $("radarResource").disabled = true;
   try {
     await api(`/api/ani-rss/resources/${encodeURIComponent(resource)}/subscribe`, { method: "POST", timeoutMs: 240000 });
@@ -6622,9 +6767,11 @@ $("radarSubscribeForm").onsubmit = async (event) => {
       $("radarSubscribeStatus").textContent = error.message;
       button.disabled = false;
     }
+    $("radarSearchStatus").textContent = `${t("failed")}: ${error.message}`;
   } finally {
     radarSubmittingSubscriptions.delete(animeId);
     if (generation === radarSubscribeGeneration) $("radarResource").disabled = false;
+    if (generation === radarSubscribeGeneration) button.textContent = t("radarSubscribe");
     loadRadar();
   }
 };
@@ -6735,6 +6882,7 @@ function updateViewToggle() {
   const button = $("viewToggle");
   if (!button) return;
   const key = view === "cards" ? "table" : "cards";
+  button.dataset.icon = view === "cards" ? "table" : "group";
   button.textContent = t(key);
   button.title = t(key);
   button.setAttribute("aria-label", t(key));
@@ -6790,7 +6938,7 @@ async function loadUsers() {
         !user.enabled ? `<span class="user-badge disabled">${esc(t("disabledUser"))}</span>` : "",
       ].join("");
       const initial = String(user.username || "?").slice(0, 1);
-      return `<div class="user-row"><div class="user-summary"><span class="user-avatar" aria-hidden="true">${esc(initial)}</span><span class="user-identity"><b>${esc(user.username)}</b><small>${esc(t(user.role === "admin" ? "administrator" : "normalUser"))}</small></span></div><span class="user-badges">${badges}</span><button type="button" class="text-button toggle-user" data-user-id="${user.id}" data-enabled="${user.enabled ? "1" : "0"}" ${current ? "disabled" : ""}>${esc(t(user.enabled ? "disableUser" : "enableUser"))}</button></div>`;
+      return `<div class="user-row"><div class="user-summary"><span class="user-avatar" aria-hidden="true">${esc(initial)}</span><span class="user-identity"><b>${esc(user.username)}</b><small>${esc(t(user.role === "admin" ? "administrator" : "normalUser"))}</small></span></div><span class="user-badges">${badges}</span><button type="button" class="text-button toggle-user" data-icon="user" data-user-id="${user.id}" data-enabled="${user.enabled ? "1" : "0"}" ${current ? "disabled" : ""}>${esc(t(user.enabled ? "disableUser" : "enableUser"))}</button></div>`;
     }).join("") || `<p class="user-empty">${esc(t("noUsers"))}</p>`;
     $("userList").querySelectorAll(".toggle-user").forEach((button) => {
       button.onclick = async () => {
@@ -7088,6 +7236,11 @@ document.querySelectorAll(".settings-tabs .tab").forEach(
         .querySelectorAll(".settings-tabs .tab,.tab-panel")
         .forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
+      document.querySelectorAll(".settings-tabs .tab").forEach((tab) => {
+        tab.setAttribute("aria-selected", String(tab === b));
+        tab.tabIndex = tab === b ? 0 : -1;
+      });
+      b.scrollIntoView({ block: "nearest", inline: "nearest" });
       document
         .querySelector(`[data-panel="${b.dataset.tab}"]`)
         .classList.add("active");
@@ -7100,6 +7253,15 @@ document.querySelectorAll(".settings-tabs .tab").forEach(
       if (b.dataset.tab === "updates") loadApplicationUpdate();
     }),
 );
+document.querySelector(".settings-tabs").onkeydown = (event) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key) || !event.target.matches(".tab")) return;
+  event.preventDefault();
+  const tabs = [...document.querySelectorAll(".settings-tabs .tab")].filter((tab) => !tab.hidden);
+  const current = tabs.indexOf(event.target);
+  const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 :
+    (current + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+  tabs[index].click(); tabs[index].focus({ preventScroll: true });
+};
 $("recheckNetwork").onclick = async () => {
   const button = $("recheckNetwork");
   button.disabled = true;
@@ -7136,11 +7298,10 @@ $("updateArchive").onclick = () =>
   );
 $("importArchive").onclick = () => $("archiveFile").click();
 $("archiveFile").onchange = () => importArchive($("archiveFile").files[0]).catch((e) => ($("archiveStatus").textContent = e.message));
-$("auditLibrary").onclick = async () => {
-  await api("/api/library/audit", { method: "POST" });
-  $("maintenanceStatus").textContent = t("auditStarted");
-};
-$("repairMetadata").onclick = () => runMaintenance("metadata").catch((e) => ($("maintenanceStatus").textContent = e.message));
+$("auditLibrary").onclick = () => runMaintenance("library");
+$("createPlaceholders").onclick = () => runMaintenance("placeholders");
+$("radarPlaceholders").onclick = () => runMaintenance("placeholders", "radar");
+$("repairMetadata").onclick = () => runMaintenance("metadata");
 $("settingsForm").onsubmit = (e) =>
   saveSettings(e).catch((x) => ($("saveState").textContent = x.message));
 $("testQbt").onclick = () => testConnection("qbittorrent");

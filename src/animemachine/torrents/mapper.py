@@ -67,6 +67,51 @@ def series_title(rows: list[sqlite3.Row]) -> str:
     return library_layout.franchise_title([dict(row) for row in rows])
 
 
+def work_target(anime: sqlite3.Row, component: list[sqlite3.Row], aliases_by_id: dict[int, list[str]],
+                path_index: library_layout.ExistingPathIndex, config: dict[str, Any], *,
+                evidence_titles: list[str] | None = None) -> dict[str, Any]:
+    """Plan the same canonical target for subscriptions and Torrent mapping."""
+    root = str(config["deployment"]["libraryUncRoot"])
+    aliases = aliases_by_id.get(int(anime["id"]), [])
+    observed = evidence_titles or []
+    existing = path_index.resolve(date_code(anime["start_month"]), str(anime["title_ja"]), aliases,
+                                  reject_ambiguous=True)
+    title = library_layout.compound_title_from_evidence(
+        str(anime["title_ja"]), aliases, observed, existing["title"] if existing else None)
+    work_dir = library_layout.format_work_directory(config["naming"]["workTemplate"],
+                                                    date=date_code(anime["start_month"]), title=title)
+    series_path = None
+    if existing:
+        target = str(existing["path"])
+        work_dir = Path(target).name
+        series_path = str(existing["series"]) if existing["series"] else None
+    elif len(component) > 1:
+        existing_series = set()
+        for member in component:
+            match = path_index.resolve(date_code(member["start_month"]), str(member["title_ja"]),
+                                       aliases_by_id.get(int(member["id"]), []), reject_ambiguous=True)
+            if match and match["series"] is not None:
+                existing_series.add(str(match["series"]))
+        if len(existing_series) > 1:
+            raise ValueError("related works have multiple library series directories")
+        if existing_series:
+            series_path = existing_series.pop()
+        else:
+            known = [date_code(member["start_month"]) for member in component
+                     if re.fullmatch(r"\d{4}-\d{2}", str(member["start_month"] or ""))]
+            first, last = (min(known), max(known)) if known else ("20XX_XX", "20XX_XX")
+            root_work = library_layout.choose_franchise_root([dict(member) for member in component])
+            title = library_layout.compound_title_from_evidence(
+                series_title(component), aliases_by_id.get(int(root_work["id"]), []), observed)
+            series_dir = library_layout.format_series_directory(
+                config["naming"]["seriesTemplate"], start=first, end=last, title=title)
+            series_path = join_root(root, series_dir)
+        target = join_root(series_path, work_dir)
+    else:
+        target = join_root(root, work_dir)
+    return {"target": target, "directory": work_dir, "series": series_path, "existing": existing}
+
+
 def auto_map(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
              progress: Callable[[dict[str, int]], None] | None = None,
              commit_every: int = 250,
@@ -98,7 +143,6 @@ def auto_map(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
     stamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
     stats = {"examined": 0, "mapped": 0, "review": 0, "partial": 0}
     component_cache: dict[int, list[sqlite3.Row]] = {}
-    existing_target_cache: dict[int, dict[str, Any] | None] = {}
     for torrent in torrent_rows:
         stats["examined"] += 1
         name = str(torrent["info_name"] or Path(torrent["torrent_path"]).stem)
@@ -159,45 +203,18 @@ def auto_map(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
             component = relation_component(meta, anime_id)
             for member in component:
                 component_cache[int(member["id"])] = component
-        aliases = aliases_by_id.get(anime_id, [])
-        if anime_id not in existing_target_cache:
-            existing_target_cache[anime_id] = path_index.resolve(
-                date_code(anime["start_month"]), str(anime["title_ja"]), aliases)
-        existing_target = existing_target_cache[anime_id]
-        directory_title = library_layout.compound_title_from_evidence(
-            str(anime["title_ja"]), aliases, [*observed_names, *title_queries], existing_target["title"] if existing_target else None)
-        work_dir = library_layout.format_work_directory(
-            config["naming"]["workTemplate"], date=date_code(anime["start_month"]), title=directory_title)
-        series_path = None
-        if existing_target:
-            target = str(existing_target["path"])
-            work_dir = Path(target).name
-            series_path = str(existing_target["series"]) if existing_target["series"] else None
-        elif len(component) > 1:
-            existing_series = set()
-            for row in component:
-                member_id = int(row["id"])
-                if member_id not in existing_target_cache:
-                    existing_target_cache[member_id] = path_index.resolve(
-                        date_code(row["start_month"]), str(row["title_ja"]), aliases_by_id.get(member_id, []))
-                match = existing_target_cache[member_id]
-                if match and match["series"] is not None:
-                    existing_series.add(str(match["series"]))
-            known = [date_code(row["start_month"]) for row in component if re.fullmatch(r"\d{4}-\d{2}", str(row["start_month"] or ""))]
-            span = f"{min(known)}－{max(known)}" if known else "20XX_XX－20XX_XX"
-            if len(existing_series) == 1:
-                series_path = existing_series.pop()
-            else:
-                root_work = library_layout.choose_franchise_root([dict(row) for row in component])
-                root_aliases = aliases_by_id.get(int(root_work["id"]), [])
-                title = library_layout.compound_title_from_evidence(series_title(component), root_aliases, [*observed_names, *title_queries])
-                series_dir = library_layout.format_series_directory(
-                    config["naming"]["seriesTemplate"], start=span.split("－")[0],
-                    end=span.split("－")[1], title=title)
-                series_path = join_root(root, series_dir)
-            target = join_root(series_path, work_dir)
-        else:
-            target = join_root(root, work_dir)
+        try:
+            planned = work_target(anime, component, aliases_by_id, path_index, config,
+                                  evidence_titles=[*observed_names, *title_queries])
+        except ValueError as exc:
+            runtime.execute("UPDATE torrent SET title_state='review' WHERE info_hash=?", (torrent["info_hash"],))
+            runtime.execute("INSERT OR REPLACE INTO title_review(info_hash,reason_codes_json,candidate_json,evidence_json,reviewed_at) VALUES(?,?,?,?,?)",
+                            (torrent["info_hash"], json.dumps(["ambiguous_library_path"]), json.dumps([anime_id]),
+                             json.dumps({"reason": str(exc)}), stamp))
+            stats["review"] += 1
+            continue
+        target, work_dir, series_path = planned["target"], planned["directory"], planned["series"]
+        existing_target = planned["existing"]
         evidence = json.dumps({"bangumiSubjectId": anime["bgm_id"], "method": "unique_exact_archive_title", "automated": True}, ensure_ascii=False)
         existing = runtime.execute("SELECT work_id FROM anime_work WHERE target_unc=?", (target,)).fetchone()
         if existing:

@@ -22,9 +22,9 @@
             <option value="en">English</option>
             <option value="ja">日本語</option>
           </select>
-          <button id="viewToggle" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格" data-i18n-aria-label="table" data-i18n-title="table">表格</button>
-          <button id="settingsButton" class="tool" data-i18n="settings" hidden>设置</button>
-          <button id="authButton" class="tool" data-i18n="logout" hidden>退出</button>
+          <button id="viewToggle" data-icon="table" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格" data-i18n-aria-label="table" data-i18n-title="table">表格</button>
+          <button id="settingsButton" data-icon="settings" class="tool" data-i18n="settings" hidden>设置</button>
+          <button id="authButton" data-icon="exit" class="tool" data-i18n="logout" hidden>退出</button>
         </div>
       </div>
       <div class="status-row">
@@ -48,7 +48,7 @@
         <div class="title-filter">
           <div class="title-filter-heading">
             <label for="q" data-i18n="titleAlias">标题 / 别名</label>
-            <button id="reset" class="text-button" data-i18n="resetAll">
+            <button id="reset" data-icon="refresh" class="text-button" data-i18n="resetAll">
               重置全部
             </button>
           </div>
@@ -191,13 +191,13 @@
           </div>
           <div class="catalog-controls">
             <button
-              id="reshuffle"
+              id="reshuffle" data-icon="shuffle"
               class="text-button reshuffle"
               data-i18n="reshuffle"
             >
               重新随机
             </button>
-            <button id="radarButton" class="text-button radar-button" type="button" data-i18n="radar" hidden>新作雷达</button>
+            <button id="radarButton" data-icon="radar" class="text-button radar-button" type="button" data-i18n="radar" hidden>新作雷达</button>
             <label class="inline"
               ><span data-i18n="sortBy">排序</span
               ><select id="sort">
@@ -251,8 +251,8 @@
         ><b id="selectionCount">0</b>
         <span data-i18n="selectedWorks">部作品已选择</span></span
       >
-      <button id="clearSelection" class="tool" data-i18n="clear">清空</button>
-      <button id="createPlan" class="primary" data-i18n="previewPlan">
+      <button id="clearSelection" data-icon="remove" class="tool" data-i18n="clear">清空</button>
+      <button id="createPlan" data-icon="download" class="primary" data-i18n="previewPlan">
         开始下载
       </button>
     </div>
@@ -263,20 +263,21 @@
       <div class="radar-shell">
         <div class="radar-heading">
           <h2 id="radarTitle" data-i18n="radar">新作雷达</h2>
-          <button id="radarSearch" class="text-button radar-button" type="button" data-i18n="radarSearch">检索本季度资源</button>
+          <div class="radar-actions">
+            <button id="radarSync" class="text-button radar-button" type="button" data-i18n-title="radarSync" data-i18n-aria-label="radarSync"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1a8 8 0 0 1 13.2 3.2M17.9 17.9A8 8 0 0 1 4.7 14.7"/></svg><span data-i18n="radarSyncShort">同步状态</span></button>
+            <button id="radarSearch" class="text-button radar-button" type="button" data-i18n-title="radarSearch" data-i18n-aria-label="radarSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span data-i18n="radarSearchShort">检索资源</span></button>
+            <button id="radarPlaceholders" class="text-button radar-button" type="button" data-admin-only data-i18n-title="createPlaceholders" data-i18n-aria-label="createPlaceholders"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3zM12 11v6M9 14h6"/></svg><span data-i18n="radarFoldersShort">建立目录</span></button>
+          </div>
         </div>
         <div class="radar-toolbar">
+          <progress id="radarSearchProgress" hidden aria-label="Search progress" data-i18n-aria-label="radarTaskProgress"></progress>
           <span id="radarSearchStatus" class="muted" role="status" aria-live="polite"></span>
+          <span id="radarPlaceholderStatus" class="muted" role="status" aria-live="polite"></span>
         </div>
         <div id="radarTabs" class="radar-tabs" role="tablist" data-i18n-aria-label="season"></div>
         <div id="radarPanel" class="radar-panel" role="tabpanel" tabindex="0">
           <p id="radarStatus" class="muted" role="status"></p>
           <div id="radarResults" class="table-wrap"></div>
-        </div>
-        <div class="pager">
-          <button id="radarPrev" class="text-button" type="button" data-i18n="previous">上一页</button>
-          <span id="radarPage" class="muted"></span>
-          <button id="radarNext" class="text-button" type="button" data-i18n="next">下一页</button>
         </div>
       </div>
     </dialog>
@@ -284,9 +285,10 @@
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="radarSubscribeForm">
         <h2 id="radarSubscribeTitle" data-i18n="radarSubscribe">订阅</h2>
+        <p id="radarSubscribeWork" class="subscription-work"></p>
         <p id="radarSubscribeStatus" class="muted" role="status"></p>
         <label><span data-i18n="radarChooseResource">选择订阅资源</span><select id="radarResource" required></select></label>
-        <button id="radarSubscribeSubmit" class="primary" type="submit" data-i18n="radarSubscribe" disabled>订阅</button>
+        <button id="radarSubscribeSubmit" data-icon="subscribe" class="primary" type="submit" data-i18n="radarSubscribe" disabled>订阅</button>
       </form>
     </dialog>
     <dialog id="detailDialog">
@@ -315,53 +317,54 @@
     <dialog id="settingsDialog">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="settingsForm">
-        <nav class="settings-tabs" aria-label="Settings sections" data-i18n-aria-label="settingsSectionsLabel">
+        <h2 data-i18n="settings">设置</h2>
+        <nav role="tablist" class="settings-tabs" aria-label="Settings sections" data-i18n-aria-label="settingsSectionsLabel">
           <button
             type="button"
             class="tab active"
-            data-tab="general"
+            data-tab="general" data-icon="settings" id="settingsTab-general" role="tab" aria-controls="settingsPanel-general" aria-selected="true" tabindex="0"
             data-i18n="generalTab"
           >
             常规</button
           ><button
             type="button"
             class="tab"
-            data-tab="priority"
+            data-tab="priority" data-icon="sort" id="settingsTab-priority" role="tab" aria-controls="settingsPanel-priority" aria-selected="false" tabindex="-1"
             data-i18n="resourcePriorityTab"
           >
             资源优先级</button
           ><button
             type="button"
             class="tab"
-            data-tab="groups"
+            data-tab="groups" data-icon="group" id="settingsTab-groups" role="tab" aria-controls="settingsPanel-groups" aria-selected="false" tabindex="-1"
             data-i18n="resourceGroupsTab"
           >
             资源组</button
           ><button
             type="button"
             class="tab"
-            data-tab="connections"
+            data-tab="connections" data-icon="link" id="settingsTab-connections" role="tab" aria-controls="settingsPanel-connections" aria-selected="false" tabindex="-1"
             data-i18n="connectionsTab"
           >
             连接</button
           ><button
             type="button"
             class="tab"
-            data-tab="diagnostics"
+            data-tab="diagnostics" data-icon="activity" id="settingsTab-diagnostics" role="tab" aria-controls="settingsPanel-diagnostics" aria-selected="false" tabindex="-1"
             data-i18n="diagnosticsTab"
           >
             诊断
           </button><button
             type="button"
             class="tab"
-            data-tab="subscriptions"
+            data-tab="subscriptions" data-icon="subscribe" id="settingsTab-subscriptions" role="tab" aria-controls="settingsPanel-subscriptions" aria-selected="false" tabindex="-1"
             data-i18n="subscriptionsTab"
           >
             订阅
           </button><button
             type="button"
             class="tab"
-            data-tab="users"
+            data-tab="users" data-icon="user" id="settingsTab-users" role="tab" aria-controls="settingsPanel-users" aria-selected="false" tabindex="-1"
             data-admin-only
             data-i18n="usersTab"
           >
@@ -369,57 +372,58 @@
           </button><button
             type="button"
             class="tab"
-            data-tab="logs"
+            data-tab="logs" data-icon="list" id="settingsTab-logs" role="tab" aria-controls="settingsPanel-logs" aria-selected="false" tabindex="-1"
             data-i18n="logsTab"
           >
             日志
           </button><button
             type="button"
             class="tab"
-            data-tab="history"
+            data-tab="history" data-icon="history" id="settingsTab-history" role="tab" aria-controls="settingsPanel-history" aria-selected="false" tabindex="-1"
             data-i18n="historyTab"
           >
             历史记录
           </button><button
             type="button"
             class="tab"
-            data-tab="updates"
+            data-tab="updates" data-icon="download" id="settingsTab-updates" role="tab" aria-controls="settingsPanel-updates" aria-selected="false" tabindex="-1"
             data-i18n="updateTab"
           >
             检查更新
           </button><button
             type="button"
             class="tab"
-            data-tab="about"
+            data-tab="about" data-icon="info" id="settingsTab-about" role="tab" aria-controls="settingsPanel-about" aria-selected="false" tabindex="-1"
             data-i18n="aboutTitle"
           >
             关于 AnimeMachine
-          </button><span id="saveState" class="settings-save-state muted"></span><button
-            type="submit"
-            class="primary settings-save"
-            data-i18n="save"
-          >保存</button>
+          </button>
         </nav>
-        <section class="tab-panel active" data-panel="general">
-          <p class="muted" data-i18n="settingsHint">
-            这里修改运行配置；凭据不会写入此文件。
-          </p>
+        <section class="tab-panel active" data-panel="general" id="settingsPanel-general" role="tabpanel" aria-labelledby="settingsTab-general" tabindex="0">
+          <p class="muted" data-i18n="settingsHint">修改后点击“保存”生效。</p>
           <fieldset class="system-health" data-admin-only>
             <legend data-i18n="systemHealth">系统健康</legend>
             <div id="systemHealthSummary" class="system-health-summary muted" data-i18n="healthLoading">正在汇总运行状态…</div>
             <div id="systemHealthItems" class="system-health-items"></div>
-            <p class="explain" data-i18n="systemHealthHint">这里只汇总关键状态；网络、预加载和播放链路的详细信息仍在“诊断”页。</p>
+            <p class="explain" data-i18n="systemHealthHint">网络、图片和播放详情可在“诊断”中查看。</p>
           </fieldset>
           <fieldset>
             <legend data-i18n="catalogData">目录数据</legend>
             <div class="maintenance-grid">
-              <button id="updateArchive" type="button" class="maintenance-action"><b><span data-i18n="updateArchive">检查并更新底库</span><span id="archiveStatus" class="maintenance-inline-status"></span></b><small data-i18n="updateArchiveHint">检查新版底包，仅合并发生变化的资料。</small></button>
-              <button id="importArchive" type="button" class="maintenance-action"><b data-i18n="importArchive">导入已下载的底包</b><small data-i18n="importArchiveHint">离线导入 Bangumi Archive ZIP；将自动核验文件信息。</small></button>
+              <button id="updateArchive" data-icon="refresh" type="button" class="maintenance-action"><b><span data-i18n="updateArchive">检查并更新底库</span><span id="archiveStatus" class="maintenance-inline-status"></span></b><small data-i18n="updateArchiveHint">检查新版底包，仅合并发生变化的资料。</small></button>
+              <button id="importArchive" data-icon="upload" type="button" class="maintenance-action"><b data-i18n="importArchive">导入已下载的底包</b><small data-i18n="importArchiveHint">离线导入 Bangumi Archive ZIP；将自动核验文件信息。</small></button>
               <input id="archiveFile" type="file" accept=".zip,application/zip" hidden />
-              <button id="repairMetadata" type="button" class="maintenance-action"><b data-i18n="repairMetadata">检查并补全作品资料</b><small data-i18n="repairMetadataHint">批量补充本地缺失或明显异常的元数据。</small></button>
-              <button id="auditLibrary" type="button" class="maintenance-action"><b data-i18n="auditLibrary">核验全部本地资源</b><small data-i18n="auditLibraryHint">分批核验文件，并在后台更新收藏完整度。</small></button>
+              <button id="repairMetadata" data-icon="check" type="button" class="maintenance-action"><b data-i18n="repairMetadata">检查并补全作品资料</b><small data-i18n="repairMetadataHint">批量补充本地缺失或明显异常的元数据。</small></button>
             </div>
             <div id="maintenanceStatus" class="maintenance-status muted"></div>
+          </fieldset>
+          <fieldset data-admin-only>
+            <legend data-i18n="library">收藏库</legend>
+            <div class="maintenance-grid">
+              <button id="createPlaceholders" data-icon="folder" type="button" class="maintenance-action"><b data-i18n="createPlaceholders">建立订阅目录</b><small data-i18n="createPlaceholdersHint">为已订阅作品建立占位目录，沿用本地库已有目录。</small></button>
+              <button id="auditLibrary" data-icon="check" type="button" class="maintenance-action"><b data-i18n="auditLibrary">核验全部本地资源</b><small data-i18n="auditLibraryHint">分批核验文件，并在后台更新收藏完整度。</small></button>
+            </div>
+            <div id="libraryMaintenanceStatus" class="maintenance-status muted" role="status" aria-live="polite"></div>
           </fieldset>
           <fieldset>
             <legend data-i18n="automation">自动化与容量</legend>
@@ -457,13 +461,13 @@
           >
 </div>
         </section>
-        <section class="tab-panel" data-panel="priority">
+        <section class="tab-panel" data-panel="priority" id="settingsPanel-priority" role="tabpanel" aria-labelledby="settingsTab-priority" tabindex="0">
           <p class="muted" data-i18n="priorityHint">
             先比较排在前面的维度；点击维度可展开并调整其内部顺序。
           </p>
           <ol id="strategyOrder" class="priority-tree"></ol>
         </section>
-        <section class="tab-panel" data-panel="groups">
+        <section class="tab-panel" data-panel="groups" id="settingsPanel-groups" role="tabpanel" aria-labelledby="settingsTab-groups" tabindex="0">
           <p class="muted" data-i18n="resourceGroupsHint">
             收藏类资源不检查字幕；连载类资源按选定语言匹配资源组与字幕标记。
           </p>
@@ -481,7 +485,7 @@
           </div>
           <label class="check other-groups"><input id="otherGroupsEnabled" type="checkbox"><span data-i18n="otherResourceGroups">其它（未识别或不符合上述规则）</span></label>
         </section>
-        <section class="tab-panel" data-panel="connections">
+        <section class="tab-panel" data-panel="connections" id="settingsPanel-connections" role="tabpanel" aria-labelledby="settingsTab-connections" tabindex="0">
           <p class="muted" data-i18n="connectionHint">
             Compose 部署会以服务名覆盖回环地址；持久凭据从 .env 环境变量读取。
           </p>
@@ -503,9 +507,9 @@
             ><label
               ><span data-i18n="torrentPoolPath">Torrent 池路径</span
               ><input id="torrentPoolPath" type="text" /></label
-            ><p class="explain" data-i18n="torrentPoolHint">AnimeMachine 只监视此目录中的种子文件；种子由用户或外部工具自行放入。</p>
+            ><p class="explain" data-i18n="torrentPoolHint">将 .torrent 文件放入此目录，AnimeMachine 会自动读取。</p>
             <button
-              id="testQbt"
+              id="testQbt" data-icon="link"
               type="button"
               class="tool dark-tool"
               data-i18n="testConnection"
@@ -526,7 +530,7 @@
             <label><span data-i18n="aniRssMediaPath">Ani-RSS 媒体路径</span><input id="aniRssMediaPath" type="text" /></label>
             <label><span data-i18n="aniRssSyncMinutes">状态同步间隔（分钟）</span><input id="aniRssSyncMinutes" type="number" min="5" /></label>
             <p class="explain" data-i18n="aniRssHint">连接无效时自动按“手动调用”运行；连接恢复后使用所选模式。媒体目录始终只读。</p>
-            <button id="testAniRss" type="button" class="tool dark-tool" data-i18n="testConnection">测试连接</button><span id="aniRssState" class="muted"></span>
+            <button id="testAniRss" data-icon="link" type="button" class="tool dark-tool" data-i18n="testConnection">测试连接</button><span id="aniRssState" class="muted"></span>
           </fieldset>
           <fieldset>
             <legend data-i18n="externalLibraries">外部只读媒体库</legend>
@@ -573,7 +577,7 @@
             <p class="explain" data-i18n="metadataNetworkHint">按健康与延迟自动选择，失败后冷却并切换；支持系统代理。Archive 文件无论来自何处都必须通过官方 SHA-256。</p>
           </fieldset>
         </section>
-        <section class="tab-panel diagnostics-panel" data-panel="diagnostics">
+        <section class="tab-panel diagnostics-panel" data-panel="diagnostics" id="settingsPanel-diagnostics" role="tabpanel" aria-labelledby="settingsTab-diagnostics" tabindex="0">
           <p class="muted" data-i18n="diagnosticsHint">只显示当前运行状态和近期结果；不会显示密钥、媒体内容或完整文件路径。</p>
           <fieldset>
             <legend data-i18n="startupStatus">启动与后台准备</legend>
@@ -585,7 +589,7 @@
           </fieldset>
           <fieldset>
             <legend data-i18n="networkDiagnostics">网络诊断</legend>
-            <div class="diagnostic-toolbar"><span id="networkRouteSummary" class="muted">—</span><button id="recheckNetwork" type="button" class="tool dark-tool" data-i18n="recheckNetwork">重新检测</button></div>
+            <div class="diagnostic-toolbar"><span id="networkRouteSummary" class="muted">—</span><button id="recheckNetwork" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="recheckNetwork">重新检测</button></div>
             <div id="networkDiagnostics" class="diagnostic-list"></div>
           </fieldset>
           <fieldset>
@@ -593,10 +597,10 @@
             <div id="imagePreloadStages" class="preload-stages"></div>
             <div id="imagePreloadMeta" class="preload-meta muted"></div>
             <div class="preload-controls">
-              <button id="toggleImagePreload" type="button" class="tool dark-tool" data-i18n="pausePreload">暂停</button>
+              <button id="toggleImagePreload" data-icon="pause" type="button" class="tool dark-tool" data-i18n="pausePreload">暂停</button>
               <label><span data-i18n="backgroundConcurrency">后台并发</span><input id="imagePreloadConcurrency" type="number" min="1" max="32" /></label>
               <label><span data-i18n="backgroundBandwidth">后台带宽 KiB/s（0 = 不限）</span><input id="imagePreloadBandwidth" type="number" min="0" step="64" /></label>
-              <button id="applyImagePreloadLimits" type="button" class="tool dark-tool" data-i18n="applyLimits">应用限制</button>
+              <button id="applyImagePreloadLimits" data-icon="check" type="button" class="tool dark-tool" data-i18n="applyLimits">应用限制</button>
             </div>
             <p id="imagePreloadStatus" class="muted"></p>
           </fieldset>
@@ -605,12 +609,12 @@
             <div id="playbackDiagnostics" class="diagnostic-list"></div>
           </fieldset>
         </section>
-        <section class="tab-panel" data-panel="subscriptions">
-          <p class="muted" data-i18n="subscriptionsHint">已完成的单集或单卷任务会按精确资源指纹监视后续发布；发现更新后只生成待确认项。</p>
-          <button id="refreshWatches" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
+        <section class="tab-panel" data-panel="subscriptions" id="settingsPanel-subscriptions" role="tabpanel" aria-labelledby="settingsTab-subscriptions" tabindex="0">
+          <p class="muted" data-i18n="subscriptionsHint">本地下载完成后，会继续检查同一来源的后续发布；发现新资源后等待确认。</p>
+          <button id="refreshWatches" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
           <div id="watchList" class="log-list"></div>
         </section>
-        <section class="tab-panel users-panel" data-panel="users" data-admin-only>
+        <section class="tab-panel users-panel" data-panel="users" id="settingsPanel-users" role="tabpanel" aria-labelledby="settingsTab-users" tabindex="0" data-admin-only>
           <p class="muted" data-i18n="usersHint">普通用户可浏览和提交下载，但不能修改设置。</p>
           <div class="user-management-card">
             <div class="user-section-heading">
@@ -621,7 +625,7 @@
               <label><span data-i18n="username">用户名</span><input id="newUsername" form="userCreateForm" minlength="3" maxlength="64" pattern="[A-Za-z0-9._\-]+" required data-i18n-placeholder="username" autocomplete="off" /></label>
               <label><span data-i18n="password">密码</span><input id="newUserPassword" form="userCreateForm" type="password" minlength="10" required data-i18n-placeholder="password" autocomplete="new-password" /></label>
               <label><span data-i18n="userRole">角色</span><select id="newUserRole" form="userCreateForm"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select></label>
-              <button id="createUser" type="button" class="primary user-create-button" data-i18n="createUser">创建用户</button>
+              <button id="createUser" data-icon="user" type="button" class="primary user-create-button" data-i18n="createUser">创建用户</button>
             </div>
             <p id="userManagementStatus" class="muted user-management-status" aria-live="polite"></p>
           </div>
@@ -630,12 +634,10 @@
             <div id="userList" class="user-list"></div>
           </div>
         </section>
-        <section class="tab-panel" data-panel="logs">
-          <p class="muted" data-i18n="logsHint">
-            仅显示近期的重要状态、警告和错误；不会显示密钥。
-          </p>
+        <section class="tab-panel" data-panel="logs" id="settingsPanel-logs" role="tabpanel" aria-labelledby="settingsTab-logs" tabindex="0">
+          <p class="muted" data-i18n="logsHint">近期运行状态、警告和错误。</p>
           <button
-            id="refreshLogs"
+            id="refreshLogs" data-icon="refresh"
             type="button"
             class="tool dark-tool"
             data-i18n="refresh"
@@ -644,13 +646,13 @@
           </button>
           <div id="logList" class="log-list"></div>
         </section>
-        <section class="tab-panel" data-panel="history">
-          <p class="muted" data-i18n="historyHint">显示对用户原有内容执行的移动、改名与可恢复移除；AnimeMachine 自行创建的控制文件不占用此列表。</p>
-          <button id="refreshHistory" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
+        <section class="tab-panel" data-panel="history" id="settingsPanel-history" role="tabpanel" aria-labelledby="settingsTab-history" tabindex="0">
+          <p class="muted" data-i18n="historyHint">查看文件移动、改名和移除记录，恢复可撤销的操作。</p>
+          <button id="refreshHistory" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
           <div id="historyList" class="log-list"></div>
         </section>
-        <section class="tab-panel update-panel" data-panel="updates">
-          <p class="muted" data-i18n="updateDetailsHint">检查 GitHub Release 与可用代理线路，并显示下载与校验状态。不可用线路会进入健康冷却，后续检查优先使用已验证的快速线路。</p>
+        <section class="tab-panel update-panel" data-panel="updates" id="settingsPanel-updates" role="tabpanel" aria-labelledby="settingsTab-updates" tabindex="0">
+          <p class="muted" data-i18n="updateDetailsHint">检查新版，查看下载进度和安装结果。</p>
           <div class="update-detail-grid">
             <div><small data-i18n="currentVersionLabel">当前版本</small><strong id="updateCurrentVersion">—</strong></div>
             <div><small data-i18n="latestVersionLabel">最新版本</small><strong id="updateLatestVersion">—</strong></div>
@@ -660,30 +662,30 @@
             <div><small data-i18n="lastCheckLabel">最近检查</small><strong id="updateLastChecked">—</strong></div>
           </div>
           <div class="update-toolbar">
-            <button id="checkApplicationUpdateDetail" type="button" class="tool dark-tool" data-i18n="checkUpdate">检测更新</button>
-            <button id="applyApplicationUpdateDetail" type="button" class="primary" data-i18n="updateNow" hidden>更新</button>
+            <button id="checkApplicationUpdateDetail" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="checkUpdate">检测更新</button>
+            <button id="applyApplicationUpdateDetail" data-icon="download" type="button" class="primary" data-i18n="updateNow" hidden>更新</button>
             <span id="updateDetailStatus" class="muted" aria-live="polite"></span>
           </div>
           <fieldset>
             <legend data-i18n="automaticUpdateCheck">定时自动检查更新</legend>
-            <label class="check"><input id="automaticUpdateEnabled" type="checkbox" /><span data-i18n="automaticUpdateEnabled">启用定时检查</span></label>
+            <label class="check"><input id="automaticUpdateEnabled" type="checkbox" checked /><span data-i18n="automaticUpdateEnabled">启用定时检查</span></label>
             <div class="setting-row update-schedule-row">
               <label><span data-i18n="automaticUpdateMode">发现新版后</span><select id="automaticUpdateMode"><option value="notify" data-i18n="updateNotifyOnly">仅通知</option><option value="install" data-i18n="updateAutoInstall">自动安装并重启</option></select></label>
               <label><span data-i18n="updateCheckTime">每日检查时间</span><input id="automaticUpdateTime" type="time" value="04:35" /></label>
             </div>
-            <p class="explain" data-i18n="automaticUpdateHint">默认关闭。启用后按运行设备的本地时间每天检查一次；自动安装仍要求 Release 包和 SHA-256 校验均可用。</p>
+            <p class="explain" data-i18n="automaticUpdateHint">默认每天按运行设备的本地时间检查一次，发现新版时通知。可选择自动安装并重启；安装前会校验 Release 包和 SHA-256。</p>
           </fieldset>
           <fieldset>
             <legend data-i18n="updateNetworkSources">更新线路</legend>
             <div id="updateSourceDiagnostics" class="diagnostic-list"></div>
           </fieldset>
         </section>
-        <section class="tab-panel about-product" data-panel="about">
+        <section class="tab-panel about-product" data-panel="about" id="settingsPanel-about" role="tabpanel" aria-labelledby="settingsTab-about" tabindex="0">
           <div class="about-copy">
-            <p data-i18n="aboutLead">AnimeMachine 是一款全自动动画收藏库系统，负责把动画元数据、Torrent 池、媒体目录和外部只读媒体库整理到同一套本地 Catalog 与状态体系。</p>
-            <p data-i18n="aboutDetail">程序连续完成资源筛选、下载投料、多级目录规划、系列关系整理、收藏核验、Web 浏览与长期贮存；qBittorrent、Ani-RSS 与 Torrent Collector 均为可选组件。</p>
-            <p data-i18n="aboutRelations">作品关系图根据 Bangumi Archive 及辅助证据组织前作、续作、总集篇、番外、衍生、不同演绎和跨系列关联，并在可接受的计算时间内优化节点布局与关系线轨道。</p>
-            <p data-i18n="aboutComponents">AnimeMachine 本身不提供动画检索或下载，也不内置 Torrent、磁力链接或媒体内容。外部媒体目录按只读来源处理；实际下载与订阅由用户连接的外部组件完成。</p>
+            <p data-i18n="aboutLead">AnimeMachine 帮助你浏览动画、订阅新作，并自动整理本地收藏库。</p>
+            <p data-i18n="aboutDetail">在作品详情中查看资源、核验收藏和播放媒体；通过下载计划确认需要新增或替换的文件。</p>
+            <p data-i18n="aboutRelations">作品关系图展示前作、续作、番外和衍生作品，便于按系列查找和收藏。</p>
+            <p data-i18n="aboutComponents">可按需连接 Ani-RSS、qBittorrent 和外部媒体库，使用订阅、下载和远程播放功能。</p>
             <p><a href="https://github.com/kyupi-git/animemachine" target="_blank" rel="noreferrer">github.com/kyupi-git/animemachine</a></p>
             <ul class="about-sources">
               <li><a href="https://github.com/bangumi/Archive" target="_blank" rel="noreferrer">Bangumi Archive</a><span data-i18n="aboutArchiveSource">提供本地动画元数据底包与作品关系基础。</span></li>
@@ -694,6 +696,11 @@
             </ul>
           </div>
         </section>
+        <footer class="form-actions"><span id="saveState" class="settings-save-state muted"></span><button
+            type="submit" data-icon="save"
+            class="primary settings-save"
+            data-i18n="save"
+          >保存</button></footer>
       </form>
     </dialog>
     <script>

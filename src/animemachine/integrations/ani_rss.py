@@ -392,6 +392,12 @@ class Client:
         for item in result:
             remote_id = str(item.get("id") or "").strip()
             if remote_id:
+                previous = unique.get(remote_id)
+                if previous:
+                    previous_bgm = _bgm_id(previous.get("bgmUrl"))
+                    current_bgm = _bgm_id(item.get("bgmUrl"))
+                    if previous_bgm and current_bgm and previous_bgm != current_bgm:
+                        raise RuntimeError("Ani-RSS listAni contains conflicting subscription identities")
                 unique[remote_id] = item
         advertised_total: int | None = None
         if data.get("total") is not None:
@@ -847,7 +853,8 @@ def probe(config: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
                 "message": "connection_failed", "errorType": type(exc).__name__}
 
 
-def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event | None = None) -> dict[str, Any]:
+def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event | None = None,
+         media_remote_ids: set[str] | None = None) -> dict[str, Any]:
     settings = _settings(config); stamp = utcnow()
     key = _secret()
     fingerprint = _credential_fingerprint(key, settings["endpoint"]) if key else None
@@ -1079,13 +1086,15 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
     media_results: dict[str, list[RemotePlaybackItem]] = {}
     media_failures = 0
     media_deferred = 0
-    if mapped_subscriptions:
+    media_subscriptions = [entry for entry in mapped_subscriptions
+                           if media_remote_ids is None or entry[0] in media_remote_ids]
+    if media_subscriptions:
         # A bounded media phase must also be fair. If a few remote playlists hang,
         # rotate the starting point on each successful subscription generation so
         # later subscriptions cannot starve forever behind the same slow entries.
-        workers = min(6, len(mapped_subscriptions))
-        shift = ((generation - 1) * workers) % len(mapped_subscriptions)
-        media_queue = mapped_subscriptions[shift:] + mapped_subscriptions[:shift]
+        workers = min(6, len(media_subscriptions))
+        shift = ((generation - 1) * workers) % len(media_subscriptions)
+        media_queue = media_subscriptions[shift:] + media_subscriptions[:shift]
 
         def fetch_media(entry: tuple[str, int, str]) -> tuple[str, list[RemotePlaybackItem] | None]:
             remote_id, _anime_id, url = entry
@@ -1151,12 +1160,12 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             SELECT remote_id FROM ani_rss_subscription WHERE deleted_at IS NOT NULL)""")
 
     media_complete = media_failures == 0 and media_deferred == 0
-    snapshot_complete = media_complete and listing_complete
+    snapshot_complete = media_complete and listing_complete and media_remote_ids is None
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
         migrate(db)
         if snapshot_complete:
             db.execute("UPDATE ani_rss_state SET last_success_at=?,last_error=NULL WHERE singleton=1", (stamp,))
-        else:
+        elif media_remote_ids is None or not media_complete or not listing_complete:
             reason = (
                 f"SubscriptionSnapshotIncomplete: advertised={advertised_total},received={len(subscriptions)}"
                 if not listing_complete else
@@ -1513,6 +1522,32 @@ def record_release_progress(db: sqlite3.Connection, anime_id: int, episode: int,
                (anime_id, episode, published_at, published_at or stamp))
 
 
+def _mikan_page(value: str) -> str | None:
+    """Recover the exact work page from a verified subscription's RSS URL."""
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    if re.fullmatch(r"/Home/Bangumi/\d+/?", parsed.path):
+        return urllib.parse.urlunparse(parsed._replace(query="", fragment=""))
+    ids = urllib.parse.parse_qs(parsed.query).get("bangumiId", [])
+    if parsed.path == "/RSS/Bangumi" and len(ids) == 1 and ids[0].isdigit():
+        return urllib.parse.urlunparse(parsed._replace(path=f"/Home/Bangumi/{ids[0]}", query="", fragment=""))
+    return None
+
+
+def _search_keywords(names: list[str]) -> list[str]:
+    """Use catalog aliases and bounded shorter queries; identity is checked separately."""
+    keywords = list(names[:6])
+    for name in names[:3]:
+        base = re.split(r"[。！!?？、：:]|\s+(?:第|Season\b)|\s+\d+(?:st|nd|rd|th)\b", name,
+                        maxsplit=1, flags=re.IGNORECASE)[0].strip()
+        if len(base) >= 2:
+            keywords.append(base)
+        if re.match(r"^[\u3400-\u9fff]{4}", name):
+            keywords.append(name[:4])
+    return list(dict.fromkeys(keywords))[:10]
+
+
 def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any]:
     settings = _settings(config)
     key = _secret()
@@ -1533,6 +1568,16 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             ON CONFLICT(anime_id) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,error_text=NULL""", (anime_id, stamp))
         names = [str(work[key] or "").strip() for key in ("title_zh_hans", "title_ja", "title_en")]
         names = list(dict.fromkeys(name for name in names if name))
+        if "title" in {row[1] for row in db.execute("PRAGMA table_info(anime_title)")}:
+            names.extend(str(row[0]) for row in db.execute(
+                "SELECT title FROM anime_title WHERE anime_id=? ORDER BY title_type,title", (anime_id,))
+                         if row[0] and str(row[0]) not in names)
+        known_pages = {}
+        for row in db.execute("SELECT title,evidence_json FROM ani_rss_subscription WHERE anime_id=? AND deleted_at IS NULL", (anime_id,)):
+            evidence = json.loads(row[1] or "{}")
+            page = _mikan_page(str(evidence.get("url") or ""))
+            if page:
+                known_pages[page] = {"title": row[0], "bgmId": int(work["bgm_id"])}
         episode_count, episode_start = _catalog_episode_hints(db, anime_id)
     def record_failure(exc: BaseException) -> None:
         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as failure_db, failure_db:
@@ -1559,14 +1604,24 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             record_failure(exc)
             raise
 
-    found: dict[str, dict[str, Any]] = {}
-    for name in names:
+    found: dict[str, dict[str, Any]] = dict(known_pages)
+    name_keys = {_normalize(name) for name in names}
+    def matches(item: dict[str, Any]) -> bool:
+        identifier = _bgm_id(item.get("bgmUrl"))
+        raw_id = str(item.get("bgmId") or "")
+        if raw_id.isdigit():
+            identifier = int(raw_id)
+        if identifier:
+            return identifier == int(work["bgm_id"])
+        return _normalize(str(item.get("title") or "")) in name_keys
+
+    for name in ([] if found else _search_keywords(names)):
         data = remote_call("mikan", expected_type=dict, params={"text": name},
                            body=_season(str(work["start_month"] or "")), timeout=60) or {}
         for week in mapping_list(data.get("weeks"), "mikan.weeks"):
             for item in mapping_list(week.get("items"), "mikan.weeks[].items"):
                 url = str(item.get("url") or "")
-                if url:
+                if url and matches(item):
                     found[url] = item
         if found:
             break
@@ -1577,11 +1632,17 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             remote_call("mikanGroup", expected_type=list, params={"url": item_url}, timeout=60) or [],
             "mikanGroup",
         )
+        group_ids = {_bgm_id(group.get("bgmUrl")) for group in groups} - {None}
+        if group_ids and int(work["bgm_id"]) not in group_ids:
+            continue
         for group in groups:
+            group_id = _bgm_id(group.get("bgmUrl"))
+            if group_id and group_id != int(work["bgm_id"]):
+                continue
             label = str(group.get("label") or "").strip() or "Other"
             rss = str(group.get("rss") or "").strip()
             items = mapping_list(group.get("items"), "mikanGroup[].items")
-            if not rss:
+            if not rss or not items:
                 continue
             observations = _resource_observations(items, episode_count, episode_start)
             episodes = [episode for episode, _ in observations]
@@ -1726,8 +1787,12 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[s
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
         db.row_factory = sqlite3.Row; migrate(db)
         prior = db.execute("SELECT * FROM ani_rss_action WHERE idempotency_key=?", (idempotency,)).fetchone()
+        expected_work = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+        expected_bgm_id = int(expected_work[0]) if expected_work else None
         if prior and prior["state"] == "submitted":
             remote_id = str(prior["remote_id"] or "")
+            if kind == "collection":
+                return {"actionId": prior["action_id"], "state": "submitted", "remoteId": remote_id, "idempotent": True}
             existing_ids = {str(item.get("id") or "") for item in _client(config).subscriptions()}
             if remote_id and remote_id in existing_ids:
                 return {"actionId": prior["action_id"], "state": "submitted", "remoteId": remote_id, "idempotent": True}
@@ -1740,14 +1805,30 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[s
                                              "enable": True}, timeout=90)
         if not isinstance(ani, dict):
             raise RuntimeError("Ani-RSS did not return a subscription object")
+        converted_bgm_id = _bgm_id(ani.get("bgmUrl"))
+        if converted_bgm_id and expected_bgm_id and converted_bgm_id != expected_bgm_id:
+            raise ValueError("Ani-RSS subscription identifies a different work")
         remote_id = str(ani.get("id") or "")
         existing = {str(item.get("id")): item for item in client.subscriptions()}
         same = next((item for item in existing.values() if str(item.get("url") or "") == str(ani.get("url") or "")), None)
-        if same:
+        if same is None and kind == "follow":
+            # Ani-RSS permits one title/season subscription. Different subtitle
+            # groups can have different RSS URLs for the same identified work.
+            bgm_id = _bgm_id(ani.get("bgmUrl"))
+            if bgm_id:
+                same = next((item for item in existing.values()
+                             if _bgm_id(item.get("bgmUrl")) == bgm_id
+                             and item.get("season") == ani.get("season")), None)
+        if same and kind == "follow":
             remote_id = str(same.get("id")); state_value = "submitted"
         elif kind == "follow":
             client.call("addAni", body=ani, timeout=90); state_value = "submitted"
         else:
+            destination = client.call("downloadPath", body=ani)
+            if not isinstance(destination, dict) or not str(destination.get("downloadPath") or "").strip():
+                raise RuntimeError("Ani-RSS did not return a collection download path")
+            ani["customDownloadPath"] = True
+            ani["customDownloadPathTemplate"] = str(destination["downloadPath"])
             torrent_url = str(payload.get("torrentUrl") or "")
             parsed = urllib.parse.urlparse(torrent_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -1775,7 +1856,7 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[s
                  stamp, utcnow(), None, json.dumps(evidence, separators=(",", ":"))))
         if kind == "follow":
             try:
-                sync(db_path, config)
+                sync(db_path, config, media_remote_ids={remote_id})
             except (OSError, ValueError, RuntimeError, urllib.error.URLError, httpx.HTTPError):
                 # The remote add has succeeded; an optional status refresh must
                 # not turn it into a failed action or cause a duplicate add.

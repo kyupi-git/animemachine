@@ -21,12 +21,15 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
                 honor_cooldown: bool = False) -> tuple[T, Endpoint, str]:
     store = health or Store()
     candidate_routes = []
+    alternatives: dict[str, list[Endpoint]] = {}
     for item in endpoints:
+        alternatives.setdefault(item.id, []).append(item)
+    for item in (items[0] for items in alternatives.values()):
         target = item.base_url + path
         profile = transport.network_profile(target)
         candidate_routes.append((item.id, str(profile["routeMode"]), str(profile["id"])))
     ranked_ids, _selection = store.rank(candidate_routes, capability)
-    by_id = {item.id: item for item in endpoints}
+    by_id = {key: items[0] for key, items in alternatives.items()}
     ranked = [by_id[endpoint_id] for endpoint_id in ranked_ids if endpoint_id in by_id]
     if honor_cooldown:
         available = []
@@ -51,11 +54,7 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
             store.failure(item.id, capability_name, str(attempt.get("error") or "route_failure"),
                           route_mode=route_mode, network_id=str(profile["id"]))
 
-    def one(item: Endpoint, delay: float):
-        if delay and winner.wait(delay):
-            raise concurrent.futures.CancelledError()
-        if winner.is_set():
-            raise concurrent.futures.CancelledError()
+    def request_candidate(item: Endpoint):
         safe_headers = headers if (not credentials or may_send_credentials(item)) else {}
         attempts = max(1, min(8, int(attempts_per_endpoint)))
         last_error: Exception | None = None
@@ -95,6 +94,24 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
                 if attempt + 1 >= attempts or not transport.is_retryable(exc):
                     break
                 time.sleep(max(0.0, retry_backoff) * (2 ** attempt))
+        assert last_error is not None
+        raise last_error
+
+    def one(item: Endpoint, delay: float):
+        if delay and winner.wait(delay):
+            raise concurrent.futures.CancelledError()
+        last_error: Exception | None = None
+        # An origin shares route health across requests, but its alternative
+        # resource paths remain ordered rather than overwriting each other.
+        for candidate in alternatives[item.id]:
+            if winner.is_set():
+                raise concurrent.futures.CancelledError()
+            try:
+                return request_candidate(candidate)
+            except concurrent.futures.CancelledError:
+                raise
+            except Exception as exc:
+                last_error = exc
         assert last_error is not None
         raise last_error
 

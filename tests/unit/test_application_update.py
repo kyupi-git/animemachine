@@ -90,18 +90,20 @@ class ApplicationUpdateTests(unittest.TestCase):
         self.assertTrue(fetch.call_args.kwargs["honor_cooldown"])
         self.assertEqual("https://api.github.com/result", application_update._LAST_RELEASE_SOURCE)
 
-    def test_automatic_check_defaults_off_and_runs_once_per_local_day(self):
+    def test_automatic_check_defaults_on_and_runs_once_per_local_day(self):
         self.assertEqual(
-            {"enabled": False, "mode": "notify", "time": "04:35"},
+            {"enabled": True, "mode": "notify", "time": "04:35"},
             application_update._automatic_settings({}),
         )
-        config = {"applicationUpdate": {"automaticCheck": {"enabled": True, "mode": "install", "time": "04:35"}}}
+        disabled = {"applicationUpdate": {"automaticCheck": {"enabled": False}}}
+        self.assertFalse(application_update.automatic_check_due(disabled, dt.datetime(2026, 9, 2, 12)))
+        config = {}
         with tempfile.TemporaryDirectory() as temp, mock.patch.dict(os.environ, {"ANM_STATE_DIR": temp}, clear=False):
             before = dt.datetime(2026, 9, 2, 4, 34, tzinfo=dt.timezone(dt.timedelta(hours=8)))
             due = before.replace(minute=35)
             self.assertFalse(application_update.automatic_check_due(config, before))
             self.assertTrue(application_update.automatic_check_due(config, due))
-            application_update.record_automatic_result(date="2026-09-02", mode="install", status_value="latest")
+            application_update.record_automatic_result(date="2026-09-02", mode="notify", status_value="latest")
             self.assertFalse(application_update.automatic_check_due(config, due.replace(hour=23)))
             self.assertTrue(application_update.automatic_check_due(config, due + dt.timedelta(days=1)))
 

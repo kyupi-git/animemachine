@@ -35,7 +35,7 @@ class ImageFallbackTests(unittest.TestCase):
             db=self.database(raw)
             with mock.patch.object(service.network_sources,"fetch_json",return_value=({"images":{"large":"https://lain.bgm.tv/pic/cover/l/a.jpg"}},"mirror")), mock.patch.object(service.network_sources,"fetch_binary",side_effect=validated) as binary:
                 data,mime=service.get_anime_image(db,1)
-                self.assertEqual("image/webp",mime); self.assertTrue(data)
+                self.assertEqual("image/png",mime); self.assertEqual(buffer.getvalue(), data)
                 service.get_anime_image(db,1); self.assertEqual(1,binary.call_count)
 
     def test_refresh_keeps_identical_cached_blob_and_only_advances_validation_time(self):
@@ -97,7 +97,7 @@ class ImageFallbackTests(unittest.TestCase):
                 return data, mime, "https://lain.bgm.tv/pic/cover/l/a.jpg"
             with mock.patch.object(service.network_sources,"fetch_json",return_value=({"images":{"large":"https://lain.bgm.tv/pic/cover/l/a.jpg"}},"direct")), mock.patch.object(service.network_sources,"fetch_binary",side_effect=validated):
                 data,mime=service.get_anime_image(db,1)
-            self.assertEqual("image/webp", mime)
+            self.assertEqual("image/png", mime)
             self.assertGreater(len(data), len(b"broken"))
             with contextlib.closing(sqlite3.connect(db)) as connection:
                 blob,error=connection.execute("SELECT image_blob,error FROM anime_image WHERE anime_id=1").fetchone()
@@ -117,7 +117,7 @@ class ImageFallbackTests(unittest.TestCase):
         self.assertTrue(any("bgmapi.anibt.net" in endpoint for endpoint in seen))
         self.assertTrue(any("api.bangumi.pro" in endpoint for endpoint in seen))
 
-    def test_cover_candidates_prefer_400px_and_keep_original_failover(self):
+    def test_cover_candidates_prefer_800px_and_keep_original_failover(self):
         with tempfile.TemporaryDirectory() as raw:
             db=self.database(raw)
             seen=[]
@@ -129,9 +129,61 @@ class ImageFallbackTests(unittest.TestCase):
             subject={"images":{"large":"https://lain.bgm.tv/pic/cover/l/a.jpg","medium":"https://lain.bgm.tv/pic/cover/m/a.jpg"}}
             with mock.patch.object(service.network_sources,"fetch_json",return_value=(subject,"direct")), mock.patch.object(service.network_sources,"fetch_binary",side_effect=validated):
                 service.get_anime_image(db,1)
-            self.assertEqual("https://lain.bgm.tv/r/400/pic/cover/l/a.jpg", seen[0])
+            self.assertEqual("https://lain.bgm.tv/r/800/pic/cover/l/a.jpg", seen[0])
             self.assertIn("https://lain.bgm.tv/pic/cover/l/a.jpg", seen)
-            self.assertTrue(any("bgmimg.anibt.net/r/400/pic/cover/l/a.jpg" in url for url in seen))
+            self.assertTrue(any("bgmimg.anibt.net/r/800/pic/cover/l/a.jpg" in url for url in seen))
+
+    def test_small_subject_cache_urls_are_promoted_to_large_cover(self):
+        payload = {"images": {"large": "https://covers.invalid/r/200/pic/cover/l/a.jpg",
+                              "medium": "https://covers.invalid/r/400/pic/cover/m/a.jpg"}}
+        self.assertEqual("https://covers.invalid/r/800/pic/cover/l/a.jpg", service._cover_url_from_subject(payload))
+
+    def test_thumbnail_upgrade_serves_cached_image_immediately_and_deduplicates(self):
+        fetcher = mock.Mock()
+        fetcher.workers = 16
+        fetcher.snapshot.return_value = {}
+        fetcher.pending.return_value = False
+        fetcher.result.return_value = None
+        fetcher.enqueue.return_value = True
+        buffer = io.BytesIO()
+        Image.new("RGB", (200, 300), "green").save(buffer, "PNG")
+        original = buffer.getvalue()
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict("os.environ", {
+                "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw)/"auth.sqlite3")}):
+            database = self.database(raw)
+            with contextlib.closing(sqlite3.connect(database)) as db, db:
+                db.execute("INSERT INTO anime_image(anime_id,mime_type,image_blob,source_url) VALUES(1,?,?,?)",
+                           ("image/png", original, "https://covers.invalid/r/200/pic/cover/l/a.jpg"))
+            handler = service.make_handler(database, ConfigStore(Path(raw)/"config.json", service.EXAMPLE_CONFIG),
+                                           image_fetcher=fetcher, start_warmup=False, submission_enabled=False)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/anime/1/image"
+                with urllib.request.urlopen(url) as response:
+                    self.assertEqual(original, response.read())
+                    self.assertEqual("available", response.headers["X-AnimeMachine-Image-Status"])
+                    self.assertEqual("1", response.headers["X-AnimeMachine-Image-Pending"])
+                fetcher.pending.return_value = True
+                with urllib.request.urlopen(url) as response:
+                    self.assertEqual(original, response.read())
+                self.assertEqual(1, fetcher.enqueue.call_count)
+                fetcher.pending.return_value = False
+                fetcher.result.return_value = "error:remote"
+                with urllib.request.urlopen(url) as response:
+                    self.assertEqual("0", response.headers["X-AnimeMachine-Image-Pending"])
+                self.assertEqual(1, fetcher.enqueue.call_count)
+                with contextlib.closing(sqlite3.connect(database)) as db, db:
+                    db.execute("UPDATE anime_image SET source_url='https://covers.invalid/r/800/pic/cover/l/a.jpg'")
+                fetcher.result.return_value = None
+                with urllib.request.urlopen(url) as response:
+                    self.assertEqual("0", response.headers["X-AnimeMachine-Image-Pending"])
+                self.assertEqual(1, fetcher.enqueue.call_count)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(2)
 
     def test_all_sources_failed_returns_http_safe_placeholder(self):
         with tempfile.TemporaryDirectory() as raw, mock.patch.object(service.network_sources,"fetch_json",side_effect=RuntimeError("offline")):

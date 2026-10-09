@@ -584,7 +584,9 @@ class WebContractTests(unittest.TestCase):
         self.assertNotIn('torrent-exclusion">| ', script)
         self.assertIn('padding-right: 2ch', styles)
         self.assertIn('github.com/kyupi-git/animemachine', html)
-        self.assertIn('cover.offsetTop + cover.offsetHeight', script)
+        self.assertIn('detailDialog.scrollTop = 0', script)
+        detail = script[script.index('async function showDetail(id)'):script.index('function updateSelection()')]
+        self.assertGreater(detail.index('queueCoverElement'), detail.index('showModalDialog(detailDialog)'))
 
     def test_bulk_plan_click_never_passes_pointer_event_as_routing_mode(self):
         script = (STATIC / "app.js").read_text(encoding="utf-8")

@@ -251,14 +251,14 @@ class ExistingPathIndex:
             raise StorageUnavailableError(f"library storage unavailable: {root}")
         try:
             for top in root.iterdir():
-                if not stat.S_ISDIR(top.stat().st_mode) or is_ignored_library_container(top.name, ignored):
+                if top.is_symlink() or top.is_junction() or not stat.S_ISDIR(top.lstat().st_mode) or is_ignored_library_container(top.name, ignored):
                     continue
                 # The generic work pattern also matches a series directory.  Test
                 # the more specific grammar first or every series is indexed as a
                 # single top-level work and all of its children become invisible.
                 if SERIES_DIRECTORY_RE.fullmatch(top.name):
                     for child in top.iterdir():
-                        match = WORK_DIRECTORY_RE.fullmatch(child.name) if stat.S_ISDIR(child.stat().st_mode) else None
+                        match = WORK_DIRECTORY_RE.fullmatch(child.name) if not child.is_symlink() and not child.is_junction() and stat.S_ISDIR(child.lstat().st_mode) else None
                         if match:
                             self._append(child, top, match.group("date"), match.group("title"))
                     continue
@@ -275,6 +275,8 @@ class ExistingPathIndex:
             while pending and not has_media:
                 with os.scandir(pending.pop()) as entries:
                     for item in entries:
+                        if Path(item.path).is_junction():
+                            continue
                         if item.is_dir(follow_symlinks=False):
                             pending.append(item.path)
                         elif item.is_file(follow_symlinks=False) and Path(item.name).suffix.casefold() in {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm"}:
@@ -290,7 +292,7 @@ class ExistingPathIndex:
     def exact(self, path: Path | str) -> dict[str, Any] | None:
         return self.by_path.get(str(path).replace("/", "\\").casefold())
 
-    def resolve(self, date: str, primary: str, aliases: Iterable[str]) -> dict[str, Any] | None:
+    def resolve(self, date: str, primary: str, aliases: Iterable[str], *, reject_ambiguous: bool = False) -> dict[str, Any] | None:
         keys = {compact(primary), *(compact(alias) for alias in aliases)} - {""}
         alias_values = [str(alias).strip() for alias in aliases if str(alias).strip()]
         ranked: list[tuple[tuple[int, int, int, int], dict[str, Any]]] = []
@@ -304,6 +306,8 @@ class ExistingPathIndex:
             ranked.append(((1 if compound else 0, 1 if row["hasMedia"] else 0,
                             1 if exact else 0, alias_hits), row))
         ranked.sort(key=lambda item: item[0], reverse=True)
+        if len(ranked) > 1 and ranked[0][0] == ranked[1][0] and reject_ambiguous:
+            raise ValueError("multiple equivalent library directories")
         if not ranked or (len(ranked) > 1 and ranked[0][0] == ranked[1][0]):
             return None
         return ranked[0][1]

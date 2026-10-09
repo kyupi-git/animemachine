@@ -45,7 +45,12 @@ def fetch(endpoint: str, category: str) -> list[dict[str, Any]]:
 
 
 def refresh(db_path: Path, endpoint: str, category: str) -> dict[str, Any]:
-    tasks = {str(row.get("hash") or "").casefold(): row for row in fetch(endpoint, category)}
+    tasks: dict[str, dict[str, Any]] = {}
+    for row in fetch(endpoint, category):
+        info_hash = str(row.get("hash") or "").casefold()
+        if not info_hash or info_hash in tasks:
+            raise RuntimeError("qBittorrent returned missing or duplicate torrent identities")
+        tasks[info_hash] = row
     stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     counts = {"queued": 0, "downloading": 0, "existing": 0, "missing": 0}
     completed_anime_ids: set[int] = set()

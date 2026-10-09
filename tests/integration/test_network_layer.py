@@ -22,6 +22,45 @@ class FakeResponse:
 
 
 class NetworkLayerTests(unittest.TestCase):
+    def test_same_origin_resource_candidates_keep_order_and_fallback(self):
+        urls = ["https://covers.invalid/r/800/cover.jpg", "https://covers.invalid/r/200/cover.jpg"]
+        profile = {"routeMode": "direct", "id": "test-network"}
+        for first_fails in (False, True):
+            calls = []
+            def request(_method, url, **_kwargs):
+                calls.append(url)
+                if first_fails and url == urls[0]:
+                    raise ValueError("unavailable original")
+                return FakeResponse(b"{}", url)
+            with tempfile.TemporaryDirectory() as raw, \
+                    mock.patch.object(transport, "request", side_effect=request), \
+                    mock.patch.object(transport, "network_profile", return_value=profile), \
+                    mock.patch.object(sources, "_health", return_value=health.Store(Path(raw)/"h.sqlite3")):
+                _, _, selected = sources.fetch_binary(urls, attempts=1, hedge_delays=(0,))
+            self.assertEqual(urls[1] if first_fails else urls[0], selected)
+            self.assertEqual(urls if first_fails else urls[:1], calls)
+
+    def test_validated_cover_keeps_original_pixels_and_bytes(self):
+        for format_name, mime in (("JPEG", "image/jpeg"), ("PNG", "image/png"), ("WEBP", "image/webp")):
+            buffer = io.BytesIO()
+            Image.new("RGB", (1800, 2500), "green").save(buffer, format_name)
+            original = buffer.getvalue()
+            data, detected = validators.image_bytes(original, "image/incorrect")
+            self.assertEqual((original, mime), (data, detected))
+        with self.assertRaises(ValueError):
+            validators.image_bytes(original, mime, max_pixels=1_000_000)
+
+    def test_endpoint_registry_rejects_silent_identity_overwrites(self):
+        endpoints, _ = registry.load()
+        addition = {"id": endpoints[0].id, "service": "custom", "baseUrl": "https://custom.invalid", "trust": "user_defined"}
+        with self.assertRaisesRegex(ValueError, "duplicate network endpoint id"):
+            registry.load(additions=[addition])
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw)/"registry.json"
+            path.write_text(json.dumps({"schemaVersion": 1, "sources": [addition, addition]}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate network endpoint id"):
+                registry.load(path)
+
     def test_transport_requests_identity_encoding_by_default(self):
         seen = []
         def handler(request):
@@ -108,7 +147,7 @@ class NetworkLayerTests(unittest.TestCase):
             data,mime,url=sources.fetch_binary(
                 ["https://direct.invalid/a.jpg","https://proxy.invalid/a.jpg"], timeout=1,
                 validator=validators.image_bytes, attempts=2)
-        self.assertEqual("image/webp",mime); self.assertTrue(data); self.assertIn("proxy.invalid",url)
+        self.assertEqual("image/png",mime); self.assertEqual(buffer.getvalue(), data); self.assertIn("proxy.invalid",url)
 
     def test_invalid_proxy_payload_does_not_prevent_source_switch(self):
         buffer=io.BytesIO(); Image.new("RGB",(12,18),"yellow").save(buffer,"PNG")
@@ -120,7 +159,7 @@ class NetworkLayerTests(unittest.TestCase):
             data,mime,url=sources.fetch_binary(
                 ["https://proxy.invalid/a.jpg","https://direct.invalid/a.jpg"], timeout=1,
                 validator=validators.image_bytes, attempts=2)
-        self.assertEqual("image/webp",mime); self.assertTrue(data); self.assertIn("direct.invalid",url)
+        self.assertEqual("image/png",mime); self.assertEqual(buffer.getvalue(), data); self.assertIn("direct.invalid",url)
 
     def test_live_proxy_route_distinguishes_environment_system_and_direct(self):
         transport.reset()

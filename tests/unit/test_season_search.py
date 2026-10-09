@@ -11,6 +11,27 @@ from animemachine.integrations.season_search import SeasonSearch
 
 
 class SeasonSearchTests(unittest.TestCase):
+    def test_explicit_sync_precedes_resource_lookup_and_failure_preserves_search_progress(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(
+                ani_rss, "state", return_value={"connection_state": "ready", "credentialConfigured": True}):
+            store = mock.Mock()
+            store.read.return_value = {}
+            query = mock.Mock(return_value={"items": [{"id": 1, "title_en": "Work"}]})
+            scan = SeasonSearch(Path(folder) / "catalog.sqlite3", store, query, contextlib.nullcontext)
+            calls = []
+            with mock.patch.object(ani_rss, "sync", side_effect=lambda *a, **k: calls.append("sync") or {"state": "ready"}), mock.patch.object(
+                    ani_rss, "search", side_effect=lambda *a: calls.append("search") or {"found": 1}):
+                scan.start("2026-09", "2026-11", "en", synchronize=True)
+                scan.thread.join(5)
+            self.assertEqual(["sync", "search"], calls)
+            self.assertEqual("complete", scan.status()["state"])
+            with mock.patch.object(ani_rss, "sync", return_value={"state": "error"}), mock.patch.object(ani_rss, "search") as search:
+                scan.start("2026-09", "2026-11", "en", synchronize=True)
+                scan.thread.join(5)
+            search.assert_not_called()
+            self.assertEqual("failed", scan.status()["state"])
+            self.assertEqual("sync", scan.status()["phase"])
+
     def test_search_is_sequential_and_duplicate_start_does_not_create_second_worker(self):
         with tempfile.TemporaryDirectory() as folder, contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(ani_rss, "state", return_value={"connection_state": "ready", "credentialConfigured": True}))

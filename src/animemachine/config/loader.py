@@ -226,7 +226,7 @@ def _validate(data: Any) -> dict[str, Any]:
     if not isinstance(automatic, dict):
         raise ConfigError("applicationUpdate.automaticCheck must be an object")
     if automatic:
-        if not isinstance(automatic.get("enabled", False), bool):
+        if not isinstance(automatic.get("enabled", True), bool):
             raise ConfigError("applicationUpdate.automaticCheck.enabled must be boolean")
         if str(automatic.get("mode", "notify")) not in {"notify", "install"}:
             raise ConfigError("applicationUpdate.automaticCheck.mode must be notify or install")
@@ -359,9 +359,13 @@ def _validate(data: Any) -> dict[str, Any]:
     if subtitle_policy:
         if not isinstance(subtitle_policy.get("providers", []), list):
             raise ConfigError("subtitles.providers must be a list")
+        provider_ids: set[str] = set()
         for provider in subtitle_policy.get("providers", []):
             if provider.get("id") not in {"assrt", "opensubtitles"}:
                 raise ConfigError("unsupported subtitle provider")
+            if provider["id"] in provider_ids:
+                raise ConfigError("subtitles.providers must use unique provider ids")
+            provider_ids.add(provider["id"])
             endpoints = provider.get("endpoints", [])
             if provider.get("enabled", True) and (not endpoints or not all(str(value).startswith("https://") for value in endpoints)):
                 raise ConfigError("subtitle providers require HTTPS endpoints")

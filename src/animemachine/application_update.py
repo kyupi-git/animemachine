@@ -443,7 +443,7 @@ def network_diagnostics(*, force: bool = False) -> dict[str, Any]:
 
 def _automatic_settings(config: dict[str, Any]) -> dict[str, Any]:
     raw = dict(config.get("applicationUpdate", {}).get("automaticCheck", {}) or {})
-    return {"enabled": raw.get("enabled") is True,
+    return {"enabled": raw.get("enabled", True) is True,
             "mode": str(raw.get("mode") or "notify"), "time": str(raw.get("time") or "04:35")}
 
 

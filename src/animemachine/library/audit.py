@@ -1,7 +1,7 @@
-"""Incremental, metadata-only library completeness assessment.
+"""Incremental library completeness assessment.
 
-The audit never opens media payloads. It compares names, kinds and byte sizes
-with the highest-ranked eligible torrent manifest and persists compact evidence.
+Compare names, kinds and byte sizes with the highest-ranked eligible manifest.
+Hash verification is performed only when explicitly configured.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable
 from ..torrents import runtime as runtime_catalog
 from ..config.policy import ConfigStore
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
+from ..storage.path_policy import PathAuthorizationError, authorize_existing, open_authorized
 
 
 EPISODE = re.compile(r"(?i)(?:^|[^a-z0-9])(?:ep?|episode|第)?\s*(\d{1,4})(?:\s*[-_. ]?v\d+)?(?:[^a-z0-9]|$)")
@@ -128,6 +129,8 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
                 with os.scandir(directory) as entries:
                     for item in entries:
                         lowered = item.name.casefold()
+                        if Path(item.path).is_junction():
+                            continue
                         if item.is_dir(follow_symlinks=False):
                             if lowered not in {".anm-history", ".anm-staging"}:
                                 pending.append(item.path)
@@ -156,21 +159,20 @@ def _verify_hash_baselines(db: sqlite3.Connection, owner_paths: list[str],
             throttle()
         path = Path(str(final_path))
         try:
-            before = path.stat()
-            if expected_bytes is not None and before.st_size != int(expected_bytes):
-                result["compared"] += 1; result["mismatched"] += 1; continue
             digest = hashlib.sha256()
-            with path.open("rb") as stream:
+            with open_authorized(path, owner_paths) as (stream, canonical, before):
+                if expected_bytes is not None and before.st_size != int(expected_bytes):
+                    result["compared"] += 1; result["mismatched"] += 1; continue
                 for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
                     digest.update(block)
                     if throttle:
                         throttle()
-            after = path.stat()
+            after = canonical.stat()
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 result["unavailable"] += 1; continue
             result["compared"] += 1
             result["matched" if digest.hexdigest().casefold() == str(expected_sha).casefold() else "mismatched"] += 1
-        except (OSError, PermissionError):
+        except (OSError, PathAuthorizationError):
             result["unavailable"] += 1
     return result
 
@@ -185,20 +187,32 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
         db.execute("PRAGMA synchronous=NORMAL")
         db.execute("PRAGMA busy_timeout=60000")
         runtime_catalog.migrate_overlay(db)
-        ids = anime_ids or [int(row[0]) for row in db.execute("SELECT DISTINCT anime_id FROM runtime_work WHERE library_state='existing'")]
+        ids = anime_ids if anime_ids is not None else [int(row[0]) for row in db.execute("SELECT DISTINCT anime_id FROM runtime_work WHERE library_state='existing'")]
         updated = skipped = unavailable = 0
         observed_cache: dict[str, list[dict[str, Any]]] = {}
+        def report() -> None:
+            processed = updated + skipped
+            if processed % max(1, commit_every) == 0:
+                db.commit()
+            if progress:
+                progress({"updated": updated, "skipped": skipped, "unavailable": unavailable,
+                          "processed": processed, "total": len(ids)})
         for anime_id in ids:
             if throttle:
                 throttle()
             works = list(db.execute("SELECT target_unc,origin FROM runtime_work WHERE anime_id=? AND library_state='existing'", (anime_id,)))
             if not works:
-                skipped += 1; continue
+                skipped += 1; report(); continue
             try:
+                root = str(config.get("deployment", {}).get("libraryUncRoot") or "")
+                if root:
+                    for work in works:
+                        authorize_existing(str(work[0]), [root])
                 observed = _observed((str(row[0]) for row in works), observed_cache)
-            except StorageUnavailableError:
+            except (StorageUnavailableError, PathAuthorizationError):
                 skipped += 1
                 unavailable += 1
+                report()
                 continue
             torrents = [x for x in runtime_catalog.torrents_for_anime(db, anime_id, config) if x["eligible"]]
             if not torrents:
@@ -208,13 +222,14 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
                         evidence_json=excluded.evidence_json,assessed_at=excluded.assessed_at""",
                            (anime_id, len(observed), json.dumps({"method": "local_file_inventory_only", "paths": len(works)})))
                 updated += 1
+                report()
                 continue
             preferred = torrents[0]
             submission = db.execute("SELECT qbt_state FROM runtime_submission WHERE info_hash=?", (preferred["infoHash"],)).fetchone()
             completed = bool(submission and str(submission[0]).casefold() in {"completed", "seeding", "pausedup", "stoppedup", "uploading"})
             expected = _expected(db, anime_id, preferred["infoHash"])
-            score = 100.0 if completed else distribution_similarity(expected, observed)
-            basis = "managed_completed" if completed else "metadata_distribution"
+            score = distribution_similarity(expected, observed)
+            basis = "managed_completed" if completed and score == 100.0 else "metadata_distribution"
             exact = {"compared": 0, "matched": 0, "mismatched": 0, "unavailable": 0}
             if config.get("differentialPlanning", {}).get("samePathSizePolicy") == "hash_and_skip":
                 exact = _verify_hash_baselines(db, [str(row[0]) for row in works], throttle)
@@ -231,12 +246,7 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
                     evidence_json=excluded.evidence_json,assessed_at=excluded.assessed_at""",
                        (anime_id, preferred["infoHash"], score, _state(score), basis, len(observed), len(expected), json.dumps(evidence)))
             updated += 1
-            processed = updated + skipped
-            if processed % max(10, commit_every) == 0:
-                db.commit()
-                if progress:
-                    progress({"updated": updated, "skipped": skipped, "unavailable": unavailable,
-                              "processed": processed, "total": len(ids)})
+            report()
         db.commit()
         if progress:
             progress({"updated": updated, "skipped": skipped, "unavailable": unavailable,

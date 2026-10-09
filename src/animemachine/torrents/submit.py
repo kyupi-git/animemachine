@@ -215,8 +215,19 @@ def wait_for_job(client: Client, info_hash: str, timeout=60):
     raise RuntimeError(f"qBittorrent job did not appear: {info_hash}")
 
 
+def _indexed_files(files: list[dict]) -> dict[int, dict]:
+    indexed: dict[int, dict] = {}
+    for item in files:
+        index = item.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index in indexed:
+            raise RuntimeError("qBittorrent returned invalid or duplicate file indexes")
+        indexed[index] = item
+    return indexed
+
+
 def verify_files(client: Client, job: dict, *, phase: str) -> list[dict]:
     actual = client.get_json("torrents/files", {"hash": job["infoHash"]})
+    _indexed_files(actual)
     expected = {item["index"]: item for item in job["files"]}
     if set(expected) != {item.get("index") for item in actual}:
         raise RuntimeError("qBittorrent file-index set differs from plan")
@@ -236,7 +247,7 @@ def verify_files(client: Client, job: dict, *, phase: str) -> list[dict]:
 def verify_recovery_files(client: Client, job: dict, *, operation: str) -> list[dict]:
     actual = client.get_json("torrents/files", {"hash": job["infoHash"]})
     expected = {item["index"]: item for item in job["files"]}
-    by_index = {item.get("index"): item for item in actual}
+    by_index = _indexed_files(actual)
     if set(expected) != set(by_index):
         raise RuntimeError("qBittorrent file-index set differs from plan")
     for index, planned in expected.items():
@@ -394,7 +405,7 @@ def add_one(client: Client, job: dict) -> dict:
 
 
 def restore_extension(client: Client, info_hash: str, before: list[dict]) -> None:
-    current = {item["index"]: item for item in client.get_json("torrents/files", {"hash": info_hash})}
+    current = _indexed_files(client.get_json("torrents/files", {"hash": info_hash}))
     for original in before:
         item = current.get(original["index"])
         if item and item.get("name") != original.get("name"):
@@ -439,7 +450,7 @@ def extend_one(client: Client, job: dict) -> dict:
         try:
             restore_extension(client, info_hash, before)
             restored = client.get_json("torrents/files", {"hash": info_hash})
-            restored_by_index = {item.get("index"): item for item in restored}
+            restored_by_index = _indexed_files(restored)
             for original in before:
                 current_file = restored_by_index.get(original["index"])
                 if not current_file or current_file.get("name") != original.get("name") or int(current_file.get("priority", 0)) != int(original.get("priority", 0)):

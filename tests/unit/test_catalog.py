@@ -1038,6 +1038,34 @@ class CatalogTests(unittest.TestCase):
             groups = list(warmup._history_batches_by_month("2026-04", 10))
             self.assertEqual([(0, [3, 1]), (1, [2]), (2, [5, 4])], groups)
 
+    def test_archive_cover_queue_keeps_cached_images_and_does_not_skip_new_covers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.sqlite3"
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
+                db.execute("CREATE TABLE anime_work(id INTEGER PRIMARY KEY,start_month TEXT)")
+                db.execute("CREATE TABLE anime_image(anime_id INTEGER PRIMARY KEY,image_blob BLOB,error TEXT)")
+                db.executemany("INSERT INTO anime_work VALUES(?,'2020-01')", [(1,), (2,), (3,), (4,)])
+                db.execute("INSERT INTO anime_image VALUES(1,? ,NULL)", (b"retained",))
+            warmup = object.__new__(catalog.CatalogWarmup)
+            warmup.db_path = path
+            total, batches = warmup._direct_batches("start_month=?", ("2020-01",), 1, missing_only=True)
+            self.assertEqual(3, total)
+            completed = []
+            for batch in batches:
+                completed.extend(batch)
+                with contextlib.closing(sqlite3.connect(path)) as db, db:
+                    db.execute("INSERT INTO anime_image VALUES(?,?,NULL)", (batch[0], b"new"))
+            self.assertEqual([4, 3, 2], completed)
+            self.assertEqual([], list(warmup._history_batches_by_month("2026-01", 2)))
+            with contextlib.closing(sqlite3.connect(path)) as db:
+                self.assertEqual(b"retained", db.execute("SELECT image_blob FROM anime_image WHERE anime_id=1").fetchone()[0])
+            warmup.lock = threading.RLock()
+            warmup.state = {"catalogMarker": ["seed", "old", 3], "preparedThroughMonth": "1980-01", "controls": {"paused": True}}
+            with mock.patch.object(catalog.CatalogWarmup, "_persist"):
+                warmup._prepare_state(("seed", "new", 4))
+            self.assertEqual("1980-01", warmup.state["preparedThroughMonth"])
+            self.assertTrue(warmup.state["controls"]["paused"])
+
     def test_future_preload_groups_months_nearest_first(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "catalog.sqlite3"

@@ -6,12 +6,25 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 from animemachine.torrents import submit as MODULE
 
 
 class SubmitPlanValidationTests(unittest.TestCase):
+    def test_remote_duplicate_file_indexes_are_rejected_before_any_write(self):
+        files = [{"index": 0, "name": "a.mkv", "size": 10, "priority": 1}]
+        job = {"infoHash": "a"*40, "files": [{"index": 0, "oldPath": "a.mkv", "newPath": "b.mkv", "length": 10, "selected": True}]}
+        client = mock.Mock()
+        client.get_json.return_value = files + files
+        for verify in (lambda: MODULE.verify_files(client, job, phase="before"),
+                       lambda: MODULE.verify_recovery_files(client, job, operation="create"),
+                       lambda: MODULE.restore_extension(client, job["infoHash"], files)):
+            with self.assertRaisesRegex(RuntimeError, "duplicate file indexes"):
+                verify()
+        client.post.assert_not_called()
+
     def test_runtime_endpoint_overlay_is_applied_in_submission_worker(self):
         with tempfile.TemporaryDirectory() as raw:
             config_path = Path(raw) / "config.json"

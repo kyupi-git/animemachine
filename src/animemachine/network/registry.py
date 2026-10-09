@@ -35,11 +35,17 @@ def load(path: Path | None = None, additions: Iterable[dict] = ()) -> tuple[list
     payload = json.loads(source.read_text(encoding="utf-8-sig"))
     if payload.get("schemaVersion") != 1:
         raise ValueError("unsupported network source registry")
-    by_id = {item.id: item for item in map(Endpoint.from_dict, payload.get("sources", []))}
+    by_id: dict[str, Endpoint] = {}
+    for endpoint in map(Endpoint.from_dict, payload.get("sources", [])):
+        if endpoint.id in by_id:
+            raise ValueError(f"duplicate network endpoint id: {endpoint.id}")
+        by_id[endpoint.id] = endpoint
     for raw in additions:
         endpoint = Endpoint.from_dict(raw)
         if endpoint.trust != "user_defined":
             raise ValueError("user endpoint additions must use user_defined trust")
+        if endpoint.id in by_id:
+            raise ValueError(f"duplicate network endpoint id: {endpoint.id}")
         by_id[endpoint.id] = endpoint
     return list(by_id.values()), payload
 

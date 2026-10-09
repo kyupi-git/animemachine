@@ -44,7 +44,7 @@ from ..integrations import qbt_runtime, connectivity, playback, subtitle_service
 from . import archive_update, relation_graph, metadata_repair
 from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
-from ..library import audit as library_audit, external as external_library, history as library_history, layout as library_layout
+from ..library import audit as library_audit, external as external_library, history as library_history, layout as library_layout, placeholders as library_placeholders
 from ..network import (connectivity as network_connectivity, diagnostics as network_diagnostics,
                        downloads as network_downloads, registry as network_registry,
                        sources as network_sources, tls as tls_support,
@@ -2471,6 +2471,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         external_counts: dict[int, int] = {}
         ani_rss_media_counts: dict[int, int] = {}
         ani_rss_counts: dict[int, int] = {}
+        ani_rss_available_counts: dict[int, int] = {}
+        ani_rss_search_states: dict[int, dict[str, Any]] = {}
         ani_rss_managed: set[int] = set()
         if has_runtime and ids:
             effective_ids = sorted(set(physical_ids.values()))
@@ -2486,6 +2488,11 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                     WHERE ars.deleted_at IS NULL AND arm.anime_id IN ({marks})
                     GROUP BY arm.anime_id""", effective_ids)}
             logical_marks = ",".join("?" for _ in ids)
+            ani_rss_available_counts = {int(a): int(n) for a, n in db.execute(
+                f"SELECT anime_id,COUNT(*) FROM ani_rss_resource WHERE item_count>0 AND julianday(expires_at)>=julianday('now') AND anime_id IN ({logical_marks}) GROUP BY anime_id", ids)}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='ani_rss_search_state'").fetchone():
+                ani_rss_search_states = {int(a): {"checkedAt": stamp, "error": error} for a, stamp, error in db.execute(
+                    f"SELECT anime_id,last_success_at,error_text FROM ani_rss_search_state WHERE anime_id IN ({logical_marks})", ids)}
             ani_rss_counts = {int(a): int(n) for a, n in db.execute(
                 f"SELECT anime_id,COUNT(*) FROM ani_rss_resource WHERE eligible=1 AND julianday(expires_at)>=julianday('now') AND anime_id IN ({logical_marks}) GROUP BY anime_id", ids)}
             ani_rss_managed = {int(row[0]) for row in db.execute(
@@ -2548,6 +2555,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             region_enabled = region_policy_enabled(policy, row["countries"])
             row["ani_rss_resource_count"] = (
                 ani_rss_counts.get(anime_id, 0) if region_enabled and ani_connection_ready else 0)
+            row["ani_rss_available_resource_count"] = (
+                ani_rss_available_counts.get(anime_id, 0) if has_runtime and ani_connection_ready else 0)
+            row["ani_rss_search_state"] = ani_rss_search_states.get(anime_id, {}) if has_runtime and ids else {}
             row["ani_rss_managed"] = (
                 region_enabled and ani_connection_ready and anime_id in ani_rss_managed)
             ani_search_available = (region_enabled and ani_connection_ready
@@ -2702,6 +2712,7 @@ def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any])
                 "library_internal_state": library["state"],
                 "library_managed": bool(library["managed"]),
                 "ani_rss_resource_count": len(remote_eligible),
+                "ani_rss_available_resource_count": len([item for item in remote_resources if item.get("itemCount", 0) > 0]),
                 "ani_rss_search_available": ani_search_available,
                 "ani_rss_auto_available": ani_auto,
                 "selectable": bool(eligible or remote_eligible or ani_search_available) and library["state"] not in blocked_states,
@@ -2997,11 +3008,13 @@ def get_cached_anime_image(db_path: Path, anime_id: int) -> tuple[tuple[bytes, s
         return None, "missing"
 
 
-def _scaled_cover_url(url: str, size: int = 400) -> str:
+def _scaled_cover_url(url: str, size: int = 800) -> str:
     parsed = urllib.parse.urlparse(url)
-    if not parsed.netloc or "/pic/" not in parsed.path or "/r/" in parsed.path:
+    if not parsed.netloc or "/pic/cover/" not in parsed.path:
         return ""
-    return urllib.parse.urlunparse(parsed._replace(path=f"/r/{int(size)}{parsed.path}"))
+    path = re.sub(r"^/r/\d+", "", parsed.path)
+    path = re.sub(r"/pic/cover/[cms]/", "/pic/cover/l/", path)
+    return urllib.parse.urlunparse(parsed._replace(path=f"/r/{int(size)}{path}"))
 
 
 def _cover_urls_from_subject(payload: Any) -> list[str]:
@@ -3017,10 +3030,9 @@ def _cover_urls_from_subject(payload: Any) -> list[str]:
             values = {key: str(images.get(key) or "").strip() for key in ("large", "common", "medium", "small")}
             values = {key: candidate for key, candidate in values.items() if candidate and "no_icon" not in candidate}
             if values:
-                preferred = [values.get("medium", "")] if "/r/400/" in values.get("medium", "") else []
                 scaled = [_scaled_cover_url(values.get(key, "")) for key in ("large", "common", "medium", "small")]
-                raw = [values.get(key, "") for key in ("medium", "common", "large", "small")]
-                return list(dict.fromkeys(candidate for candidate in [*preferred, *scaled, *raw] if candidate))
+                raw = [values.get(key, "") for key in ("large", "common", "medium", "small")]
+                return list(dict.fromkeys(candidate for candidate in [*scaled, *raw] if candidate))
         for key in ("data", "subject", "result"):
             nested = value.get(key)
             if isinstance(nested, dict):
@@ -3031,6 +3043,15 @@ def _cover_urls_from_subject(payload: Any) -> list[str]:
 def _cover_url_from_subject(payload: Any) -> str:
     urls = _cover_urls_from_subject(payload)
     return urls[0] if urls else ""
+
+
+def _cover_upgrade_due(db_path: Path, anime_id: int) -> bool:
+    """Upgrade legacy thumbnail sources on demand without sweeping good caches."""
+    with contextlib.closing(sqlite3.connect(db_path, timeout=5)) as db:
+        row = db.execute("SELECT source_url FROM anime_image WHERE anime_id=?", (anime_id,)).fetchone()
+    path = urllib.parse.urlparse(str(row[0] or "")).path if row else ""
+    scaled = re.match(r"^/r/(\d+)/pic/cover/", path)
+    return bool((scaled and int(scaled[1]) < 800) or re.search(r"/pic/cover/[cms]/", path))
 
 
 def image_network_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -3510,10 +3531,12 @@ class CatalogWarmup:
         with self.lock:
             if self.state.get("catalogMarker") != encoded:
                 controls = dict(self.state.get("controls") or self._default_controls())
+                previous = self.state.get("catalogMarker") or []
+                through = self.state.get("preparedThroughMonth", "") if previous and previous[0] == encoded[0] else ""
                 self.state = {
                     "schemaVersion": 1, "state": "idle", "stage": "", "catalogMarker": encoded,
                     "stages": {}, "controls": controls, "current": {}, "retryPending": 0,
-                    "remainingErrors": 0, "preparedThroughMonth": "", "updatedAt": "", "error": "",
+                    "remainingErrors": 0, "preparedThroughMonth": through, "updatedAt": "", "error": "",
                 }
         self._persist()
 
@@ -3862,11 +3885,20 @@ class CatalogWarmup:
                 retry.add(int(anime_id))
         return available, no_image, failed, retry
 
-    def _direct_batches(self, where: str, values: tuple[Any, ...], batch_size: int) -> tuple[int, Iterable[list[int]]]:
+    def _direct_batches(self, where: str, values: tuple[Any, ...], batch_size: int,
+                        *, missing_only: bool = False) -> tuple[int, Iterable[list[int]]]:
         with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+            if missing_only and db.execute("SELECT 1 FROM sqlite_master WHERE name='anime_image'").fetchone():
+                where = f"({where}) AND NOT EXISTS(SELECT 1 FROM anime_image i WHERE i.anime_id=anime_work.id AND (i.image_blob IS NOT NULL OR i.error='no_cover'))"
             total = int(db.execute(f"SELECT COUNT(*) FROM anime_work WHERE {where}", values).fetchone()[0])
+            pending = [int(row[0]) for row in db.execute(
+                f"SELECT id FROM anime_work WHERE {where} ORDER BY CASE WHEN start_month IS NULL OR start_month='' THEN 1 ELSE 0 END, start_month DESC,id DESC", values)] if missing_only else None
 
         def batches() -> Iterable[list[int]]:
+            if pending is not None:
+                for index in range(0, len(pending), batch_size):
+                    yield pending[index:index + batch_size]
+                return
             offset = 0
             while True:
                 with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
@@ -3916,12 +3948,12 @@ class CatalogWarmup:
                 "ORDER BY start_month DESC", (before_month,))]
         group_index = 0
         for month in months:
-            _total, batches = self._direct_batches("start_month=?", (month,), batch_size)
+            _total, batches = self._direct_batches("start_month=?", (month,), batch_size, missing_only=True)
             for anime_ids in batches:
                 yield group_index, anime_ids
             group_index += 1
         _unknown_total, unknown_batches = self._direct_batches(
-            "start_month IS NULL OR start_month=''", (), batch_size)
+            "start_month IS NULL OR start_month=''", (), batch_size, missing_only=True)
         for anime_ids in unknown_batches:
             yield group_index, anime_ids
 
@@ -3933,7 +3965,7 @@ class CatalogWarmup:
                 "WHERE start_month>? AND start_month IS NOT NULL AND start_month<>'' "
                 "ORDER BY start_month ASC", (after_month,))]
         for group_index, month in enumerate(months):
-            _total, batches = self._direct_batches("start_month=?", (month,), batch_size)
+            _total, batches = self._direct_batches("start_month=?", (month,), batch_size, missing_only=True)
             for anime_ids in batches:
                 yield group_index, anime_ids
 
@@ -4197,7 +4229,7 @@ _ADMIN_POST_PATHS = frozenset({
     "/api/archive/update", "/api/archive/import", "/api/images/refresh", "/api/metadata/repair",
     "/api/catalog/reshuffle", "/api/ani-rss/sync", "/api/connections/test",
     "/api/connections/qbittorrent/credential", "/api/connections/ani-rss/credential",
-    "/api/connections/subtitles/credentials", "/api/settings", "/api/library/audit", "/api/auth/users",
+    "/api/connections/subtitles/credentials", "/api/settings", "/api/library/audit", "/api/library/placeholders", "/api/auth/users",
     "/api/diagnostics/network/recheck", "/api/images/preload/control", "/api/update/apply",
 })
 
@@ -4242,6 +4274,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         "images": {"state": "idle", "done": 0, "total": 0, "priorityDone": 0, "priorityTotal": 0, "failed": 0},
         "metadata": {"state": "idle", "processed": 0, "repaired": 0, "failed": 0},
         "library": {"state": "idle", "done": 0, "total": 0, "updated": 0, "skipped": 0},
+        "placeholders": {"state": "idle", "done": 0, "total": 0, "created": 0, "existing": 0, "skipped": 0, "failed": 0},
         "torrentSearch": {},
         "aniRssSearch": {},
     }
@@ -4575,7 +4608,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 maintenance["library"].update(done=int(stats.get("processed", 0)),
                                                 total=int(stats.get("total", 0)),
                                                 updated=int(stats.get("updated", 0)),
-                                                skipped=int(stats.get("skipped", 0)))
+                                                skipped=int(stats.get("skipped", 0)),
+                                                unavailable=int(stats.get("unavailable", 0)))
         write_recovery("libraryAudit", {"animeId": anime_id})
         def worker() -> None:
             try:
@@ -4600,6 +4634,40 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             threading.Thread(target=worker, daemon=True, name=f"anm-library-audit-{key}").start()
         except RuntimeError:
             write_recovery("libraryAudit", None)
+            raise
+        return True
+
+    def start_placeholders() -> bool:
+        with maintenance_lock:
+            if maintenance["placeholders"].get("state") == "running":
+                return False
+            maintenance["placeholders"] = {"state": "running", "done": 0, "total": 0,
+                                           "created": 0, "existing": 0, "skipped": 0, "failed": 0}
+        write_recovery("placeholders", {})
+        def progress(stats: dict[str, Any]) -> None:
+            with maintenance_lock:
+                maintenance["placeholders"].update(stats)
+        def worker() -> None:
+            try:
+                with DATABASE_MAINTENANCE_LOCK:
+                    summary = library_placeholders.create(db_path, RUNTIME_DB, config_store.read(),
+                                                          progress=progress, throttle=background_cooperate)
+                with maintenance_lock:
+                    maintenance["placeholders"].update(state="complete", **summary)
+                log_event("INFO", "library_placeholders_complete", created=summary["created"], existing=summary["existing"],
+                          skipped=summary["skipped"], failed=summary["failed"])
+                for entry in summary["errors"]:
+                    log_event("WARNING", "library_placeholder_skipped", animeId=entry["animeId"], error=entry["error"])
+            except Exception as exc:
+                with maintenance_lock:
+                    maintenance["placeholders"].update(state="failed", error=f"{type(exc).__name__}: {exc}")
+                log_event("ERROR", "library_placeholders_failed", error=f"{type(exc).__name__}: {exc}")
+            finally:
+                write_recovery("placeholders", None)
+        try:
+            threading.Thread(target=worker, daemon=True, name="anm-library-placeholders").start()
+        except RuntimeError:
+            write_recovery("placeholders", None)
             raise
         return True
 
@@ -4769,7 +4837,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
 
     def recover_interrupted_maintenance() -> dict[str, bool]:
         pending = read_recovery()
-        result = {"archiveUpdate": archive_updater.recover_interrupted(), "libraryAudit": False, "metadataRepair": False}
+        result = {"archiveUpdate": archive_updater.recover_interrupted(), "libraryAudit": False, "metadataRepair": False, "placeholders": False}
         library = pending.get("libraryAudit")
         if isinstance(library, dict):
             raw_id = library.get("animeId")
@@ -4777,6 +4845,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             result["libraryAudit"] = start_library_audit(anime_id)
         if isinstance(pending.get("metadataRepair"), dict):
             result["metadataRepair"] = start_metadata_repair()
+        if isinstance(pending.get("placeholders"), dict):
+            result["placeholders"] = start_placeholders()
         return result
 
     def submit_in_background(plan_id: str, plan_path: Path) -> None:
@@ -5498,7 +5568,16 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 anime_id = int(image_match.group(1))
                 image, cache_state = get_cached_anime_image(db_path, anime_id)
                 if image is not None:
-                    self.binary_response(*image, headers={"X-AnimeMachine-Image-Status": "available"})
+                    pending = bool(image_fetcher and image_fetcher.pending(anime_id))
+                    if (image_fetcher is not None and not pending
+                            and image_fetcher.result(anime_id) is None and _cover_upgrade_due(db_path, anime_id)):
+                        pending = image_fetcher.enqueue(anime_id, image_network_config(config_store.read()),
+                                                        refresh=True, priority="foreground")
+                    self.binary_response(*image, cache_seconds=0 if pending else 86400, headers={
+                        "X-AnimeMachine-Image-Status": "available",
+                        "X-AnimeMachine-Image-Pending": "1" if pending else "0",
+                        "ETag": '"' + hashlib.sha256(image[0]).hexdigest() + '"',
+                    })
                 elif cache_state == "not_found":
                     self.send_error(HTTPStatus.NOT_FOUND, "image unavailable")
                 elif cache_state == "no_cover":
@@ -5793,7 +5872,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     if not isinstance(request, dict):
                         raise ValueError("JSON object required")
                     started = season_search.start(str(request.get("from") or ""), str(request.get("to") or ""),
-                                                  str(request.get("language") or "zh-Hans"))
+                                                  str(request.get("language") or "zh-Hans"),
+                                                  synchronize=request.get("synchronize") is True)
                     self.json_response({"started": started, **season_search.status()},
                                        HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
                 except (ValueError, OSError) as exc:
@@ -6046,6 +6126,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     self.json_response({"configured": changed, "persistence": "state"})
                 except (ValueError, OSError, json.JSONDecodeError) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/library/placeholders":
+                started = start_placeholders()
+                self.json_response({"state": "running", "started": started})
                 return
             if parsed.path == "/api/library/audit":
                 started = start_library_audit()

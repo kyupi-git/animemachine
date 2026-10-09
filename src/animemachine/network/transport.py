@@ -271,7 +271,7 @@ def _active_network_base() -> dict[str, str]:
             try:
                 completed = subprocess.run(
                     [
-                        "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        r"C:\Program Files\PowerShell\7\pwsh.exe", "-NoProfile", "-NonInteractive", "-Command",
                         "$p=Get-NetConnectionProfile | Where-Object {$_.IPv4Connectivity -ne 'Disconnected' -or $_.IPv6Connectivity -ne 'Disconnected'} | Select-Object -First 1; if($p){$p.Name}",
                     ],
                     capture_output=True, text=True, timeout=1.5, errors="replace",

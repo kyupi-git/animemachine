@@ -5,6 +5,21 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.3.2
+
+0.3.2 improves Ani-RSS matching and synchronization, Release radar, and subscription feedback. Existing settings, media, and cover caches carry over when you upgrade.
+
+### Added and improved
+
+- Improved Release radar: show a whole season on one page, with title counts in the season tabs, Ani-RSS state synchronization, search progress, and retries for unfinished titles.
+- Improved layout and feedback: unified action icons and more compact cards, details, and settings; subscriptions respond immediately, and scheduled update checks are enabled by default.
+- Improved local library management: create placeholder folders for subscribed titles in one click, reuse existing folders, and resume after interruption; verification shows progress and assesses completeness against current files.
+
+### Fixed
+
+- Fixed missing resources for some sequels by reusing known release pages and checking title identifiers. Subscription refreshes now fetch media only for the affected title.
+- Fixed overwritten cover candidates, enlarged thumbnails, and missing detail covers. Ani-RSS originals are reused without recompression, old thumbnail caches upgrade automatically, and Archive updates preserve existing images.
+
 ## 0.3.1
 
 0.3.1 improves Release radar, subscription progress, and title cards, with updated Archive checks and reorganized multilingual documentation. Existing settings and collections carry over when you upgrade.

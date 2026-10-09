@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import io
 import contextlib
 import datetime as dt
 import os
@@ -174,6 +175,52 @@ class AniRssTest(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db:
             probe = json.loads(db.execute("SELECT evidence_json FROM ani_rss_action WHERE action_id=?", (result["actionId"],)).fetchone()[0])["mediaProbe"]
         return result, dt.datetime.fromisoformat(probe["nextAt"])
+
+    def test_different_subtitle_rss_reuses_same_work_and_season(self):
+        ani_rss.search(self.db_path, 1, self.config)
+        resource = ani_rss.resources(self.db_path, 1)[0]
+        client = mock.Mock()
+        client.call.return_value = {"id": "new-id", "url": "https://mikan.test/new-rss", "bgmUrl": "https://bgm.tv/subject/123", "season": 2}
+        client.subscriptions.return_value = [
+            {"id": "prior-season", "url": "https://mikan.test/prior", "bgmUrl": "https://bgm.tv/subject/123", "season": 1},
+            {"id": "existing-id", "url": "https://mikan.test/other-rss", "bgmUrl": "https://bgm.tv/subject/123", "season": 2}]
+        with mock.patch.object(ani_rss, "_client", return_value=client), mock.patch.object(ani_rss, "sync"):
+            result = ani_rss.subscribe(self.db_path, resource["resourceId"], self.config)
+        self.assertEqual(result["remoteId"], "existing-id")
+        self.assertEqual([call.args[0] for call in client.call.call_args_list], ["rssToAni"])
+
+    def test_collection_resolves_destination_and_remains_idempotent_without_subscription(self):
+        FakeAniRss.resource_items = [{"title": "[SubsPlease] Work Complete Batch (1080p) [WEB-DL]", "size": 100,
+                                      "torrent": "https://mikan.test/synthetic.torrent"}]
+        ani_rss.search(self.db_path, 1, self.config)
+        resource = next(row for row in ani_rss.resources(self.db_path, 1) if row["kind"] == "collection")
+        client = mock.Mock()
+        client.subscriptions.return_value = []
+        def call(path, **_kwargs):
+            if path == "rssToAni":
+                return {"id": "collection-only", "url": "rss", "bgmUrl": "https://bgm.tv/subject/123"}
+            if path == "downloadPath":
+                return {"downloadPath": "/Library/Work/Season 02"}
+            return True
+        client.call.side_effect = call
+        with mock.patch.object(ani_rss, "_client", return_value=client), mock.patch.object(ani_rss.tls_support, "urlopen", return_value=contextlib.closing(io.BytesIO(b"synthetic torrent"))):
+            first = ani_rss.subscribe(self.db_path, resource["resourceId"], self.config)
+            second = ani_rss.subscribe(self.db_path, resource["resourceId"], self.config)
+        self.assertFalse(first["idempotent"])
+        self.assertTrue(second["idempotent"])
+        body = next(call.kwargs["body"] for call in client.call.call_args_list if call.args[0] == "startCollection")
+        self.assertEqual(body["ani"]["customDownloadPathTemplate"], "/Library/Work/Season 02")
+        self.assertEqual([call.args[0] for call in client.call.call_args_list], ["rssToAni", "downloadPath", "startCollection"])
+
+    def test_conversion_to_different_work_cannot_create_subscription(self):
+        ani_rss.search(self.db_path, 1, self.config)
+        resource = ani_rss.resources(self.db_path, 1)[0]
+        client = mock.Mock()
+        client.call.return_value = {"id": "wrong", "bgmUrl": "https://bgm.tv/subject/456"}
+        with mock.patch.object(ani_rss, "_client", return_value=client):
+            with self.assertRaisesRegex(ValueError, "different work"):
+                ani_rss.subscribe(self.db_path, resource["resourceId"], self.config)
+        self.assertEqual([call.args[0] for call in client.call.call_args_list], ["rssToAni"])
 
     def test_new_follow_probes_only_its_playlist_and_keeps_regular_cadence(self):
         result, due = self._follow_waiting_for_media()
@@ -698,7 +745,8 @@ class AniRssTest(unittest.TestCase):
             "bangumiSubjectCacheEndpoints": [], "bangumiApiEndpoints": [], "bangumiImageEndpoints": []
         }, log_timing=False)
         self.assertIsNotNone(first)
-        self.assertEqual("image/webp", first[1])
+        self.assertEqual("image/png", first[1])
+        self.assertEqual(output.getvalue(), first[0])
         with contextlib.closing(sqlite3.connect(self.db_path)) as db:
             row = db.execute("SELECT image_blob,source_url FROM anime_image WHERE anime_id=1").fetchone()
         self.assertEqual(first[0], row[0])
@@ -711,7 +759,8 @@ class AniRssTest(unittest.TestCase):
         self.assertEqual(first, unchanged)
         refreshed = service.get_anime_image(self.db_path, 1, refresh=True, network={}, log_timing=False)
         self.assertNotEqual(first[0], refreshed[0])
-        self.assertEqual("image/webp", refreshed[1])
+        self.assertEqual("image/png", refreshed[1])
+        self.assertEqual(changed.getvalue(), refreshed[0])
 
     def test_successful_sync_releases_stale_no_cover_when_ani_rss_has_cover(self):
         import io
@@ -745,7 +794,7 @@ class AniRssTest(unittest.TestCase):
             "bangumiSubjectCacheEndpoints": [], "bangumiApiEndpoints": [], "bangumiImageEndpoints": []
         }, log_timing=False)
         self.assertIsNotNone(recovered)
-        self.assertEqual("image/webp", recovered[1])
+        self.assertEqual("image/png", recovered[1])
         with contextlib.closing(sqlite3.connect(self.db_path)) as db:
             source = db.execute("SELECT source_url FROM anime_image WHERE anime_id=1").fetchone()[0]
         self.assertEqual("ani-rss://remote-cover-recovery/cover", source)
@@ -883,6 +932,17 @@ class AniRssTest(unittest.TestCase):
             result = ani_rss.sync(self.db_path, self.config)
         self.assertEqual("error", result["state"])
         self.assertEqual("RuntimeError", result["errorType"])
+
+    def test_conflicting_subscription_identity_keeps_last_good_mapping(self):
+        first = {"id": "same-id", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123", "enable": True}
+        FakeAniRss.subscriptions = [first]
+        self.assertEqual("ready", ani_rss.sync(self.db_path, self.config)["state"])
+        FakeAniRss.subscriptions.append({**first, "bgmUrl": "https://bgm.tv/subject/456"})
+        result = ani_rss.sync(self.db_path, self.config)
+        self.assertEqual("error", result["state"])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            row = db.execute("SELECT bgm_id,missed_successful_syncs FROM ani_rss_subscription WHERE remote_id='same-id'").fetchone()
+        self.assertEqual((123, 0), row)
 
     def test_malformed_listani_payload_fails_closed_without_attribute_error(self):
         original_call = ani_rss.Client.call
@@ -1318,6 +1378,61 @@ class AniRssTest(unittest.TestCase):
             result = ani_rss.search(self.db_path, 1, self.config)
         self.assertEqual(["中文名", "日本語名", "Work"], queries)
         self.assertEqual(1, result["found"])
+
+    def test_search_recovers_verified_subscription_page_without_keyword_lookup(self):
+        FakeAniRss.subscriptions = [{"id": "known", "title": "作品", "bgmUrl": "https://bgm.tv/subject/123",
+                                    "url": "https://mikan.test/RSS/Bangumi?bangumiId=4072&subgroupid=583", "enable": True}]
+        ani_rss.sync(self.db_path, self.config)
+        client = mock.Mock()
+        client.call.return_value = [{"label": "ReleaseGroup", "bgmUrl": "https://bgm.tv/subject/123",
+                                     "rss": "https://mikan.test/RSS/Bangumi?bangumiId=4072&subgroupid=1",
+                                     "items": [{"title": "Work - 01 (1080p)", "size": 100}]}]
+        with mock.patch.object(ani_rss, "_client", return_value=client):
+            result = ani_rss.search(self.db_path, 1, self.config)
+        self.assertEqual(1, result["found"])
+        client.call.assert_called_once_with("mikanGroup", params={"url": "https://mikan.test/Home/Bangumi/4072"}, timeout=60)
+
+    def test_short_query_keeps_correct_sequel_and_rejects_other_seasons(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET title_zh_hans='相同作品 第二季',title_ja='日本語 第2期',title_en=NULL WHERE id=1")
+        client = mock.Mock()
+        def call(path, **kwargs):
+            if path == "mikan":
+                if kwargs["params"]["text"] != "相同作品":
+                    return {"weeks": []}
+                return {"weeks": [{"items": [
+                    {"title": "相同作品", "bgmId": "999", "url": "https://mikan.test/Home/Bangumi/1"},
+                    {"title": "相同作品 第二季", "bgmId": "123", "url": "https://mikan.test/Home/Bangumi/2"}]}]}
+            self.assertEqual("https://mikan.test/Home/Bangumi/2", kwargs["params"]["url"])
+            return [{"label": "ReleaseGroup", "bgmUrl": "https://bgm.tv/subject/123", "rss": "https://mikan.test/rss",
+                     "items": [{"title": "Work - 01 (1080p)", "size": 100}]}]
+        client.call.side_effect = call
+        with mock.patch.object(ani_rss, "_client", return_value=client):
+            self.assertEqual(1, ani_rss.search(self.db_path, 1, self.config)["found"])
+        group_calls = [call for call in client.call.call_args_list if call.args[0] == "mikanGroup"]
+        self.assertEqual(1, len(group_calls))
+
+    def test_resource_page_identity_mismatch_and_empty_groups_never_report_available(self):
+        for groups in ([{"bgmUrl": "https://bgm.tv/subject/999", "rss": "https://mikan.test/rss",
+                         "items": [{"title": "Other - 01 (1080p)"}]}],
+                       [{"bgmUrl": "https://bgm.tv/subject/123", "rss": "https://mikan.test/rss", "items": []}]):
+            client = mock.Mock()
+            client.call.side_effect = [{"weeks": [{"items": [{"title": "作品", "url": "https://mikan.test/Home/Bangumi/1"}]}]}, groups]
+            with mock.patch.object(ani_rss, "_client", return_value=client):
+                self.assertEqual(0, ani_rss.search(self.db_path, 1, self.config)["found"])
+
+    def test_subscription_refresh_requests_only_selected_media_and_preserves_regular_sync(self):
+        FakeAniRss.subscriptions = [
+            {"id": "one", "bgmUrl": "https://bgm.tv/subject/123", "url": "https://mikan.test/rss1", "enable": True},
+            {"id": "two", "bgmUrl": "https://bgm.tv/subject/123", "url": "https://mikan.test/rss2", "enable": True}]
+        ani_rss.sync(self.db_path, self.config)
+        before = ani_rss.state(self.db_path, self.config)["last_success_at"]
+        with mock.patch.object(ani_rss.Client, "play_list", autospec=True, return_value=[]) as playlist:
+            result = ani_rss.sync(self.db_path, self.config, media_remote_ids={"two"})
+        self.assertEqual(["https://mikan.test/rss2"], [call.args[1] for call in playlist.call_args_list])
+        self.assertEqual(before, ani_rss.state(self.db_path, self.config)["last_success_at"])
+        self.assertFalse(result["snapshotComplete"])
+        self.assertEqual(1, result["mediaSubscriptions"])
 
     def test_sync_due_recovers_from_future_wall_clock_timestamp(self):
         future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=2)).isoformat()

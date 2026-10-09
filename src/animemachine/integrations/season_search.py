@@ -47,7 +47,7 @@ class SeasonSearch:
         with self.lock:
             self._save({**self._status, **values, "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat()})
 
-    def start(self, start: str, end: str, language: str) -> bool:
+    def start(self, start: str, end: str, language: str, *, synchronize: bool = False) -> bool:
         if not all(re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value) for value in (start, end)):
             raise ValueError("invalid season dates")
         first = int(start[:4]) * 12 + int(start[5:])
@@ -61,22 +61,33 @@ class SeasonSearch:
             if self._status.get("state") == "running":
                 return False
             resume = (self._status.get("state") in {"interrupted", "failed", "complete"}
-                      and self._status.get("from") == start and self._status.get("to") == end)
+                      and self._status.get("from") == start and self._status.get("to") == end
+                      and bool(self._status.get("synchronize")) == synchronize)
             if self._status.get("state") == "complete" and not self._status.get("failedIds"):
                 resume = False
             failures = set(self._status.get("failedIds", [])) if resume else set()
             completed = [value for value in self._status.get("completedIds", []) if value not in failures] if resume else []
             self._save({"state": "running", "from": start, "to": end, "done": len(completed),
+                        "synchronize": synchronize, "phase": "sync" if synchronize else "search",
                         "total": 0, "failed": 0, "failedIds": [], "failures": [],
                         "completedIds": completed, "currentAnimeId": None, "error": None})
         self.stop.clear()
-        self.thread = threading.Thread(target=self._run, args=(start, end, language, config),
+        self.thread = threading.Thread(target=self._run, args=(start, end, language, config, synchronize),
                                        daemon=True, name="anm-season-search")
         self.thread.start()
         return True
 
-    def _run(self, start: str, end: str, language: str, config: dict[str, Any]) -> None:
+    def _run(self, start: str, end: str, language: str, config: dict[str, Any], synchronize: bool = False) -> None:
         try:
+            if synchronize:
+                with self.operation():
+                    result = ani_rss.sync(self.db_path, config, abort_event=self.stop)
+                if self.stop.is_set():
+                    self._set(state="interrupted", currentAnimeId=None)
+                    return
+                if result.get("state") != "ready":
+                    raise RuntimeError("Ani-RSS synchronization failed")
+                self._set(phase="search", syncResult=result)
             params = {"radar": ["1"], "sort": ["recent_episode"], "limit": ["all"],
                       "start_from": [start], "start_to": [end], "language": [language]}
             rows = self.query(self.db_path, params, config)["items"]
@@ -93,7 +104,9 @@ class SeasonSearch:
                     return
                 if anime_id in completed:
                     continue
-                self._set(currentAnimeId=anime_id)
+                row = next(row for row in rows if int(row["id"]) == anime_id)
+                self._set(currentAnimeId=anime_id, currentTitle=str(row.get("title_zh_hans_localized")
+                          or row.get("title_zh_hans") or row.get("title_en") or row.get("title_ja") or ""))
                 for attempt in range(SEARCH_ATTEMPTS):
                     with self.operation():
                         current = self.config_store.read()
