@@ -185,13 +185,21 @@ def _candidate_urls(url: str) -> list[str]:
     return network_sources.asset_urls(url, _proxy_templates())
 
 
-def _release_payload() -> dict[str, Any]:
+def _validate_release_payload(payload: Any) -> dict[str, Any]:
+    if (not isinstance(payload, dict) or not _version_tuple(str(payload.get("tag_name") or ""))
+            or not isinstance(payload.get("assets"), list) or payload.get("draft") or payload.get("prerelease")):
+        raise ValueError("invalid stable release response")
+    return payload
+
+
+def _release_payload(*, force: bool = False) -> dict[str, Any]:
     global _LAST_RELEASE_SOURCE
     payload, final_url = network_sources.fetch_json(
         _candidate_urls(_LATEST_RELEASE_API),
         headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
         timeout=8, attempts=1, hedge_delays=(0, .45, .9),
-        service=_UPDATE_API_SERVICE, capability=_UPDATE_API_CAPABILITY, honor_cooldown=True,
+        service=_UPDATE_API_SERVICE, capability=_UPDATE_API_CAPABILITY, honor_cooldown=not force,
+        validator=_validate_release_payload,
     )
     if not isinstance(payload, dict):
         raise ValueError("invalid release response")
@@ -210,9 +218,14 @@ def _checksum_from_asset(asset: dict[str, Any]) -> str:
     url = str(asset.get("browser_download_url") or "")
     if not url:
         return ""
+    def validate(data: bytes, mime: str) -> tuple[bytes, str]:
+        if not re.search(rb"(?i)(?<![0-9a-f])([0-9a-f]{64})(?![0-9a-f])", data):
+            raise ValueError("invalid release checksum response")
+        return data, mime
     data, _mime, final_url = network_sources.fetch_binary(
         _candidate_urls(url), timeout=8, limit=4096, attempts=1, hedge_delays=(0, .45, .9),
-        service="application_update_checksum", capability="update_checksum", honor_cooldown=True)
+        service="application_update_checksum", capability="update_checksum", honor_cooldown=True,
+        validator=validate)
     if final_url:
         _record_state(downloadSource=str(final_url))
     text = bytes(data).decode("utf-8", errors="replace").strip()
@@ -368,7 +381,7 @@ def _probe_update_sources(*, recheck: bool, release: dict[str, Any] | None = Non
     store = Store()
     if recheck and entries:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(entries)), thread_name_prefix="anm-update-diag") as pool:
-            futures = [pool.submit(_probe_entry, item, store, timeout=4.0, honor_cooldown=True) for item in entries]
+            futures = [pool.submit(_probe_entry, item, store, timeout=4.0, honor_cooldown=False) for item in entries]
             for future in futures:
                 try:
                     future.result(timeout=5.0)
@@ -420,7 +433,7 @@ def status(*, force: bool = False) -> dict[str, Any]:
             return json.loads(json.dumps(_CACHE[1]))
     checked_at = _utc_now()
     try:
-        result = _build_status(_release_payload())
+        result = _build_status(_release_payload(force=force))
         result["checkedAt"] = checked_at
         diagnostics = _probe_update_sources(recheck=force, release=result)
         result = _decorate_status(result, diagnostics)
@@ -435,6 +448,12 @@ def status(*, force: bool = False) -> dict[str, Any]:
 
 
 def network_diagnostics(*, force: bool = False) -> dict[str, Any]:
+    if not force:
+        # Viewing diagnostics is a local snapshot, never an implicit release
+        # check. Optional GitHub connectivity must not delay the whole page.
+        with _CACHE_LOCK:
+            release = json.loads(json.dumps(_CACHE[1])) if _CACHE else None
+        return _probe_update_sources(recheck=False, release=release)
     try:
         return dict(status(force=force).get("sourceDiagnostics") or {})
     except Exception:

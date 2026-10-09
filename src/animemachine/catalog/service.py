@@ -323,9 +323,59 @@ def fetch_json(url: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def resolve_archive_descriptor(network: dict[str, Any] | None = None, *,
+                               minimum_version: dt.datetime | None = None) -> dict[str, Any]:
+    """Validate manifest semantics before choosing a winning network source."""
+    network = network or {}
+    urls = list(dict.fromkeys([
+        *(network.get("archiveManifestEndpoints") or []),
+        *(item.base_url for item in network_registry.for_service("archive_descriptor")),
+        LATEST_ARCHIVE_URL,
+    ]))
+    stale: list[dict[str, Any]] = []
+    stale_lock = threading.Lock()
+    def validate(payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("invalid Archive descriptor")
+        name = str(payload.get("name") or "")
+        size = payload.get("size")
+        url = urllib.parse.urlparse(str(payload.get("browser_download_url") or ""))
+        if (not name.endswith('.zip') or re.search(r'[<>:"/\\|?*\x00-\x1f]', name) or name in {'.', '..'}
+                or not isinstance(size, int) or isinstance(size, bool) or size <= 0
+                or not re.fullmatch(r"sha256:[0-9a-fA-F]{64}", str(payload.get("digest") or ""))
+                or url.scheme not in {'http', 'https'} or not url.netloc or url.username or url.password):
+            raise ValueError("invalid Archive descriptor fields")
+        timestamp = archive_update.archive_release_time(name, payload.get("created_at"))
+        if minimum_version is not None:
+            if timestamp is None:
+                raise ValueError("Archive release time is unavailable")
+            if timestamp < minimum_version:
+                with stale_lock:
+                    stale.append(dict(payload))
+                raise ValueError("Archive descriptor is older than the current Catalog")
+        return dict(payload)
+    try:
+        descriptor, endpoint = network_sources.fetch_json(
+            urls, timeout=float(network.get("probeTimeoutSeconds", 12)),
+            cooldown=int(network.get("failureCooldownSeconds", 900)),
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json", "Cache-Control": "no-cache"},
+            service="archive_descriptor", validator=validate)
+    except RuntimeError:
+        # All sources failed or lagged; a verified old descriptor can only cause
+        # an unchanged result, never a download or a Catalog rollback.
+        with stale_lock:
+            if not stale:
+                raise
+            return max(stale, key=lambda item: archive_update.archive_release_time(item['name'], item.get('created_at')))
+    descriptor = validate(descriptor)
+    descriptor["resolved_manifest_endpoint"] = endpoint
+    return descriptor
+
+
 def ensure_archive(archive_dir: Path, supplied: Path | None = None,
                    network: dict[str, Any] | None = None,
-                   progress_callback: Callable[[dict[str, Any]], None] | None = None) -> tuple[Path, dict[str, Any]]:
+                   progress_callback: Callable[[dict[str, Any]], None] | None = None, *,
+                   descriptor: dict[str, Any] | None = None) -> tuple[Path, dict[str, Any]]:
     """Resolve, download and verify the current official Bangumi Archive."""
     def emit(phase: str, **details: Any) -> None:
         if progress_callback:
@@ -349,21 +399,14 @@ def ensure_archive(archive_dir: Path, supplied: Path | None = None,
                 pass
         write_archive_receipt(receipt, actual_hash, stat.st_size, source=path)
         emit("archive_ready", received=stat.st_size, total=stat.st_size)
-        return path, {"name": path.name, "digest": f"sha256:{actual_hash}", "created_at": verified_at}
+        exported = archive_update.archive_release_time(path.name)
+        return path, {"name": path.name, "digest": f"sha256:{actual_hash}",
+                      "created_at": exported.isoformat() if exported else verified_at}
 
     archive_dir.mkdir(parents=True, exist_ok=True)
     print("[archive] Checking Bangumi Archive release metadata...", flush=True)
     network = network or {}
-    descriptor_urls = list(dict.fromkeys([
-        *(network.get("archiveManifestEndpoints") or []),
-        *(item.base_url for item in network_registry.for_service("archive_descriptor")),
-        LATEST_ARCHIVE_URL,
-    ]))
-    descriptor, descriptor_endpoint = network_sources.fetch_json(
-        descriptor_urls, timeout=float(network.get("probeTimeoutSeconds", 12)),
-        cooldown=int(network.get("failureCooldownSeconds", 900)),
-        headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    descriptor["resolved_manifest_endpoint"] = descriptor_endpoint
+    descriptor = descriptor if descriptor is not None else resolve_archive_descriptor(network)
     path = archive_dir / descriptor["name"]
     expected_size = int(descriptor["size"])
     expected_hash = str(descriptor["digest"]).removeprefix("sha256:").lower()
@@ -2096,6 +2139,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_episode_state'").fetchone())
         has_ani_rss_release_state_table = bool(feature_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_release_state'").fetchone())
+        has_ani_rss_movie_release_table = bool(feature_db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_movie_release_state'").fetchone())
         has_ani_rss_action_table = bool(feature_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_action'").fetchone())
     config = config or ConfigStore(DEFAULT_CONFIG, EXAMPLE_CONFIG).read()
@@ -2135,6 +2180,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                      "OR NOT EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND COALESCE(fc.country_code,'')<>'')) "
                      f"AND {translated_expr}))")
     if radar_mode:
+        hard_where.append("w.media_code IN ('tv','movie','ova','web')")
         hard_where.append("(EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code='JP') "
                           "OR NOT EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code!='OTHER'))")
         hard_where.append(f"NOT ({original_language_expr}='zh' AND NOT {translated_expr})")
@@ -2176,6 +2222,14 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             values.append(studio)
     start_from, start_to = value("start_from"), value("start_to")
     date_clauses: list[str] = []
+    premiere_expr = ("CASE WHEN length(w.raw_date)=10 AND date(w.raw_date,'+0 days')=w.raw_date "
+                     "THEN w.raw_date ELSE COALESCE(w.start_month||'-01','') END")
+    movie_release_expr = (
+        "(SELECT date(amr.first_release_at,'+8 hours') FROM ani_rss_movie_release_state amr "
+        f"WHERE amr.anime_id=w.id AND date(amr.first_release_at,'+8 hours')>=({premiere_expr}))"
+        if has_ani_rss_movie_release_table else "NULL"
+    )
+    missing_bd_expr = "NOT EXISTS(SELECT 1 FROM anime_release_event bd WHERE bd.anime_id=w.id AND bd.event_type='bd')"
 
     def month_bounds(expression: str) -> tuple[str, list[str]]:
         clauses: list[str] = []
@@ -2192,13 +2246,15 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         tv_range, tv_values = month_bounds("w.start_month")
         movie_start_range, movie_start_values = month_bounds("w.start_month")
         release_range, release_values = month_bounds("substr(re.release_date,1,7)")
+        resource_range, resource_values = month_bounds(f"substr({movie_release_expr},1,7)")
         hard_where.append(
             f"((w.media_code<>'movie' AND ({tv_range})) OR "
             f"(w.media_code='movie' AND (({movie_start_range}) OR EXISTS("
             "SELECT 1 FROM anime_release_event re WHERE re.anime_id=w.id "
-            f"AND re.event_type IN ('theatrical','bd') AND ({release_range})))))"
+            f"AND re.event_type IN ('theatrical','bd') AND ({release_range})) OR "
+            f"({missing_bd_expr} AND {movie_release_expr} IS NOT NULL AND ({resource_range})))))"
         )
-        hard_values.extend([*tv_values, *movie_start_values, *release_values])
+        hard_values.extend([*tv_values, *movie_start_values, *release_values, *resource_values])
         date_clauses = [tv_range] if start_from or start_to else []
     else:
         if start_from:
@@ -2361,9 +2417,12 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     if has_ani_rss_release_state_table:
         episode_update_expr = (f"MAX({episode_update_expr},COALESCE((SELECT MAX(ars.last_episode_update_at) "
                                "FROM ani_rss_release_state ars WHERE ars.anime_id=w.id),''))")
+    if has_ani_rss_movie_release_table:
+        episode_update_expr = (f"MAX({episode_update_expr},COALESCE((SELECT amu.last_release_at "
+                               "FROM ani_rss_movie_release_state amu WHERE amu.anime_id=w.id "
+                               "AND w.media_code='movie'),''))")
     if radar_mode and sort == "premiere":
-        primary = ("CASE WHEN length(w.raw_date)=10 AND date(w.raw_date,'+0 days')=w.raw_date "
-                   "THEN w.raw_date ELSE COALESCE(w.start_month||'-01','') END")
+        primary = premiere_expr
     elif radar_mode and sort == "updated":
         primary = episode_update_expr if ani_connection_ready and has_ani_rss_episode_state_table else "''"
     elif radar_mode and sort == "subscription":
@@ -2386,37 +2445,24 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         primary = ("MAX(0," + ",".join(
             f"episode_sort_number(w.id,w.episode_count,w.episode_start_number,{current})" for current in currents) + ")"
             if currents else "CAST(0 AS INTEGER)")
-    radar_event_date_expr = "w.start_month"
-    radar_event_order_values: list[str] = []
-    if radar_mode:
-        event_bounds, event_bound_values = month_bounds("substr(rse.release_date,1,7)")
-        start_bounds, start_bound_values = month_bounds("w.start_month")
-        radar_event_date_expr = (
-            "MAX(COALESCE((SELECT MAX(rse.release_date) FROM anime_release_event rse "
-            "WHERE rse.anime_id=w.id AND rse.event_type IN ('theatrical','bd') "
-            f"AND ({event_bounds})),''),CASE WHEN ({start_bounds}) THEN w.start_month ELSE '' END)"
-        )
-        radar_event_order_values = [*event_bound_values, *start_bound_values]
-    if sort == "recent_episode":
-        if radar_mode:
-            order = (f"CASE WHEN w.media_code='tv' AND {episode_update_expr}<>'' THEN 0 ELSE 1 END ASC,"
-                     f"CASE WHEN w.media_code='tv' THEN {episode_update_expr} ELSE '' END DESC,"
-                     f"CASE WHEN w.media_code='movie' THEN {radar_event_date_expr} ELSE w.start_month END DESC,"
-                     f"w.start_month DESC,w.media_code ASC,{title_expr} ASC,w.id ASC")
-        else:
-            order = (f"CASE WHEN {episode_update_expr}='' THEN 1 ELSE 0 END ASC,"
-                     f"{episode_update_expr} DESC,w.start_month DESC,w.media_code ASC,{title_expr} ASC,w.id ASC")
+    default_radar_order = radar_mode and requested_sort == "recent_episode"
+    if default_radar_order:
+        update_order = episode_update_expr if ani_connection_ready else "''"
+        order = (f"CASE WHEN ({premiere_expr})='' THEN 1 ELSE 0 END ASC,{premiere_expr} ASC,"
+                 f"julianday({update_order}) DESC,{title_expr} ASC,w.id ASC")
+    elif sort == "recent_episode":
+        order = (f"CASE WHEN {episode_update_expr}='' THEN 1 ELSE 0 END ASC,"
+                 f"{episode_update_expr} DESC,w.start_month DESC,w.media_code ASC,{title_expr} ASC,w.id ASC")
     elif sort == "random":
         order = f"{pending_expr} ASC,seeded_rank(w.id,?) ASC,w.start_month,w.media_code,{title_expr}"
     else:
         order = f"{primary} {direction},w.start_month ASC,w.media_code ASC,{title_expr} ASC,w.id ASC"
     if radar_mode and value("radar_grouped") != "0":
-        order = (f"CASE WHEN {translated_expr} THEN CASE WHEN w.media_code='tv' THEN 0 ELSE 1 END "
-                 "ELSE CASE WHEN w.media_code='tv' THEN 3 ELSE 2 END END ASC," + order)
+        order = (f"CASE WHEN {translated_expr} THEN 0 ELSE 4 END + "
+                 "CASE w.media_code WHEN 'tv' THEN 0 WHEN 'movie' THEN 1 WHEN 'ova' THEN 2 ELSE 3 END ASC," + order)
     elif not radar_mode and not q and requested_sort in {"recent_episode", "random"}:
         order = f"{subscription_order} DESC," + order
-    order_values = ([seed] if sort == "random" else
-                    (radar_event_order_values if sort == "recent_episode" and radar_mode else []))
+    order_values = [seed] if sort == "random" and not default_radar_order else []
     predicate = " WHERE " + " AND ".join(base_where + hard_where + where)
     predicate_values = hard_values + values
     search_expanded = bool(q and len(where) > 1)
@@ -2501,6 +2547,20 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                 usable_counts[anime_id] = sum(1 for item in runtime_catalog.torrents_for_anime(db, anime_id, config) if item["eligible"])
         for row in rows:
             anime_id = row["id"]
+            row["radar_release_date"] = None
+            row["radar_release_kind"] = None
+            if radar_mode and row["media_code"] == "movie":
+                bd_bounds, bd_values = month_bounds("substr(release_date,1,7)")
+                bd = db.execute(f"SELECT MIN(release_date) FROM anime_release_event "
+                                f"WHERE anime_id=? AND event_type='bd' AND ({bd_bounds})", [anime_id, *bd_values]).fetchone()[0]
+                if bd:
+                    row["radar_release_date"], row["radar_release_kind"] = bd, "bd"
+                elif has_ani_rss_movie_release_table:
+                    inferred = db.execute(f"SELECT {movie_release_expr} FROM anime_work w "
+                                          f"WHERE w.id=? AND {missing_bd_expr}", (anime_id,)).fetchone()
+                    stamp = inferred[0] if inferred else None
+                    if stamp and (not start_from or stamp[:7] >= start_from) and (not start_to or stamp[:7] <= start_to):
+                        row["radar_release_date"], row["radar_release_kind"] = stamp, "resource"
             original_title = str(row.get("title_ja") or "")
             row["title_ja_localized"] = localized_archive_title(db, int(anime_id), "ja", original_title)
             row["title_zh_hans_localized"] = localized_archive_title(db, int(anime_id), "zh-Hans", original_title)
@@ -2542,6 +2602,10 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                         current_candidates, total_candidates,
                     )
                     row["last_episode_update_at"] = max(progress[2] or "", release[1] or "") or None
+                if row["media_code"] == "movie" and has_ani_rss_movie_release_table:
+                    movie = db.execute("SELECT last_release_at FROM ani_rss_movie_release_state WHERE anime_id=?", (anime_id,)).fetchone()
+                    if movie:
+                        row["last_episode_update_at"] = max(row["last_episode_update_at"] or "", movie[0])
             else:
                 row["episode_progress"] = {"current": None, "total": row.get("episode_count")}
                 row["last_episode_update_at"] = None

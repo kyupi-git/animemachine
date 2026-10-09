@@ -8,11 +8,24 @@ import sqlite3
 import tempfile
 import threading
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 
 ARCHIVE_TIMEZONE = dt.timezone(dt.timedelta(hours=8))
+
+
+def archive_release_time(name: Any, created_at: Any = None) -> dt.datetime | None:
+    """Dump filenames carry the export time, unlike local verification receipts."""
+    match = re.fullmatch(r"dump-(\d{4}-\d{2}-\d{2})\.(\d{6})Z\.zip", str(name or ""))
+    try:
+        if match:
+            return dt.datetime.strptime(''.join(match.groups()), "%Y-%m-%d%H%M%S").replace(tzinfo=dt.timezone.utc)
+        moment = dt.datetime.fromisoformat(str(created_at or "").replace("Z", "+00:00"))
+        return moment.astimezone(dt.timezone.utc) if moment.tzinfo is not None else None
+    except (ValueError, TypeError):
+        return None
 
 
 def weekly_check(now: dt.datetime) -> dt.datetime:
@@ -146,11 +159,8 @@ class ArchiveUpdater:
                     remaining -= len(block)
             config = self.config_store.read() if self.config_store else {}
             network = config.get("metadata", {}).get("network", {})
-            descriptor, endpoint = self.catalog.network_sources.fetch_json(
-                network.get("archiveManifestEndpoints") or [self.catalog.LATEST_ARCHIVE_URL],
-                timeout=float(network.get("probeTimeoutSeconds", 12)),
-                cooldown=int(network.get("failureCooldownSeconds", 900)),
-                headers={"User-Agent": self.catalog.USER_AGENT, "Accept": "application/json"})
+            descriptor = self.catalog.resolve_archive_descriptor(
+                network, minimum_version=archive_release_time(filename))
             expected_hash = str(descriptor["digest"]).removeprefix("sha256:").lower()
             if filename != descriptor["name"]:
                 raise ValueError(f"uploaded file is not the current Archive ({descriptor['name']})")
@@ -162,7 +172,6 @@ class ArchiveUpdater:
             os.replace(temporary, target)
             self.catalog.write_archive_receipt(target.with_suffix(target.suffix + ".verified.json"),
                                                expected_hash, int(descriptor["size"]), source=target)
-            descriptor["resolved_manifest_endpoint"] = endpoint
             self._set("imported", archiveName=filename)
             return {"installed": True, "archiveName": filename, "sha256": expected_hash}
         finally:
@@ -179,18 +188,24 @@ class ArchiveUpdater:
         temporary: Path | None = None
         try:
             config = self.config_store.read() if self.config_store else {}
-            archive, descriptor = self.catalog.ensure_archive(self.archive_dir, network=config.get("metadata", {}).get("network", {}))
             with contextlib.closing(sqlite3.connect(self.db_path, timeout=120)) as db:
                 db.execute("PRAGMA busy_timeout=120000")
-                current = db.execute("SELECT value FROM metadata WHERE key='archive_digest'").fetchone()
-                release_event_source = db.execute(
-                    "SELECT value FROM metadata WHERE key='release_event_source_version'"
-                ).fetchone()
+                current = dict(db.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at','archive_digest')"))
+            current_time = archive_release_time(current.get("archive_name"), current.get("archive_created_at"))
+            network = config.get("metadata", {}).get("network", {})
+            descriptor = self.catalog.resolve_archive_descriptor(network, minimum_version=current_time)
             digest = str(descriptor.get("digest") or "")
-            if (current and current[0] == digest and release_event_source
-                    and release_event_source[0] == self.catalog.RELEASE_EVENT_SOURCE_VERSION):
-                self._set("unchanged", archiveName=descriptor.get("name"), archiveCreatedAt=descriptor.get("created_at"))
+            incoming_time = archive_release_time(descriptor.get("name"), descriptor.get("created_at"))
+            same = bool(current.get("archive_digest") and current["archive_digest"] == digest)
+            if same or (current_time is not None and incoming_time is not None and incoming_time <= current_time):
+                print(f"[archive] No newer archive; keeping {current.get('archive_name')} (checked {descriptor.get('name')}).", flush=True)
+                self._set("unchanged", archiveName=current.get("archive_name"),
+                          archiveCreatedAt=current_time.isoformat() if current_time else current.get("archive_created_at"),
+                          checkedArchiveName=descriptor.get("name"))
                 return
+            if current_time is not None and incoming_time is None:
+                raise ValueError("Archive release time is unavailable; current Catalog was preserved")
+            archive, descriptor = self.catalog.ensure_archive(self.archive_dir, network=network, descriptor=descriptor)
             self._set("building", archiveName=descriptor.get("name"))
             manifest = self.catalog.all_anime_manifest(archive)
             rows = self.catalog.build_items_from_archive(archive, manifest, {})
@@ -215,6 +230,13 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
     try:
         db.execute("PRAGMA busy_timeout=120000")
         db.execute("PRAGMA foreign_keys=ON")
+        current = dict(db.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at')"))
+        with contextlib.closing(sqlite3.connect(f"file:{incoming.as_posix()}?mode=ro", uri=True)) as source:
+            candidate = dict(source.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at')"))
+        current_time = archive_release_time(current.get('archive_name'), current.get('archive_created_at'))
+        incoming_time = archive_release_time(candidate.get('archive_name'), candidate.get('archive_created_at'))
+        if current_time is not None and incoming_time is not None and incoming_time < current_time:
+            raise ValueError("Refusing to replace Catalog metadata with an older Archive")
         catalog_module.migrate_catalog_features(db)
         before = db.execute("SELECT COUNT(*) FROM anime_work").fetchone()[0]
         db.execute("ATTACH DATABASE ? AS incoming", (str(incoming),))

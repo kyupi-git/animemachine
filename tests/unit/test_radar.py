@@ -59,7 +59,7 @@ class RadarTests(unittest.TestCase):
                 result = service.query_catalog(self.db_path, {"radar": ["1"], "sort": ["recent_episode"]}, self.config)
                 self.assertEqual("movie", result["items"][-1]["media_code"])
 
-    def test_radar_groups_translated_tv_other_then_untranslated_other_and_tv(self):
+    def test_radar_groups_translated_media_then_untranslated_media(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET media_code='movie' WHERE id IN (3,4)")
             db.execute("UPDATE anime_work SET media_code='ova' WHERE id=5")
@@ -71,7 +71,7 @@ class RadarTests(unittest.TestCase):
                     rows = service.query_catalog(self.db_path, {"radar": ["1"], "sort": [order], "limit": ["all"]}, self.config)["items"]
                     self.assertEqual(1, rows[0]["id"])
                     self.assertEqual({3, 5}, {row["id"] for row in rows[1:3]})
-                    self.assertEqual([4, 2], [row["id"] for row in rows[-2:]])
+                    self.assertEqual([2, 4], [row["id"] for row in rows[-2:]])
                     first = service.query_catalog(self.db_path, {"radar": ["1"], "sort": [order], "limit": ["2"]}, self.config)["items"]
                     self.assertEqual([row["id"] for row in rows[:2]], [row["id"] for row in first])
 
@@ -487,9 +487,105 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
         self.assertEqual(1, ids.count(1))
         self.assertEqual(1, ids.count(2))
 
-    def test_movie_sort_uses_quarter_release_event_not_episode_update(self):
+    def test_radar_orders_all_eight_categories_and_excludes_other_media(self):
+        archive = Path(self.tmp.name) / "categories.zip"
+        rows = [{"id": index, "type": 2, "name": f"アニメ {index}",
+                 "name_cn": f"译名 {index}" if index <= 4 else "", "date": "2026-07-01",
+                 "platform": platform, "infobox": "", "tags": [{"name": "日本动画"}]}
+                for index, platform in enumerate([1, 3, 2, 5, 1, 3, 2, 5, 4, 6, 0], 1)]
+        archive_with_rows(archive, rows)
+        self.db_path.unlink()
+        with contextlib.redirect_stdout(None):
+            service.write_database(self.db_path, service.build_items_from_archive(archive, None, {}))
+        for ready in (self.ready, {"connection_state": "failed", "credentialConfigured": False}):
+            self.ready = ready
+            result = self.query()
+            self.assertEqual(list(range(1, 9)), [item["bgm_id"] for item in result["items"]])
+            self.assertEqual(0, self.query(q=["アニメ 9"])["total"])
+            self.assertEqual(1, self.query(radar=["0"], q=["アニメ 9"])["total"])
+
+    def test_default_order_keeps_premiere_primary_and_updates_same_day_ties(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET raw_date='2026-07-02' WHERE id=1")
+            db.execute("UPDATE anime_work SET raw_date='2026-07-01' WHERE id IN (2,3)")
+            ani_rss.record_release_progress(db, 1, 1, "2026-07-12T00:00:00+00:00", published_at="2026-07-12T00:00:00+00:00")
+            ani_rss.record_release_progress(db, 2, 1, "2026-07-10T00:00:00+00:00", published_at="2026-07-10T00:00:00+00:00")
+            ani_rss.record_release_progress(db, 3, 1, "2026-07-11T00:00:00+00:00", published_at="2026-07-11T00:00:00+00:00")
+        ids = [item["id"] for item in self.query()["items"]]
+        self.assertLess(ids.index(3), ids.index(2))
+        self.assertLess(ids.index(2), ids.index(1))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            ani_rss.record_release_progress(db, 2, 2, "2026-07-13T00:00:00+00:00", published_at="2026-07-13T00:00:00+00:00")
+        ids = [item["id"] for item in self.query()["items"]]
+        self.assertLess(ids.index(2), ids.index(3))
+        self.assertLess(ids.index(3), ids.index(1))
+
+    def test_movie_resource_date_uses_earliest_release_and_keeps_original_premiere(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET media_code='movie',start_month='2026-01',raw_date='2026-01-15' WHERE id=1")
+            ani_rss._record_movie_releases(db, 1, [
+                {"createdAt": "2026-07-01T00:30:00+08:00"},
+                {"createdAt": "2026-08-01T00:30:00+08:00"},
+                {"createdAt": "2025-12-01T00:30:00+08:00"},
+                {"createdAt": "2099-12-01T00:30:00+08:00"},
+            ])
+        item = next(row for row in self.query()["items"] if row["id"] == 1)
+        self.assertEqual("2026-01-15", item["raw_date"])
+        self.assertEqual("2026-07-01", item["radar_release_date"])
+        self.assertEqual("resource", item["radar_release_kind"])
+        self.assertEqual("2026-07-31T16:30:00+00:00", item["last_episode_update_at"])
+        self.assertNotIn(1, {row["id"] for row in self.query(start_from=["2026-04"], start_to=["2026-06"])["items"]})
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            ani_rss._record_movie_releases(db, 1, [{"createdAt": "2026-09-02T00:30:00+08:00"}])
+        self.assertEqual("2026-07-01", next(row for row in self.query()["items"] if row["id"] == 1)["radar_release_date"])
+        self.assertNotIn(1, {row["id"] for row in self.query(start_from=["2026-09"], start_to=["2026-11"])["items"]})
+        self.ready = {"connection_state": "failed", "credentialConfigured": False}
+        item = next(row for row in self.query()["items"] if row["id"] == 1)
+        self.assertEqual("2026-07-01", item["radar_release_date"])
+        self.assertIsNone(item["last_episode_update_at"])
+
+    def test_explicit_bd_dates_replace_resource_inference_and_work_changes_invalidate_it(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET media_code='movie',start_month='2026-01',raw_date='2026-01-15' WHERE id=1")
+            ani_rss._record_movie_releases(db, 1, [{"createdAt": "2026-07-01T00:30:00+08:00"}])
+            db.execute("INSERT INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(1,'bd','2026-09-15','bangumi-archive:infobox:BD発売日')")
+        self.assertNotIn(1, {row["id"] for row in self.query()["items"]})
+
+        item = next(row for row in self.query(start_from=["2026-09"], start_to=["2026-11"])["items"] if row["id"] == 1)
+        self.assertEqual(("bd", "2026-09-15"), (item["radar_release_kind"], item["radar_release_date"]))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("DELETE FROM anime_release_event WHERE anime_id=1")
+            db.execute("UPDATE anime_work SET start_month='2027-01',raw_date='2027-01-15' WHERE id=1")
+        self.assertNotIn(1, {row["id"] for row in self.query()["items"]})
+
+    def test_archive_new_translation_reorders_movie_and_keeps_resource_evidence(self):
+        archive = Path(self.tmp.name) / "translations.zip"
+        incoming = Path(self.tmp.name) / "new.sqlite3"
+        rows = [{"id": index, "type": 2, "name": name, "name_cn": translation,
+                 "date": "2026-01-15", "platform": 3, "infobox": "", "tags": [{"name": "日本动画"}]}
+                for index, name, translation in [(1, "映画あ", ""), (2, "映画い", "译名二")]]
+        archive_with_rows(archive, rows)
+        self.db_path.unlink()
+        with contextlib.redirect_stdout(None):
+            service.write_database(self.db_path, service.build_items_from_archive(archive, None, {}))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            for anime_id in (1, 2):
+                ani_rss._record_movie_releases(db, anime_id, [{"createdAt": "2026-07-01T00:30:00+08:00"}])
+        self.assertEqual([2, 1], [row["bgm_id"] for row in self.query()["items"]])
+        rows[0]["name_cn"] = "译名一"
+        archive_with_rows(archive, rows)
+        with contextlib.redirect_stdout(None):
+            service.write_database(incoming, service.build_items_from_archive(archive, None, {}))
+        archive_update.merge_metadata(self.db_path, incoming, service)
+        result = self.query()["items"]
+        self.assertEqual([1, 2], [row["bgm_id"] for row in result])
+        self.assertTrue(all(row["radar_release_date"] == "2026-07-01" for row in result))
+
+    def test_movie_sort_uses_premiere_before_episode_update(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET media_code='movie',start_month='2026-01' WHERE id IN (1,2)")
+            db.execute("UPDATE anime_work SET raw_date='2026-01-15' WHERE id=1")
+            db.execute("UPDATE anime_work SET raw_date='2026-01-16' WHERE id=2")
             db.execute("INSERT INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(1,'bd','2026-08-20','bangumi-archive:infobox:BD発売日')")
             db.execute("INSERT INTO anime_release_event(anime_id,event_type,release_date,source) VALUES(2,'bd','2026-07-10','bangumi-archive:infobox:BD発売日')")
             ani_rss.record_release_progress(db, 1, 99, "2026-09-10T00:00:00+00:00")

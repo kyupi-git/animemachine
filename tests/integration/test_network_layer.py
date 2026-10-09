@@ -22,6 +22,57 @@ class FakeResponse:
 
 
 class NetworkLayerTests(unittest.TestCase):
+    def test_all_sources_in_cooldown_are_reprobed_after_network_recovers(self):
+        endpoints = [registry.Endpoint('one', 'update', 'https://one.invalid', 'official'),
+                     registry.Endpoint('two', 'update', 'https://two.invalid', 'community_mirror')]
+        profile = {'routeMode': 'direct', 'id': 'test-network'}
+        with tempfile.TemporaryDirectory() as raw:
+            store = health.Store(Path(raw) / 'h.sqlite3')
+            for endpoint in endpoints:
+                store.failure(endpoint.id, 'update_json', 'ConnectError', network_id='test-network')
+                store.failure(endpoint.id, 'update_json', 'ConnectError', network_id='test-network')
+            with mock.patch.object(transport, 'network_profile', return_value=profile), mock.patch.object(
+                    transport, 'request', return_value=FakeResponse(b'{}', 'https://one.invalid')) as request:
+                result, _endpoint, _url = hedging.first_valid(endpoints, capability='update_json',
+                    validator=lambda data, _mime: json.loads(data), health=store, honor_cooldown=True)
+                self.assertEqual({}, result)
+                self.assertTrue(request.called)
+
+    def test_stale_archive_manifest_falls_through_to_fresh_source(self):
+        from animemachine.catalog import service, archive_update
+        current = 'dump-2026-10-06.210359Z.zip'
+        minimum = archive_update.archive_release_time(current)
+        for all_stale in (False, True):
+            calls = []
+            def request(_method, url, **_kwargs):
+                calls.append(url)
+                name = 'dump-2026-09-29.210337Z.zip' if 'stale' in url or all_stale else current
+                payload = {'name': name, 'size': 1, 'digest': 'sha256:' + 'a' * 64,
+                           'browser_download_url': 'https://github.com/example/' + name}
+                return FakeResponse(json.dumps(payload).encode(), url)
+            with tempfile.TemporaryDirectory() as raw, mock.patch.object(sources, '_HEALTH', health.Store(Path(raw) / 'h.sqlite3')), \
+                    mock.patch.object(service.network_registry, 'for_service', return_value=[]), \
+                    mock.patch.object(service, 'LATEST_ARCHIVE_URL', 'https://fresh.invalid/latest.json'), \
+                    mock.patch.object(transport, 'network_profile', return_value={'routeMode':'direct', 'id':'test-network'}), \
+                    mock.patch.object(transport, 'request', side_effect=request):
+                descriptor = service.resolve_archive_descriptor({'archiveManifestEndpoints': ['https://stale.invalid/latest.json']}, minimum_version=minimum)
+            self.assertIn('https://fresh.invalid/latest.json', calls)
+            self.assertEqual('dump-2026-09-29.210337Z.zip' if all_stale else current, descriptor['name'])
+
+    def test_invalid_manifest_cannot_win_or_escape_the_archive_directory(self):
+        from animemachine.catalog import service
+        valid = {'name': 'dump-2026-10-06.210359Z.zip', 'size': 1, 'digest': 'sha256:' + 'a' * 64,
+                 'browser_download_url': 'https://github.com/example/archive.zip'}
+        for change in ({'name':'C:escape.zip'}, {'name':'../escape.zip'}, {'size':0}, {'digest':'invalid'}):
+            with self.subTest(change=change):
+                def fetch(_urls, **kwargs):
+                    with self.assertRaises(ValueError):
+                        kwargs['validator']({**valid, **change})
+                    return kwargs['validator'](valid), 'official'
+                with mock.patch.object(service.network_sources, 'fetch_json', side_effect=fetch):
+                    descriptor = service.resolve_archive_descriptor()
+                self.assertEqual(valid['name'], descriptor['name'])
+
     def test_same_origin_resource_candidates_keep_order_and_fallback(self):
         urls = ["https://covers.invalid/r/800/cover.jpg", "https://covers.invalid/r/200/cover.jpg"]
         profile = {"routeMode": "direct", "id": "test-network"}

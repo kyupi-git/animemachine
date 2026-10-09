@@ -117,6 +117,8 @@ A card's resource and subscription labels describe available releases or subscri
 3. Click **Subscribe** for a title, choose a release or group, and confirm.
 4. Ani-RSS handles downloading. You can close the window and keep browsing during submission. Subscription status and media progress sync back automatically; releases excluded by download settings show the reason.
 
+Films with a BD release this season also appear in the radar, with the BD date below the premiere date. When no explicit BD date is available, the search also checks films that premiered within the past year. Their earliest resource publication reported by Ani-RSS determines the season and appears as a “Release” date.
+
 The latest count in “Latest / total episodes” prioritizes Ani-RSS resource and subscription records. “Episode updated” appears when a timestamp is available. Click a column such as “Premiere date” to sort the entire season; click again to reverse the order.
 
 New subscriptions move to the front of the home page in “New Episode Follow-up” and “Random” views. Your year, month, and other filters still apply.

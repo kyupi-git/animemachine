@@ -44,11 +44,15 @@ def ordered(endpoints: Iterable[str]) -> list[str]:
 def fetch_json(endpoints: Iterable[str], *, timeout: float = 12, cooldown: int = 900,
                headers: dict[str, str] | None = None, attempts: int = 1,
                hedge_delays: tuple[float, ...] = (0, .8, 1.5),
-               service: str = "json", capability: str = "json", honor_cooldown: bool = False) -> tuple[Any, str]:
+               service: str = "json", capability: str = "json", honor_cooldown: bool = False,
+               validator: Callable[[Any], Any] | None = None) -> tuple[Any, str]:
     del cooldown
+    def validate(data: bytes, _mime: str) -> Any:
+        payload = json_bytes(data, limit=4 * 1024 * 1024)
+        return validator(payload) if validator else payload
     payload, _endpoint, final_url = first_valid(
         _endpoints(endpoints, service), capability=capability, headers=headers,
-        timeout=timeout, validator=lambda data, _mime: json_bytes(data, limit=4 * 1024 * 1024), health=_health(),
+        timeout=timeout, validator=validate, health=_health(),
         attempts_per_endpoint=attempts, hedge_delays=hedge_delays, max_bytes=4 * 1024 * 1024,
         honor_cooldown=honor_cooldown)
     return payload, final_url

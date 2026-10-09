@@ -389,7 +389,7 @@ const i18n = {
     radar: "新作雷达",
     radarPrevious: "上季度", radarCurrent: "本季度", radarNext: "下季度",
     radarTitleColumn: "标题", radarMediaType: "媒介类型", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间",
-    radarStart: "开播时间", radarSearch: "检索本季度资源", radarSearchProgress: "已检索 {done} / {total} · 失败 {failed}",
+    radarStart: "开播时间", radarBdRelease: "BD", radarResourceRelease: "资源", radarSearch: "检索本季度资源", radarSearchProgress: "已检索 {done} / {total} · 失败 {failed}",
     episodeUpdated: "第{episode}话",
     radarSubscription: "订阅状态", radarSubscribed: "已订阅", radarPaused: "已暂停",
     radarSubscribe: "订阅", radarChooseResource: "选择订阅资源",
@@ -984,7 +984,7 @@ const i18n = {
     radar: "Release radar",
     radarPrevious: "Previous season", radarCurrent: "Current season", radarNext: "Next season",
     radarTitleColumn: "Title", radarMediaType: "Media type", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated",
-    radarStart: "Premiere date", radarSearch: "Search this season's releases", radarSearchProgress: "Checked {done} / {total} · Failed {failed}",
+    radarStart: "Premiere date", radarBdRelease: "BD", radarResourceRelease: "Release", radarSearch: "Search this season's releases", radarSearchProgress: "Checked {done} / {total} · Failed {failed}",
     episodeUpdated: "Ep. {episode}",
     radarSubscription: "Subscription", radarSubscribed: "Subscribed", radarPaused: "Paused",
     radarSubscribe: "Subscribe", radarChooseResource: "Choose a release",
@@ -1579,7 +1579,7 @@ const i18n = {
     radar: "新作レーダー",
     radarPrevious: "前シーズン", radarCurrent: "今シーズン", radarNext: "次シーズン",
     radarTitleColumn: "タイトル", radarMediaType: "メディア種別", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時",
-    radarStart: "放送開始日", radarSearch: "今シーズンのリリースを検索", radarSearchProgress: "検索済み {done} / {total} · 失敗 {failed}",
+    radarStart: "放送開始日", radarBdRelease: "BD", radarResourceRelease: "配布", radarSearch: "今シーズンのリリースを検索", radarSearchProgress: "検索済み {done} / {total} · 失敗 {failed}",
     episodeUpdated: "第{episode}話",
     radarSubscription: "購読状態", radarSubscribed: "購読中", radarPaused: "一時停止中",
     radarSubscribe: "購読", radarChooseResource: "購読リリースを選択",
@@ -2097,19 +2097,21 @@ function localizedError(message, status = 0) {
 const api = async (url, opt = {}) => {
     const method = String(opt.method || "GET").toUpperCase(),
       headers = new Headers(opt.headers || {}),
-      timeoutMs = Math.max(0, Number(opt.timeoutMs || 0)),
-      timeoutController = timeoutMs > 0 && !opt.signal ? new AbortController() : null,
+      timeoutMs = Math.max(0, Number(opt.timeoutMs ?? (method === "GET" ? 30000 : 0))),
+      timeoutController = timeoutMs > 0 ? new AbortController() : null,
       fetchOptions = { ...opt, headers, credentials: "same-origin" };
     delete fetchOptions.timeoutMs;
     if (!(["GET", "HEAD", "OPTIONS"].includes(method)) && csrfToken)
       headers.set("X-CSRF-Token", csrfToken);
-    if (timeoutController) fetchOptions.signal = timeoutController.signal;
+    if (timeoutController) fetchOptions.signal = opt.signal
+      ? AbortSignal.any([opt.signal, timeoutController.signal]) : timeoutController.signal;
     const timeout = timeoutController
       ? setTimeout(() => timeoutController.abort(), timeoutMs)
       : null;
-    let r;
+    let r, text;
     try {
       r = await fetch(url, fetchOptions);
+      text = await r.text();
     } catch (error) {
       if (timeoutController?.signal.aborted) {
         const timeoutError = new Error(localizedError("request_timeout"));
@@ -2121,7 +2123,6 @@ const api = async (url, opt = {}) => {
     } finally {
       if (timeout) clearTimeout(timeout);
     }
-    const text = await r.text();
     let b = {};
     if (text) {
       try {
@@ -2566,6 +2567,10 @@ function radarStartDate(item) {
   const raw = String(item.raw_date || "").trim();
   const stamp = new Date(raw);
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) && Number.isFinite(stamp.getTime()) && stamp.toISOString().slice(0, 10) === raw ? raw : localMonth(item.start_month);
+}
+function radarReleaseDate(item) {
+  return item.radar_release_date && ["bd", "resource"].includes(item.radar_release_kind)
+    ? `<small class="radar-release-date">${esc(t(item.radar_release_kind === "bd" ? "radarBdRelease" : "radarResourceRelease"))} ${esc(item.radar_release_date)}</small>` : "";
 }
 function completeBadge(x) {
   const c = x.completeness;
@@ -6324,29 +6329,32 @@ async function loadSystemHealth() {
     $("systemHealthItems").innerHTML = "";
   }
 }
-let diagnosticTimer;
+let diagnosticTimer, diagnosticRequest = 0;
 function renderDiagnosticFailure(id, error) {
   const target = $(id);
   if (target) target.innerHTML = `<p class="error">${esc(error?.message || String(error || "error"))}</p>`;
 }
 async function loadDiagnostics() {
   clearTimeout(diagnosticTimer);
+  const request = ++diagnosticRequest;
   if (!$('settingsDialog')?.open || !document.querySelector('[data-panel="diagnostics"]')?.classList.contains('active')) return;
-  const requests = await Promise.allSettled([
-    api("/api/startup/state"), api("/api/system/health"), api("/api/diagnostics/network"), api("/api/images/preload"), api("/api/diagnostics/playback"),
-  ]);
   const renderers = [
-    [renderStartupDiagnostics, "startupDiagnostics"],
-    [renderSystemHealthDiagnostics, "systemHealthDiagnostics"],
-    [renderNetworkDiagnostics, "networkDiagnostics"],
-    [renderImagePreload, "imagePreloadStages"],
-    [renderPlaybackDiagnostics, "playbackDiagnostics"],
+    ["/api/startup/state", renderStartupDiagnostics, "startupDiagnostics"],
+    ["/api/system/health", renderSystemHealthDiagnostics, "systemHealthDiagnostics"],
+    ["/api/diagnostics/network", renderNetworkDiagnostics, "networkDiagnostics"],
+    ["/api/images/preload", renderImagePreload, "imagePreloadStages"],
+    ["/api/diagnostics/playback", renderPlaybackDiagnostics, "playbackDiagnostics"],
   ];
-  requests.forEach((result, index) => {
-    if (result.status === "fulfilled") renderers[index][0](result.value);
-    else renderDiagnosticFailure(renderers[index][1], result.reason);
-  });
-  diagnosticTimer = setTimeout(loadDiagnostics, 2500);
+  await Promise.allSettled(renderers.map(async ([url, render, target]) => {
+    try {
+      const payload = await api(url, { timeoutMs: 10000 });
+      if (request === diagnosticRequest) render(payload);
+    } catch (error) {
+      if (request === diagnosticRequest) renderDiagnosticFailure(target, error);
+    }
+  }));
+  if (request === diagnosticRequest && $('settingsDialog')?.open && document.querySelector('[data-panel="diagnostics"]')?.classList.contains('active'))
+    diagnosticTimer = setTimeout(loadDiagnostics, 2500);
 }
 function renderScanProgress(s, startup = null) {
   if (startup) startupState = startup;
@@ -6638,7 +6646,7 @@ async function loadRadar() {
         const updateToken = radarUpdateToken(item), seenKey = radarSeenKey(item);
         return `<tr data-radar-id="${item.id}" data-radar-seen-key="${esc(seenKey)}" data-radar-update="${esc(updateToken)}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}"><td><button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button></td>
           <td class="radar-media" data-label="${esc(t("radarMediaType"))}">${esc(label("media", item.media_code))}</td>
-          <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}</td>
+          <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}${radarReleaseDate(item)}</td>
           <td class="radar-progress" data-label="${esc(t("radarProgress"))}">${item.episode_progress?.current || "?"} / ${item.episode_progress?.total || "?"}</td>
           <td data-label="${esc(t("radarSubscription"))}">${subscription}</td><td data-label="${esc(t("radarUpdated"))}">${stamp && Number.isFinite(stamp.getTime()) ? esc(stamp.toLocaleString(language)) : ""}</td></tr>`;
       }).join("")}</tbody></table>` : `<p class="empty">${t("radarEmpty")}</p>`);

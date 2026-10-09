@@ -621,6 +621,7 @@ dialog::backdrop {
 .radar-table th:not(:first-child), .radar-table td:not(:first-child) { width: 1%; padding-left: 10px; padding-right: 10px; }
 .radar-table th.radar-media, .radar-table td.radar-media { min-width: 86px; }
 .radar-table th.radar-start, .radar-table td.radar-start { min-width: 110px; font-variant-numeric: tabular-nums; }
+.radar-release-date { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .radar-table th:last-child, .radar-table td:last-child { min-width: 170px; }
 .radar-table tbody tr.radar-highlight { background: var(--radar-highlight); }
 .radar-table tbody tr.radar-highlight:hover { background: var(--radar-highlight); }

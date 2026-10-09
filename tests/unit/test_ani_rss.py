@@ -168,6 +168,71 @@ class AniRssTest(unittest.TestCase):
         self.assertTrue(FakeAniRss.seen_keys)
         self.assertTrue(all(key == "temporary-key" for key in FakeAniRss.seen_keys))
 
+    def test_movie_search_and_cached_upgrade_keep_earliest_publication_without_episode_numbers(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("ALTER TABLE anime_work ADD COLUMN media_code TEXT")
+            db.execute("ALTER TABLE anime_work ADD COLUMN raw_date TEXT")
+            db.execute("UPDATE anime_work SET media_code='movie',start_month='2026-01',raw_date='2026-01-15'")
+        FakeAniRss.resource_items = [
+            {"title": "Movie BDRip (1080p)", "createdAt": "2026-07-01T00:30:00+08:00", "size": 100},
+            {"title": "Movie BDRip (1080p)", "createdAt": "2026-08-02T00:30:00+08:00", "size": 100},
+        ]
+        ani_rss.sync(self.db_path, self.config)
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            expected = (1, "2026-06-30T16:30:00+00:00", "2026-08-01T16:30:00+00:00")
+            self.assertEqual(expected, db.execute("SELECT * FROM ani_rss_movie_release_state").fetchone())
+            self.assertIsNone(db.execute("SELECT * FROM ani_rss_release_state").fetchone())
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("DELETE FROM ani_rss_movie_release_state")
+        ani_rss.reconcile_cached_resources(self.db_path)
+        ani_rss.reconcile_cached_resources(self.db_path)
+        FakeAniRss.resource_items = [FakeAniRss.resource_items[1]]
+        ani_rss.search(self.db_path, 1, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(expected, db.execute("SELECT * FROM ani_rss_movie_release_state").fetchone())
+        self.config["components"]["aniRss"]["endpoint"] = "http://127.0.0.1:1"
+        ani_rss.sync(self.db_path, self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM ani_rss_movie_release_state").fetchone()[0])
+
+    def test_repeated_groups_and_shared_urls_remain_scoped_to_each_work(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("INSERT INTO anime_work VALUES(2,456,'作品','作品','Work','2026-07',12)")
+        entry = {'title': '[SubsPlease] Work Complete Batch (1080p) [WEB-DL]', 'size': 100,
+                 'torrent': 'https://mikan.test/shared.torrent'}
+        group = {'label': 'SubsPlease', 'rss': 'https://mikan.test/RSS/Bangumi?subgroupid=1', 'items': [entry, dict(entry)]}
+        client = mock.Mock()
+        def call(path, **_kwargs):
+            return {'weeks': [{'items': [{'url': 'https://mikan.test/Home/Bangumi/1', 'title': '作品'}]}]} if path == 'mikan' else [group, dict(group)]
+        client.call.side_effect = call
+        with mock.patch.object(ani_rss, '_client', return_value=client):
+            first = ani_rss.search(self.db_path, 1, self.config)
+            before = ani_rss.resources(self.db_path, 1)
+            second = ani_rss.search(self.db_path, 2, self.config)
+            repeat = ani_rss.search(self.db_path, 1, self.config)
+        self.assertEqual([2, 2, 2], [item['found'] for item in (first, second, repeat)])
+        self.assertEqual(before, ani_rss.resources(self.db_path, 1))
+        self.assertTrue({item['resourceId'] for item in before}.isdisjoint(
+            item['resourceId'] for item in ani_rss.resources(self.db_path, 2)))
+
+    def test_existing_collection_action_stays_idempotent_after_resource_id_upgrade(self):
+        FakeAniRss.resource_items = [{'title': '[SubsPlease] Work Complete Batch (1080p) [WEB-DL]', 'size': 100,
+                                     'torrent': 'https://mikan.test/synthetic.torrent'}]
+        ani_rss.search(self.db_path, 1, self.config)
+        resource = next(item for item in ani_rss.resources(self.db_path, 1) if item['kind'] == 'collection')
+        import hashlib
+        legacy_id = 'ar-' + hashlib.sha256(b'collection\0https://mikan.test/synthetic.torrent').hexdigest()[:24]
+        key = hashlib.sha256(f'1\0collection\0{legacy_id}'.encode()).hexdigest()
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute('INSERT INTO ani_rss_action VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                       ('prior-action', key, 1, legacy_id, 'existing', 'collection', 'submitted', ani_rss.utcnow(), ani_rss.utcnow(), None, '{}'))
+        with mock.patch.object(ani_rss, '_client') as client:
+            result = ani_rss.subscribe(self.db_path, resource['resourceId'], self.config)
+        self.assertTrue(result['idempotent'])
+        self.assertEqual('prior-action', result['actionId'])
+        client.assert_not_called()
+
     def _follow_waiting_for_media(self):
         FakeAniRss.media = {}
         ani_rss.search(self.db_path, 1, self.config)

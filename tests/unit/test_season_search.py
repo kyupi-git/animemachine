@@ -1,5 +1,7 @@
 import contextlib
+import datetime as dt
 import json
+import sqlite3
 from pathlib import Path
 import tempfile
 import threading
@@ -7,10 +9,58 @@ import unittest
 from unittest import mock
 
 from animemachine.integrations import ani_rss
-from animemachine.integrations.season_search import SeasonSearch
+from animemachine.integrations.season_search import SeasonSearch, movie_search_candidates
 
 
 class SeasonSearchTests(unittest.TestCase):
+    def test_movie_discovery_covers_one_year_and_excludes_future_or_older_premieres(self):
+        query = mock.Mock(return_value={"items": [
+            {"id": index, "media_code": media, "raw_date": date, "start_month": month}
+            for index, media, date, month in [
+                (1, "movie", "2025-10-09", "2025-10"),
+                (2, "movie", "2025-10-08", "2025-10"),
+                (3, "movie", "2026-10-10", "2026-10"),
+                (4, "movie", "2026-03-01", "2026-03"),
+                (5, "tv", "2026-03-01", "2026-03"),
+                (6, "movie", "unknown", "2026-09"),
+                (7, "movie", "unknown", "2026-00"),
+            ]]})
+        rows = movie_search_candidates(Path("unused"), query, {}, "en", today=dt.date(2026, 10, 9))
+        self.assertEqual([1, 4, 6], [row["id"] for row in rows])
+        self.assertEqual(["2025-10"], query.call_args.args[1]["start_from"])
+        movie_search_candidates(Path("unused"), query, {}, "en", today=dt.date(2028, 2, 29))
+        self.assertEqual(["2027-02"], query.call_args.args[1]["start_from"])
+
+    def test_season_search_discovers_older_movies_once_after_visible_titles(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(ani_rss, "state", return_value={
+                "connection_state": "ready", "credentialConfigured": True}):
+            store = mock.Mock()
+            store.read.return_value = {}
+            query = mock.Mock(return_value={"items": [{"id": 3}, {"id": 2}]})
+            scan = SeasonSearch(Path(folder) / "catalog.sqlite3", store, query, contextlib.nullcontext)
+            with mock.patch("animemachine.integrations.season_search.movie_search_candidates", return_value=[
+                    {"id": 1, "media_code": "movie"}, {"id": 2, "media_code": "movie"}]), mock.patch.object(
+                    ani_rss, "search", return_value={"found": 1}) as search:
+                scan.start("2026-10", "2026-12", "zh-Hans")
+                scan.thread.join(5)
+            self.assertEqual([3, 2, 1], [call.args[1] for call in search.call_args_list])
+            self.assertEqual({"state": "complete", "done": 3, "total": 3, "failed": 0},
+                             {key: scan.status()[key] for key in ("state", "done", "total", "failed")})
+
+    def test_database_conflict_is_counted_and_remaining_works_still_finish(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(ani_rss, 'state', return_value={'connection_state': 'ready', 'credentialConfigured': True}):
+            store = mock.Mock()
+            store.read.return_value = {}
+            query = mock.Mock(return_value={'items': [{'id': 1}, {'id': 2}, {'id': 3}]})
+            scan = SeasonSearch(Path(folder) / 'catalog.sqlite3', store, query, contextlib.nullcontext)
+            with mock.patch.object(ani_rss, 'search', side_effect=[{'found': 1}, sqlite3.IntegrityError('duplicate'), {'found': 1}]) as search:
+                scan.start('2026-09', '2026-11', 'zh-Hans')
+                scan.thread.join(5)
+            self.assertEqual([1, 2, 3], [call.args[1] for call in search.call_args_list])
+            self.assertEqual('complete', scan.status()['state'])
+            self.assertEqual(3, scan.status()['done'])
+            self.assertEqual(1, scan.status()['failed'])
+            self.assertEqual([2], scan.status()['failedIds'])
     def test_explicit_sync_precedes_resource_lookup_and_failure_preserves_search_progress(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(
                 ani_rss, "state", return_value={"connection_state": "ready", "credentialConfigured": True}):

@@ -39,9 +39,10 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
             evaluation = store.evaluation(item.id, capability, str(profile["routeMode"]), str(profile["id"]))
             if not evaluation.get("coolingDown"):
                 available.append(item)
-        if not available:
-            raise RuntimeError("all endpoints are cooling down")
-        ranked = available
+        # A recovered connection must remain discoverable when every source is
+        # in backoff. Keep bounded, ranked probes instead of a cooldown dead end.
+        if available:
+            ranked = available
     errors: list[str] = []
     winner = threading.Event()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +15,33 @@ from . import ani_rss
 
 SEARCH_ATTEMPTS = 2
 RETRY_SECONDS = 2.0
+
+
+def movie_search_candidates(db_path: Path, query: Callable[..., dict[str, Any]],
+                            config: dict[str, Any], language: str, *, today: dt.date | None = None) -> list[dict[str, Any]]:
+    """Add recent premieres to discovery, without putting unverified films in radar."""
+    today = today or dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
+    try:
+        first = today.replace(year=today.year - 1)
+    except ValueError:  # February 29.
+        first = today.replace(year=today.year - 1, day=28)
+    rows = query(db_path, {"radar": ["1"], "media_type": ["movie"], "sort": ["premiere"],
+                          "limit": ["all"], "start_from": [first.strftime("%Y-%m")],
+                          "start_to": [today.strftime("%Y-%m")], "language": [language]}, config)["items"]
+    candidates = []
+    for row in rows:
+        if row.get("media_code") != "movie":
+            continue
+        try:
+            premiered = dt.date.fromisoformat(str(row.get("raw_date")))
+            within_year = first <= premiered <= today
+        except ValueError:
+            month = str(row.get("start_month") or "")
+            within_year = (ani_rss._month_index(month) is not None
+                           and first.strftime("%Y-%m") <= month <= today.strftime("%Y-%m"))
+        if within_year:
+            candidates.append(row)
+    return candidates
 
 
 class SeasonSearch:
@@ -91,6 +119,9 @@ class SeasonSearch:
             params = {"radar": ["1"], "sort": ["recent_episode"], "limit": ["all"],
                       "start_from": [start], "start_to": [end], "language": [language]}
             rows = self.query(self.db_path, params, config)["items"]
+            candidates = movie_search_candidates(self.db_path, self.query, config, language)
+            # Keep the visible season first, then discover delayed movie releases.
+            rows = list({int(row["id"]): row for row in [*rows, *candidates]}.values())
             with self.lock:
                 completed = set(self._status.get("completedIds", []))
             failures: dict[int, str] = {}
@@ -98,13 +129,14 @@ class SeasonSearch:
             completed.intersection_update(ids)
             self._set(total=len(ids), done=len(completed), completedIds=sorted(completed))
             identity = ani_rss._credential_fingerprint(ani_rss._secret(), ani_rss._settings(config)["endpoint"])
+            rows_by_id = {int(row["id"]): row for row in rows}
             for anime_id in ids:
                 if self.stop.is_set():
                     self._set(state="interrupted", currentAnimeId=None)
                     return
                 if anime_id in completed:
                     continue
-                row = next(row for row in rows if int(row["id"]) == anime_id)
+                row = rows_by_id[anime_id]
                 self._set(currentAnimeId=anime_id, currentTitle=str(row.get("title_zh_hans_localized")
                           or row.get("title_zh_hans") or row.get("title_en") or row.get("title_ja") or ""))
                 for attempt in range(SEARCH_ATTEMPTS):
@@ -118,9 +150,9 @@ class SeasonSearch:
                             return
                         try:
                             result = ani_rss.search(self.db_path, anime_id, current)
-                        except (ValueError, OSError, RuntimeError, httpx.RequestError) as exc:
+                        except (ValueError, OSError, RuntimeError, sqlite3.Error, httpx.RequestError) as exc:
                             failures[anime_id] = f"{type(exc).__name__}: {exc}"
-                            retryable = not isinstance(exc, ValueError)
+                            retryable = not isinstance(exc, (ValueError, sqlite3.IntegrityError))
                         else:
                             if result.get("stale"):
                                 self._set(state="interrupted", error="Ani-RSS route changed during search",

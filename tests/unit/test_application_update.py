@@ -90,6 +90,23 @@ class ApplicationUpdateTests(unittest.TestCase):
         self.assertTrue(fetch.call_args.kwargs["honor_cooldown"])
         self.assertEqual("https://api.github.com/result", application_update._LAST_RELEASE_SOURCE)
 
+    def test_manual_release_check_bypasses_previous_cooldown(self):
+        with mock.patch.object(application_update.network_sources, 'fetch_json', return_value=(self._release(), 'official')) as fetch:
+            application_update._release_payload(force=True)
+        self.assertFalse(fetch.call_args.kwargs['honor_cooldown'])
+        validator = fetch.call_args.kwargs['validator']
+        self.assertEqual(self._release(), validator(self._release()))
+        for invalid in ({}, {'message': 'rate limited'}, {'tag_name': 'v1.2.4', 'assets': 'invalid'}):
+            with self.assertRaises(ValueError):
+                validator(invalid)
+
+    def test_diagnostics_snapshot_never_checks_remote_releases(self):
+        with mock.patch.object(application_update, 'status') as status, mock.patch.object(
+                application_update, '_probe_update_sources', return_value={'items': []}) as probe:
+            self.assertEqual({'items': []}, application_update.network_diagnostics())
+        status.assert_not_called()
+        self.assertFalse(probe.call_args.kwargs['recheck'])
+
     def test_automatic_check_defaults_on_and_runs_once_per_local_day(self):
         self.assertEqual(
             {"enabled": True, "mode": "notify", "time": "04:35"},

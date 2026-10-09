@@ -5,6 +5,21 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.3.3
+
+0.3.3 expands film release information in Release radar, fixes Archive version checks, application update checks, and season resource searches, and improves diagnostic loading. Existing settings, media, and cover caches carry over when you upgrade.
+
+### Added and improved
+
+- Improved Release radar: searches also check films that premiered within the past year. When no BD date is available, the earliest resource publication determines the season; BD and resource dates are labeled separately.
+- Improved diagnostic loading: local runtime status appears first, with each result displayed independently and a message when a request times out.
+
+### Fixed
+
+- Fixed unnecessary Archive downloads and Catalog rebuilds by checking versions before downloading and skipping stale mirror manifests.
+- Fixed update checks getting stuck when all sources are in cooldown; manual checks can retry immediately.
+- Fixed identifier conflicts caused by duplicate resources and shared URLs; searches continue after an individual title fails and report the correct failure count.
+
 ## 0.3.2
 
 0.3.2 improves Ani-RSS matching and synchronization, Release radar, and subscription feedback. Existing settings, media, and cover caches carry over when you upgrade.

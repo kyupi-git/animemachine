@@ -88,6 +88,9 @@ CREATE TABLE IF NOT EXISTS ani_rss_release_state(
   anime_id INTEGER PRIMARY KEY,current_episode INTEGER NOT NULL,last_episode_update_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_ani_rss_release_update ON ani_rss_release_state(last_episode_update_at);
+CREATE TABLE IF NOT EXISTS ani_rss_movie_release_state(
+  anime_id INTEGER PRIMARY KEY,first_release_at TEXT NOT NULL,last_release_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ani_rss_media(
   remote_id TEXT NOT NULL,anime_id INTEGER NOT NULL,filename TEXT NOT NULL,episode REAL,title TEXT NOT NULL,
   name TEXT NOT NULL,size INTEGER NOT NULL,extension TEXT NOT NULL,last_seen_at TEXT NOT NULL,
@@ -885,6 +888,7 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
             if resource_refresh_required:
                 db.execute("DELETE FROM ani_rss_resource")
                 db.execute("DELETE FROM ani_rss_release_state")
+                db.execute("DELETE FROM ani_rss_movie_release_state")
                 db.execute("DELETE FROM ani_rss_search_state")
             _record_route_revision(db, route_revision)
             db.execute("""INSERT INTO ani_rss_state
@@ -914,6 +918,7 @@ def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event 
         if resource_refresh_required:
             db.execute("DELETE FROM ani_rss_resource")
             db.execute("DELETE FROM ani_rss_release_state")
+            db.execute("DELETE FROM ani_rss_movie_release_state")
             db.execute("DELETE FROM ani_rss_search_state")
         _record_route_revision(db, route_revision)
         seen: set[str] = set(); mapped = 0
@@ -1436,6 +1441,40 @@ def _resource_size(item: dict[str, Any]) -> int:
     return 0
 
 
+def _record_movie_releases(db: sqlite3.Connection, anime_id: int, items: list[dict[str, Any]]) -> None:
+    """Persist resource availability separately from confirmed Archive BD dates.
+
+    Mikan publication dates use UTC+8. Keeping the earliest observed timestamp
+    prevents a later scan or disappearing old feed item from moving the season.
+    """
+    cursor = db.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,))
+    row = cursor.fetchone()
+    work = dict(zip((column[0] for column in cursor.description), row)) if row else {}
+    if work.get("media_code") != "movie":
+        return
+    try:
+        premiere = dt.date.fromisoformat(str(work.get("raw_date")))
+    except ValueError:
+        try:
+            premiere = dt.date.fromisoformat(str(work.get("start_month")) + "-01")
+        except ValueError:
+            return
+    now = dt.datetime.now(dt.timezone.utc)
+    dates = []
+    for item in items:
+        stamp = _resource_published_at(item)
+        if not stamp:
+            continue
+        moment = dt.datetime.fromisoformat(stamp)
+        if moment <= now and moment.astimezone(dt.timezone(dt.timedelta(hours=8))).date() >= premiere:
+            dates.append(stamp)
+    if dates:
+        db.execute("""INSERT INTO ani_rss_movie_release_state VALUES(?,?,?)
+            ON CONFLICT(anime_id) DO UPDATE SET
+            first_release_at=MIN(first_release_at,excluded.first_release_at),
+            last_release_at=MAX(last_release_at,excluded.last_release_at)""", (anime_id, min(dates), max(dates)))
+
+
 def _catalog_episode_hints(db: sqlite3.Connection, anime_id: int) -> tuple[int, int | None]:
     row = db.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,)).fetchone()
     if row is None:
@@ -1482,6 +1521,7 @@ def reconcile_cached_resources(db_path: Path) -> dict[str, int]:
                 continue
             if anime_id not in hints:
                 hints[anime_id] = _catalog_episode_hints(db, anime_id)
+            _record_movie_releases(db, anime_id, items)
             count, start = hints[anime_id]
             pairs = _resource_observations(items, count, start)
             first = _local_episode_number(row["sequence_first"], count, start) or None
@@ -1627,6 +1667,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             break
     resources: list[dict[str, Any]] = []
     observed: list[tuple[int, str | None]] = []
+    movie_items: list[dict[str, Any]] = []
     for item_url, item in found.items():
         groups = mapping_list(
             remote_call("mikanGroup", expected_type=list, params={"url": item_url}, timeout=60) or [],
@@ -1642,8 +1683,10 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             label = str(group.get("label") or "").strip() or "Other"
             rss = str(group.get("rss") or "").strip()
             items = mapping_list(group.get("items"), "mikanGroup[].items")
+            items = list({json.dumps(entry, sort_keys=True, ensure_ascii=False): entry for entry in items}.values())
             if not rss or not items:
                 continue
+            movie_items.extend(items)
             observations = _resource_observations(items, episode_count, episode_start)
             episodes = [episode for episode, _ in observations]
             observed.extend(observations)
@@ -1652,7 +1695,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             eligible, policy_rank = _policy_eligibility_and_rank(combined_title, label, source_class, resolution, config)
             payload = {"rss": rss, "type": "mikan", "bgmUrl": group.get("bgmUrl") or item.get("bgmUrl"),
                        "subgroup": label, "workTitle": item.get("title"), "items": items[:40]}
-            rid = "ar-" + hashlib.sha256(("follow\0" + rss).encode("utf-8")).hexdigest()[:24]
+            rid = "ar-" + hashlib.sha256(f"{anime_id}\0follow\0{rss}".encode("utf-8")).hexdigest()[:24]
             resources.append({"resource_id": rid, "kind": "follow", "title": f"{label} · {item.get('title') or names[0]}",
                               "group": label, "source": source_class, "resolution": resolution,
                               "first": min(episodes) if episodes else None, "last": max(episodes) if episodes else None,
@@ -1665,7 +1708,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                 source_class, resolution, _ = _resource_fields(entry_title)
                 torrent_url = str(entry["torrent"])
                 collection_payload = {**payload, "torrentUrl": torrent_url, "torrentTitle": entry_title}
-                collection_id = "ar-" + hashlib.sha256(("collection\0" + torrent_url).encode("utf-8")).hexdigest()[:24]
+                collection_id = "ar-" + hashlib.sha256(f"{anime_id}\0collection\0{torrent_url}".encode("utf-8")).hexdigest()[:24]
                 collection_eligible, collection_rank = _policy_eligibility_and_rank(
                     entry_title, label, source_class, resolution, config)
                 resources.append({"resource_id": collection_id, "kind": "collection", "title": entry_title,
@@ -1676,6 +1719,10 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
     def rank(item: dict[str, Any]) -> tuple[Any, ...]:
         return (0 if item["kind"] == "collection" else 1, int(item.get("policyRank", 9999)),
                 -(item["resolution"] or 0), -item["count"], item["title"])
+    resources.sort(key=rank)
+    # One feed/batch may be repeated across groups or aliases. Retain its best
+    # ranked candidate once, without overwriting resources belonging to a work.
+    resources = list({item["resource_id"]: item for item in reversed(resources)}.values())
     resources.sort(key=rank)
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
         migrate(db)
@@ -1689,6 +1736,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             return {"animeId": anime_id, "found": 0, "eligible": 0, "stale": True}
         db.execute("DELETE FROM ani_rss_resource WHERE anime_id=?", (anime_id,))
         _reconcile_release_progress(db, anime_id, episode_count, episode_start, observed, stamp)
+        _record_movie_releases(db, anime_id, movie_items)
         for index, item in enumerate(resources):
             db.execute("INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                        (item["resource_id"], anime_id, "ani-rss", item["kind"], item["title"], item["group"],
@@ -1783,7 +1831,11 @@ def _load_resource(db_path: Path, resource_id: str) -> tuple[sqlite3.Row, dict[s
 def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[str, Any]:
     row, payload = _load_resource(db_path, resource_id)
     anime_id = int(row["anime_id"]); kind = str(row["resource_kind"])
-    idempotency = hashlib.sha256(f"{anime_id}\0{kind}\0{resource_id}".encode()).hexdigest()
+    # Keep action identity stable across the upgrade to work-scoped cache IDs.
+    # In particular, already submitted collections must not be submitted twice.
+    source_url = payload.get("torrentUrl") if kind == "collection" else payload.get("rss")
+    legacy_id = "ar-" + hashlib.sha256(f"{kind}\0{source_url}".encode()).hexdigest()[:24]
+    idempotency = hashlib.sha256(f"{anime_id}\0{kind}\0{legacy_id}".encode()).hexdigest()
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
         db.row_factory = sqlite3.Row; migrate(db)
         prior = db.execute("SELECT * FROM ani_rss_action WHERE idempotency_key=?", (idempotency,)).fetchone()
