@@ -11,7 +11,7 @@ Changes affecting everyday use, with the newest release first.
 
 ### Added and improved
 
-- Improved Release radar: searches also check films that premiered within the past year. When no BD date is available, the earliest resource publication determines the season; BD and resource dates are labeled separately.
+- Improved Release radar: newer premieres appear first, with the latest episode update breaking same-day ties. Searches also check films that premiered within the past year; when no BD date is available, the earliest resource publication determines the season. BD and resource dates are labeled separately.
 - Improved diagnostic loading: local runtime status appears first, with each result displayed independently and a message when a request times out.
 
 ### Fixed

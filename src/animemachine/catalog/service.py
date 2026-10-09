@@ -2448,7 +2448,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     default_radar_order = radar_mode and requested_sort == "recent_episode"
     if default_radar_order:
         update_order = episode_update_expr if ani_connection_ready else "''"
-        order = (f"CASE WHEN ({premiere_expr})='' THEN 1 ELSE 0 END ASC,{premiere_expr} ASC,"
+        order = (f"CASE WHEN ({premiere_expr})='' THEN 1 ELSE 0 END ASC,{premiere_expr} DESC,"
                  f"julianday({update_order}) DESC,{title_expr} ASC,w.id ASC")
     elif sort == "recent_episode":
         order = (f"CASE WHEN {episode_update_expr}='' THEN 1 ELSE 0 END ASC,"

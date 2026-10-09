@@ -504,7 +504,7 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
             self.assertEqual(0, self.query(q=["アニメ 9"])["total"])
             self.assertEqual(1, self.query(radar=["0"], q=["アニメ 9"])["total"])
 
-    def test_default_order_keeps_premiere_primary_and_updates_same_day_ties(self):
+    def test_default_order_keeps_latest_premiere_first_and_updates_same_day_ties(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET raw_date='2026-07-02' WHERE id=1")
             db.execute("UPDATE anime_work SET raw_date='2026-07-01' WHERE id IN (2,3)")
@@ -513,12 +513,12 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
             ani_rss.record_release_progress(db, 3, 1, "2026-07-11T00:00:00+00:00", published_at="2026-07-11T00:00:00+00:00")
         ids = [item["id"] for item in self.query()["items"]]
         self.assertLess(ids.index(3), ids.index(2))
-        self.assertLess(ids.index(2), ids.index(1))
+        self.assertLess(ids.index(1), ids.index(3))
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             ani_rss.record_release_progress(db, 2, 2, "2026-07-13T00:00:00+00:00", published_at="2026-07-13T00:00:00+00:00")
         ids = [item["id"] for item in self.query()["items"]]
         self.assertLess(ids.index(2), ids.index(3))
-        self.assertLess(ids.index(3), ids.index(1))
+        self.assertLess(ids.index(1), ids.index(2))
 
     def test_movie_resource_date_uses_earliest_release_and_keeps_original_premiere(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
@@ -593,7 +593,7 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
             ani_rss.record_release_progress(db, 3, 3, "2026-09-10T00:00:00+00:00")
         ids = [row["id"] for row in self.query()["items"]]
         self.assertEqual(3, ids[0])
-        self.assertLess(ids.index(1), ids.index(2))
+        self.assertLess(ids.index(2), ids.index(1))
 
     def test_archive_release_event_extraction_requires_explicit_semantics(self):
         subject = {
