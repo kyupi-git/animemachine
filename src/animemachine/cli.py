@@ -484,7 +484,7 @@ def sync_runtime(*, scan_pool: bool = True, sync_ani_rss: bool = True) -> dict[s
     sync_status("starting")
     if scan_pool:
         library_root = Path(str(current_config.get("deployment", {}).get("libraryUncRoot") or "/Library"))
-        library_storage = status_for_path(library_root, timeout=4.0)
+        library_storage = status_for_path(library_root, timeout=4.0, config=current_config)
         library_available = library_storage.state == AVAILABLE
         if not library_available:
             result["libraryStorage"] = {"state": library_storage.state, "scan": "skipped"}

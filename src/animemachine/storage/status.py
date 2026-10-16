@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from .sleep import StorageUnavailableError as StorageUnavailableError, sleeping_path
+
 NOT_CONFIGURED = "not_configured"
 AVAILABLE = "available"
 UNAVAILABLE = "unavailable"
@@ -21,6 +23,7 @@ PERMISSION_DENIED = "permission_denied"
 HOST_UNREACHABLE = "host_unreachable"
 SHARE_NOT_FOUND = "share_not_found"
 MOUNT_FAILED = "mount_failed"
+SLEEPING = "sleeping"
 STORAGE_STATES = {
     NOT_CONFIGURED,
     AVAILABLE,
@@ -30,12 +33,9 @@ STORAGE_STATES = {
     HOST_UNREACHABLE,
     SHARE_NOT_FOUND,
     MOUNT_FAILED,
+    SLEEPING,
 }
 NETWORK_FILESYSTEMS = {"cifs", "smb3"}
-
-
-class StorageUnavailableError(OSError):
-    """Raised when an inventory walk cannot safely be considered complete."""
 
 
 @dataclass(frozen=True)
@@ -169,35 +169,23 @@ def _state_from_errno(number: int | None) -> str:
 
 
 _PROBE_CODE = r'''
-import errno, json, os, pathlib, sys, time
+import errno, json, os, pathlib, stat, sys
 path = pathlib.Path(sys.argv[1])
 write = sys.argv[2] == "1"
 result = {"ok": False, "errno": None, "detail": ""}
-probe = None
 try:
-    stat = path.stat()
-    if not path.is_dir():
+    if not stat.S_ISDIR(path.stat().st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory", str(path))
     with os.scandir(path) as entries:
         next(entries, None)
-    if write:
-        probe = path / (".animemachine-storage-probe-%d-%d" % (os.getpid(), time.time_ns()))
-        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            os.write(fd, b"ok")
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        probe.unlink()
-        probe = None
+    # Permission metadata is advisory; the actual operation checks write
+    # permissions atomically when needed. Never create files to test access.
+    if write and not os.access(path, os.W_OK):
+        raise PermissionError(errno.EACCES, "write access denied", str(path))
     result["ok"] = True
 except OSError as exc:
     result["errno"] = exc.errno
     result["detail"] = type(exc).__name__
-finally:
-    if probe is not None:
-        try: probe.unlink()
-        except OSError: pass
 print(json.dumps(result, separators=(",", ":")))
 '''
 
@@ -225,17 +213,20 @@ def probe_path(path: Path, *, require_write: bool = False, timeout: float = 4.0)
     return _state_from_errno(int(number) if isinstance(number, int) else None), str(payload.get("detail") or "")
 
 
-def status_for_profile(profile: StorageProfile, *, timeout: float = 4.0, use_cache: bool = True) -> StorageStatus:
+def status_for_profile(profile: StorageProfile, *, timeout: float = 4.0, use_cache: bool = True,
+                       require_write: bool = False, config: dict | None = None) -> StorageStatus:
+    if sleeping_path(profile.path, config):
+        return StorageStatus(SLEEPING, profile)
     if profile.storage_type in {"", "not-configured", "not_configured"}:
         return StorageStatus(NOT_CONFIGURED, profile)
-    cache_key = (profile.key, str(profile.path), profile.storage_type, profile.access == "rw")
+    cache_key = (profile.key, str(profile.path), profile.storage_type, require_write)
     now = time.monotonic()
     if use_cache:
         with _CACHE_LOCK:
             cached = _CACHE.get(cache_key)
-            if cached and now - cached[0] < 5.0:
+            if cached and now - cached[0] < (300.0 if cached[1].available else 15.0):
                 return cached[1]
-    state, detail = probe_path(profile.path, require_write=profile.access == "rw", timeout=timeout)
+    state, detail = probe_path(profile.path, require_write=require_write, timeout=timeout)
     network_path = profile.storage_type in {"network", "managed-smb", "smb", "unc"} or str(profile.path).startswith("\\\\")
     if state == HOST_UNREACHABLE and detail == "probe timeout" and network_path:
         # A cold SMB session can exceed the short UI preflight even though the
@@ -243,7 +234,7 @@ def status_for_profile(profile: StorageProfile, *, timeout: float = 4.0, use_cac
         # retry once before skipping an entire synchronization cycle.
         state, detail = probe_path(
             profile.path,
-            require_write=profile.access == "rw",
+            require_write=require_write,
             timeout=max(8.0, timeout * 2.0),
         )
     fs_type = filesystem_for_path(profile.path) if state == AVAILABLE else None
@@ -276,14 +267,17 @@ def profile_for_path(path: str | Path, profiles: Iterable[StorageProfile] | None
     return max(candidates, default=(0, None), key=lambda item: item[0])[1]
 
 
-def status_for_path(path: str | Path, *, require_write: bool = False, timeout: float = 4.0) -> StorageStatus:
+def status_for_path(path: str | Path, *, require_write: bool = False, timeout: float = 4.0,
+                    config: dict | None = None) -> StorageStatus:
+    if sleeping_path(path, config):
+        return StorageStatus(SLEEPING, StorageProfile("library", "Library", Path(path), "rw", False, "host-path"))
     profile = profile_for_path(path)
     if profile is None:
         temporary = StorageProfile("path", "Path", Path(path), "rw" if require_write else "ro", False, "host-path")
-        return status_for_profile(temporary, timeout=timeout, use_cache=False)
+        return status_for_profile(temporary, timeout=timeout, require_write=require_write, config=config)
     if require_write and profile.access != "rw":
         profile = StorageProfile(profile.key, profile.name, profile.path, "rw", profile.critical, profile.storage_type)
-    return status_for_profile(profile, timeout=timeout)
+    return status_for_profile(profile, timeout=timeout, require_write=require_write, config=config)
 
 
 def snapshot(*, timeout: float = 4.0, use_cache: bool = True) -> dict[str, dict[str, object]]:

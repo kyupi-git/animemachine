@@ -11,7 +11,7 @@
   <body>
     <header class="hero">
       <div class="hero-brand">
-        <h1 data-i18n="catalog">AnimeMachine</h1>
+        <h1 data-icon="play" data-i18n="catalog">AnimeMachine</h1>
         <p class="eyebrow" data-i18n="catalogTagline">全自动动画收藏库</p>
       </div>
       <div class="hero-tools">
@@ -84,24 +84,26 @@
             ><input id="start_to" type="month"
           /></label>
         </div>
-        <label
-          ><span data-i18n="sourceOrigin">原作来源</span
-          ><select id="source_type">
-            <option value="" data-i18n="all">全部</option>
-          </select></label
-        >
+        <div class="grid2 filter-pair">
+          <label
+            ><span data-i18n="sourceOrigin">原作来源</span
+            ><select id="source_type">
+              <option value="" data-i18n="all">全部</option>
+            </select></label
+          >
+          <label
+            ><span data-i18n="seriesWork">系列作品</span
+            ><select id="series_member">
+              <option value="" data-i18n="all">全部</option>
+              <option value="yes" data-i18n="yes">是</option>
+              <option value="no" data-i18n="no">否</option>
+            </select></label
+          >
+        </div>
         <label
           ><span data-i18n="studio">动画制作</span
           ><select id="studio">
             <option value="" data-i18n="all">全部</option>
-          </select></label
-        >
-        <label
-          ><span data-i18n="seriesWork">系列作品</span
-          ><select id="series_member">
-            <option value="" data-i18n="all">全部</option>
-            <option value="yes" data-i18n="yes">是</option>
-            <option value="no" data-i18n="no">否</option>
           </select></label
         >
         <label
@@ -114,26 +116,28 @@
           <legend data-i18n="mediaFormat">媒介形式</legend>
           <div id="media_type" class="status-checks media-checks"></div>
         </fieldset>
-        <label
-          ><span data-i18n="director">监督</span
-          ><input
-            id="director"
-            type="search"
-            list="directorSuggestions"
-            autocomplete="off"
-            data-i18n-placeholder="personSearch"
-          /><datalist id="directorSuggestions"></datalist></label
-        >
-        <label
-          ><span data-i18n="voiceActor">主要声优</span
-          ><input
-            id="voice_actor"
-            type="search"
-            list="voiceSuggestions"
-            autocomplete="off"
-            data-i18n-placeholder="personSearch"
-          /><datalist id="voiceSuggestions"></datalist></label
-        >
+        <div class="grid2 filter-pair">
+          <label
+            ><span data-i18n="director">监督</span
+            ><input
+              id="director"
+              type="search"
+              list="directorSuggestions"
+              autocomplete="off"
+              data-i18n-placeholder="personSearch"
+            /><datalist id="directorSuggestions"></datalist></label
+          >
+          <label
+            ><span data-i18n="voiceActor">主要声优</span
+            ><input
+              id="voice_actor"
+              type="search"
+              list="voiceSuggestions"
+              autocomplete="off"
+              data-i18n-placeholder="personSearch"
+            /><datalist id="voiceSuggestions"></datalist></label
+          >
+        </div>
         <fieldset class="compact-filter">
           <legend data-i18n="availability">可用来源</legend>
           <div id="availability" class="status-checks">
@@ -252,8 +256,8 @@
         <span data-i18n="selectedWorks">部作品已选择</span></span
       >
       <button id="clearSelection" data-icon="remove" class="tool" data-i18n="clear">清空</button>
-      <button id="createPlan" data-icon="download" class="primary" data-i18n="previewPlan">
-        开始下载
+      <button id="createPlan" data-icon="list" class="primary" data-i18n="taskPreview">
+        任务预览
       </button>
     </div>
 
@@ -288,7 +292,7 @@
         <p id="radarSubscribeWork" class="subscription-work"></p>
         <p id="radarSubscribeStatus" class="muted" role="status"></p>
         <label><span data-i18n="radarChooseResource">选择订阅资源</span><select id="radarResource" required></select></label>
-        <button id="radarSubscribeSubmit" data-icon="subscribe" class="primary" type="submit" data-i18n="radarSubscribe" disabled>订阅</button>
+        <button id="radarSubscribeSubmit" data-icon="subscribe" class="primary" type="submit" data-i18n="enableSubscription" disabled>启用订阅</button>
       </form>
     </dialog>
     <dialog id="detailDialog">
@@ -499,9 +503,6 @@
               ><input id="qbtApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label
             ><small id="qbtCredentialState" class="muted" data-i18n="qbtApiKeyHint">保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。</small
             ><label
-              ><span data-i18n="libraryPath">动画收藏库路径</span
-              ><input id="libraryPath" type="text" /></label
-            ><label
               ><span data-i18n="qbtLibraryPath">qBittorrent 容器内路径</span
               ><input id="qbtLibraryPath" type="text" /></label
             ><label
@@ -516,6 +517,16 @@
             >
               测试连接</button
             ><span id="qbtState" class="muted"></span>
+          </fieldset>
+          <fieldset>
+            <legend data-i18n="localLibrarySettings">本地收藏库</legend>
+            <label><span data-i18n="libraryPath">动画收藏库路径</span><input id="libraryPath" type="text" /></label>
+            <label class="check"><input id="librarySleepEnabled" type="checkbox" /><span data-i18n="librarySleepEnabled">启用每日休眠时段</span></label>
+            <div class="setting-row update-schedule-row">
+              <label><span data-i18n="librarySleepStart">开始时间</span><input id="librarySleepStart" type="time" value="00:00" /></label>
+              <label><span data-i18n="librarySleepEnd">结束时间</span><input id="librarySleepEnd" type="time" value="08:00" /></label>
+            </div>
+            <p class="explain" data-i18n="librarySleepHint">按运行设备的本地时间，可跨午夜。期间暂停本地库探测、扫描、播放及写入，保留缓存状态；Ani-RSS 和其它路径的外部库继续运行。</p>
           </fieldset>
           <fieldset>
             <legend>Ani-RSS</legend>

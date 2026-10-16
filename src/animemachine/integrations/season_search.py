@@ -15,6 +15,7 @@ from . import ani_rss
 
 SEARCH_ATTEMPTS = 2
 RETRY_SECONDS = 2.0
+STATE_VERSION = 2
 
 
 def movie_search_candidates(db_path: Path, query: Callable[..., dict[str, Any]],
@@ -59,6 +60,9 @@ class SeasonSearch:
             self._status = {"state": "idle"}
         if self._status.get("state") == "running":
             self._set(state="interrupted")
+        elif (self._status.get("state") == "failed" and self._status.get("stateVersion", 0) < STATE_VERSION
+              and "UNIQUE constraint failed: ani_rss_resource.resource_id" in str(self._status.get("error", ""))):
+            self._set(state="interrupted", previousError=self._status.get("error"), error=None)
 
     def status(self) -> dict[str, Any]:
         with self.lock:
@@ -95,7 +99,7 @@ class SeasonSearch:
                 resume = False
             failures = set(self._status.get("failedIds", [])) if resume else set()
             completed = [value for value in self._status.get("completedIds", []) if value not in failures] if resume else []
-            self._save({"state": "running", "from": start, "to": end, "done": len(completed),
+            self._save({"state": "running", "stateVersion": STATE_VERSION, "from": start, "to": end, "done": len(completed),
                         "synchronize": synchronize, "phase": "sync" if synchronize else "search",
                         "total": 0, "failed": 0, "failedIds": [], "failures": [],
                         "completedIds": completed, "currentAnimeId": None, "error": None})

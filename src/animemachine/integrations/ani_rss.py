@@ -35,7 +35,7 @@ from ..torrents import runtime as runtime_catalog
 from ..catalog.episodes import _episode_number, _episode_start_number, _local_episode_number
 from .. import __version__
 
-from ..config.loader import (archive_group_enabled, canonical_resolution, option_enabled,
+from ..config.loader import (archive_group_enabled, canonical_resolution, load_resource_group_catalog, manual_policy_override, option_enabled,
                         region_policy_enabled, resource_group_enabled, serial_group_matches, serial_profile_language,
                         serial_rule_enabled, source_family, torrent_policy_eligible)
 
@@ -1273,6 +1273,7 @@ def refresh_new_subscription_media(db_path: Path, config: dict[str, Any],
 
 
 def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
+    refresh_resource_policy(db_path, config)
     settings = _settings(config)
     key = _secret()
     credential_configured = bool(key)
@@ -1369,12 +1370,68 @@ def _policy_eligibility_reason(title: str, group: str, source_class: str,
         matches = serial_group_matches(title, group, language)
         enabled = (any(serial_rule_enabled(policy, language, match["id"]) for match in matches)
                    if matches else bool(allow.get("resourceGroup", False)))
-        return ("eligible" if enabled else "resource_group_disabled"), family
+        if enabled:
+            return "eligible", family
+        group_matches = serial_group_matches(title, group, language, require_subtitles=False)
+        if not matches and any(serial_rule_enabled(policy, language, match["id"]) for match in group_matches):
+            return "serial_language_mismatch", family
+        return "resource_group_disabled", family
     if not resource_group_enabled(policy.get("resourceGroups"), group, allow.get("resourceGroup", False)):
         return "resource_group_disabled", family
     if not option_enabled(policy.get("subtitles"), "unknown", allow.get("subtitle", True)):
         return "subtitle_disabled", family
     return "eligible", family
+
+
+def _resource_policy_title(row: sqlite3.Row) -> str:
+    """Use the original release evidence rather than the shortened display title."""
+    try:
+        payload = json.loads(row["payload_json"])
+        if row["resource_kind"] == "collection":
+            return str(payload.get("torrentTitle") or row["title"] or "")
+        return str(payload.get("policyTitle") or " ".join(
+            str(item.get("title") or "") for item in _strict_mapping_list(payload.get("items"), "cached resource items"))
+            or row["title"] or "")
+    except (ValueError, RuntimeError, AttributeError):
+        return str(row["title"] or "")
+
+
+def refresh_resource_policy(db_path: Path, config: dict[str, Any]) -> None:
+    """Re-evaluate cached releases once per policy/rule revision, without remote I/O."""
+    revision = hashlib.sha256(json.dumps({
+        "version": 1, "policy": config.get("torrentPolicy", {}),
+        "language": serial_profile_language(config), "rules": load_resource_group_catalog(),
+    }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    key = "ani_rss_resource_policy_revision"
+    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='ani_rss_resource'").fetchone():
+            return
+        if not db.execute("SELECT 1 FROM ani_rss_resource LIMIT 1").fetchone():
+            return
+        has_metadata = db.execute("SELECT 1 FROM sqlite_master WHERE name='metadata'").fetchone()
+        prior = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone() if has_metadata else None
+        if prior and prior[0] == revision:
+            return
+    with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db, db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        prior = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        if prior and prior[0] == revision:
+            return
+        ranked: dict[int, list[tuple[Any, ...]]] = {}
+        for row in db.execute("SELECT * FROM ani_rss_resource").fetchall():
+            eligible, rank = _policy_eligibility_and_rank(
+                _resource_policy_title(row), str(row["resource_group"] or ""),
+                str(row["source_class"] or "unknown"), row["resolution"], config)
+            ranked.setdefault(int(row["anime_id"]), []).append((
+                0 if row["resource_kind"] == "collection" else 1, rank,
+                -(row["resolution"] or 0), -row["item_count"], row["title"], row["resource_id"], eligible))
+        for rows in ranked.values():
+            for index, item in enumerate(sorted(rows)):
+                db.execute("UPDATE ani_rss_resource SET eligible=?,rank_key=? WHERE resource_id=? AND (eligible<>? OR rank_key<>?)",
+                           (int(item[-1]), f"{index:08d}", item[-2], int(item[-1]), f"{index:08d}"))
+        db.execute("INSERT INTO metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, revision))
 
 
 def _resource_fields(title: str) -> tuple[str, int | None, int | None]:
@@ -1694,8 +1751,8 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             source_class, resolution, _ = _resource_fields(combined_title)
             eligible, policy_rank = _policy_eligibility_and_rank(combined_title, label, source_class, resolution, config)
             payload = {"rss": rss, "type": "mikan", "bgmUrl": group.get("bgmUrl") or item.get("bgmUrl"),
-                       "subgroup": label, "workTitle": item.get("title"), "items": items[:40]}
-            rid = "ar-" + hashlib.sha256(f"{anime_id}\0follow\0{rss}".encode("utf-8")).hexdigest()[:24]
+                       "subgroup": label, "workTitle": item.get("title"), "items": items[:40], "policyTitle": combined_title}
+            rid = "ar-" + hashlib.sha256(f"bangumi:{work['bgm_id']}\0follow\0{rss}".encode("utf-8")).hexdigest()[:24]
             resources.append({"resource_id": rid, "kind": "follow", "title": f"{label} · {item.get('title') or names[0]}",
                               "group": label, "source": source_class, "resolution": resolution,
                               "first": min(episodes) if episodes else None, "last": max(episodes) if episodes else None,
@@ -1708,7 +1765,7 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                 source_class, resolution, _ = _resource_fields(entry_title)
                 torrent_url = str(entry["torrent"])
                 collection_payload = {**payload, "torrentUrl": torrent_url, "torrentTitle": entry_title}
-                collection_id = "ar-" + hashlib.sha256(f"{anime_id}\0collection\0{torrent_url}".encode("utf-8")).hexdigest()[:24]
+                collection_id = "ar-" + hashlib.sha256(f"bangumi:{work['bgm_id']}\0collection\0{torrent_url}".encode("utf-8")).hexdigest()[:24]
                 collection_eligible, collection_rank = _policy_eligibility_and_rank(
                     entry_title, label, source_class, resolution, config)
                 resources.append({"resource_id": collection_id, "kind": "collection", "title": entry_title,
@@ -1735,10 +1792,18 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
                 or current_route_revision != provider_route_revision):
             return {"animeId": anime_id, "found": 0, "eligible": 0, "stale": True}
         db.execute("DELETE FROM ani_rss_resource WHERE anime_id=?", (anime_id,))
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='metadata'").fetchone():
+            db.execute("DELETE FROM metadata WHERE key='ani_rss_resource_policy_revision'")
         _reconcile_release_progress(db, anime_id, episode_count, episode_start, observed, stamp)
         _record_movie_releases(db, anime_id, movie_items)
         for index, item in enumerate(resources):
-            db.execute("INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            db.execute("""INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(resource_id) DO UPDATE SET title=excluded.title,resource_group=excluded.resource_group,
+                       source_class=excluded.source_class,resolution=excluded.resolution,sequence_first=excluded.sequence_first,
+                       sequence_last=excluded.sequence_last,item_count=excluded.item_count,total_bytes=excluded.total_bytes,
+                       eligible=excluded.eligible,rank_key=excluded.rank_key,payload_json=excluded.payload_json,
+                       discovered_at=excluded.discovered_at,expires_at=excluded.expires_at
+                       WHERE ani_rss_resource.anime_id=excluded.anime_id AND ani_rss_resource.resource_kind=excluded.resource_kind""",
                        (item["resource_id"], anime_id, "ani-rss", item["kind"], item["title"], item["group"],
                         item["source"], item["resolution"], None, item["first"], item["last"], item["count"],
                         item["bytes"], 1 if item["eligible"] else 0, f"{index:08d}",
@@ -1764,7 +1829,7 @@ def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None
             reason, family = ("eligible", "other")
             if config is not None:
                 reason, family = _policy_eligibility_reason(
-                    str(row["title"] or ""), str(row["resource_group"] or ""),
+                    _resource_policy_title(row), str(row["resource_group"] or ""),
                     str(row["source_class"] or "unknown"), row["resolution"], config)
             if not region_enabled:
                 reason = "region_disabled"
@@ -1778,6 +1843,9 @@ def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None
                            "resolution": row["resolution"], "sequenceFirst": row["sequence_first"],
                            "sequenceLast": row["sequence_last"], "itemCount": row["item_count"],
                            "totalBytes": row["total_bytes"], "eligible": eligible,
+                           "canOverride": not eligible and region_enabled and reason in {
+                               "source_class_disabled", "resource_group_disabled", "resolution_disabled",
+                               "subtitle_disabled", "serial_language_mismatch"},
                            "eligibilityReason": reason, "effectiveRank": index})
         return result
 
@@ -1817,19 +1885,27 @@ def subscriptions_for_anime(db_path: Path, anime_id: int) -> list[dict[str, Any]
                  "lastEpisodeUpdateAt": row["last_episode_update_at"]} for row in rows]
 
 
-def _load_resource(db_path: Path, resource_id: str) -> tuple[sqlite3.Row, dict[str, Any]]:
+def _load_resource(db_path: Path, resource_id: str, config: dict[str, Any] | None = None, *,
+                   policy_override: bool = False) -> tuple[sqlite3.Row, dict[str, Any]]:
+    if config is not None:
+        refresh_resource_policy(db_path, config)
     db = sqlite3.connect(db_path); db.row_factory = sqlite3.Row
     try:
         migrate(db); row = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND expires_at>=?", (resource_id, utcnow())).fetchone()
-        if not row or not row["eligible"]:
+        if not row or (not row["eligible"] and not policy_override):
             raise ValueError("Ani-RSS resource is missing, expired, or ineligible")
+        if config is not None and not _work_region_enabled(db, int(row["anime_id"]), config):
+            raise ValueError("Ani-RSS work region is disabled")
         return row, json.loads(row["payload_json"])
     finally:
         db.close()
 
 
-def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[str, Any]:
-    row, payload = _load_resource(db_path, resource_id)
+def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
+              policy_override: bool = False) -> dict[str, Any]:
+    if not isinstance(policy_override, bool):
+        raise ValueError("policyOverride must be boolean")
+    row, payload = _load_resource(db_path, resource_id, config, policy_override=policy_override)
     anime_id = int(row["anime_id"]); kind = str(row["resource_kind"])
     # Keep action identity stable across the upgrade to work-scoped cache IDs.
     # In particular, already submitted collections must not be submitted twice.
@@ -1922,6 +1998,26 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any]) -> dict[s
         raise
 
 
+def set_subscription_enabled(db_path: Path, remote_id: str, config: dict[str, Any], *, enabled: bool) -> dict[str, Any]:
+    """Change only the exact subscription through Ani-RSS's supported API."""
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    with contextlib.closing(sqlite3.connect(db_path)) as db:
+        migrate(db)
+        if not db.execute("SELECT 1 FROM ani_rss_subscription WHERE remote_id=? AND deleted_at IS NULL", (remote_id,)).fetchone():
+            raise ValueError("managed Ani-RSS subscription not found")
+    client = _client(config)
+    client.call("batchEnable", params={"value": str(enabled).lower()}, body=[remote_id])
+    remote = next((item for item in client.subscriptions() if str(item.get("id")) == remote_id), None)
+    if remote is None or remote.get("enable") is not enabled:
+        raise RuntimeError("Ani-RSS did not confirm subscription state")
+    result = sync(db_path, config)
+    with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db, db:
+        db.execute("UPDATE ani_rss_subscription SET enabled=?,remote_state=? WHERE remote_id=? AND deleted_at IS NULL",
+                   (int(enabled), "enabled" if enabled else "paused", remote_id))
+    return {**result, "remoteId": remote_id, "enabled": enabled, "confirmed": True}
+
+
 def delete_subscription(db_path: Path, remote_id: str, config: dict[str, Any], *, delete_files: bool = False) -> dict[str, Any]:
     """Delete one exact remote subscription; never broad-match or delete another item."""
     with contextlib.closing(sqlite3.connect(db_path)) as db:
@@ -1970,15 +2066,20 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
             remote_token = explicit_resource.get(requested_id) or explicit_resource.get(owner)
             local_token = explicit_local.get(requested_id) or explicit_local.get(owner)
             if remote_token and routing_mode != "torrent" and region_enabled and remote_available:
-                remote = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND anime_id IN (?,?) AND eligible=1 AND expires_at>=?",
+                remote = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND anime_id IN (?,?) AND expires_at>=?",
                                     (remote_token, requested_id, owner, utcnow())).fetchone()
+                override = manual_policy_override(request, (requested_id, owner), f"ani-rss:{remote_token}")
+                if remote and not remote["eligible"] and not override:
+                    remote = None
                 if not remote and routing_mode == "default":
                     raise ValueError(f"Ani-RSS selection for anime {requested_id} is unavailable")
                 if remote:
-                    remote_jobs.append(_remote_plan_job(remote)); continue
+                    remote_jobs.append({**_remote_plan_job(remote), "policyOverride": not bool(remote["eligible"])}); continue
             local: list[dict[str, Any]] = []
             if routing_mode != "ani-rss":
-                local = [item for item in runtime_catalog.torrents_for_anime(db, owner, config) if item["eligible"]]
+                local = [item for item in runtime_catalog.torrents_for_anime(db, owner, config) if item["eligible"] or (
+                    item.get("canOverride") and item["infoHash"] == local_token and
+                    manual_policy_override(request, (requested_id, owner), f"torrent:{local_token}"))]
             if routing_mode == "torrent":
                 if local:
                     local_ids.append(requested_id)

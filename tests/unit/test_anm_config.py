@@ -13,6 +13,21 @@ from animemachine.config.policy import ConfigStore
 
 
 class ConfigTests(unittest.TestCase):
+    def test_saving_unchanged_settings_does_not_write_or_replace_the_file(self):
+        source = PROJECT_ROOT / 'config/config.example.json'
+        config = json.loads(source.read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / 'config.json'
+            store = ConfigStore(path, source)
+            store.write(config)
+            before = path.stat().st_mtime_ns
+            with mock.patch('animemachine.config.policy.tempfile.mkstemp', side_effect=AssertionError('unexpected write')):
+                store.write(config)
+            self.assertEqual(before, path.stat().st_mtime_ns)
+            config['ui']['language'] = 'ja'
+            store.write(config)
+            self.assertEqual('ja', json.loads(path.read_text(encoding='utf-8'))['ui']['language'])
+
     def test_duplicate_subtitle_provider_ids_are_rejected(self):
         config = json.loads((PROJECT_ROOT / "config/config.example.json").read_text(encoding="utf-8"))
         provider = {"id": "assrt", "enabled": True, "endpoints": ["https://subtitles.invalid"]}

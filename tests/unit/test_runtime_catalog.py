@@ -92,6 +92,29 @@ class RuntimeCatalogTests(unittest.TestCase):
         self.assertEqual("NoSubfolder", plan["jobs"][0]["contentLayout"])
         self.assertEqual(str(self.target).replace(str(self.config["deployment"]["libraryUncRoot"]), self.config["deployment"]["qbtLibraryRoot"]).replace("\\", "/"), plan["jobs"][0]["savePath"])
 
+    def test_manual_policy_override_is_scoped_to_selected_verified_resource(self) -> None:
+        self.config['torrentPolicy']['contentClasses']['bdrip'] = False
+        request = {'animeIds': [self.anime_id], 'torrentSelections': {str(self.anime_id): self.info_hash}}
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            db.row_factory = sqlite3.Row
+            item = runtime_catalog.torrents_for_anime(db, self.anime_id, self.config)[0]
+        self.assertFalse(item['eligible'])
+        self.assertTrue(item['canOverride'])
+        with self.assertRaisesRegex(ValueError, 'not eligible'):
+            runtime_catalog.create_plan(self.db_path, self.config, request)
+        request['policyOverrides'] = {str(self.anime_id): f'torrent:{self.info_hash}'}
+        plan = runtime_catalog.create_plan(self.db_path, self.config, request)
+        self.assertTrue(plan['jobs'][0]['policyOverride'])
+        self.assertFalse(self.config['torrentPolicy']['contentClasses']['bdrip'])
+        request['policyOverrides'][str(self.anime_id)] = f'torrent:{"b" * 40}'
+        with self.assertRaisesRegex(ValueError, 'not eligible'):
+            runtime_catalog.create_plan(self.db_path, self.config, request)
+        request['policyOverrides'][str(self.anime_id)] = f'torrent:{self.info_hash}'
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE runtime_torrent SET metadata_state='unavailable'")
+        with self.assertRaisesRegex(ValueError, 'not eligible'):
+            runtime_catalog.create_plan(self.db_path, self.config, request)
+
     def test_split_cour_inherits_owner_resources_and_plan(self) -> None:
         with contextlib.closing(sqlite3.connect(self.db_path)) as db:
             logical_id = int(db.execute(

@@ -5,7 +5,9 @@ import contextlib
 import os
 import stat
 from pathlib import Path
-from typing import BinaryIO, Iterable, Iterator
+from typing import Any, BinaryIO, Iterable, Iterator
+
+from .sleep import require_awake, sleeping_path
 
 
 class PathAuthorizationError(ValueError):
@@ -25,6 +27,7 @@ def is_junction(path: Path | str) -> bool:
 def canonical_existing(path: Path | str) -> Path:
     candidate = Path(path)
     try:
+        require_awake(candidate)
         return candidate.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise PathAuthorizationError("path is unavailable") from exc
@@ -44,9 +47,13 @@ def is_within(path: Path | str, root: Path | str) -> bool:
         return False
 
 
-def authorize_existing(path: Path | str, roots: Iterable[Path | str]) -> Path:
+def authorize_existing(path: Path | str, roots: Iterable[Path | str], *, config: dict[str, Any] | None = None) -> Path:
+    if sleeping_path(path, config):
+        raise PathAuthorizationError("local_library_sleeping")
     candidate = canonical_existing(path)
     for root in roots:
+        if sleeping_path(root, config):
+            continue
         try:
             boundary = canonical_existing(root)
             candidate.relative_to(boundary)
@@ -65,11 +72,28 @@ def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
     )
 
 
+def walk_files(root: Path, *, config: dict[str, Any] | None = None) -> Iterator[Path]:
+    """Walk without following links and recheck quiet hours before each directory."""
+    pending = [root]
+    while pending:
+        require_awake(root, config)
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                require_awake(root, config)
+                if entry.is_symlink() or is_junction(entry.path):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    yield Path(entry.path)
+
+
 @contextlib.contextmanager
-def open_authorized(path: Path | str, roots: Iterable[Path | str]) -> Iterator[tuple[BinaryIO, Path, os.stat_result]]:
+def open_authorized(path: Path | str, roots: Iterable[Path | str], *, config: dict[str, Any] | None = None) -> Iterator[tuple[BinaryIO, Path, os.stat_result]]:
     """Open an authorized regular file and verify the path still names that file."""
     boundaries = tuple(roots)
-    candidate = authorize_existing(path, boundaries)
+    candidate = authorize_existing(path, boundaries, config=config)
     try:
         stream = candidate.open("rb")
     except OSError as exc:
@@ -78,7 +102,7 @@ def open_authorized(path: Path | str, roots: Iterable[Path | str]) -> Iterator[t
         opened = os.fstat(stream.fileno())
         if not stat.S_ISREG(opened.st_mode):
             raise PathAuthorizationError("path is not a regular file")
-        current = authorize_existing(path, boundaries)
+        current = authorize_existing(path, boundaries, config=config)
         try:
             current_stat = current.stat()
         except OSError as exc:

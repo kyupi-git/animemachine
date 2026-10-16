@@ -88,7 +88,7 @@ Configure media folders under **Settings → Connections**:
 
 | Purpose | Setting |
 | --- | --- |
-| Organize new downloads | “Anime library path” under qBittorrent |
+| Organize new downloads | “Anime library path” under Local library |
 | Browse anime already on a drive | Enable “Map an external read-only library” and enter the media folder |
 | Connect media downloaded by Ani-RSS | Enter its media path under Ani-RSS, or use remote playback through its API |
 
@@ -110,18 +110,22 @@ A card's resource and subscription labels describe available releases or subscri
 
 ### Release radar and subscriptions
 
+“New Episode Follow-up” and Release radar group titles as TV, films, OVA, web animation, then other types. Within each group, aired titles show recent activity first; upcoming titles follow their expected dates from earliest to latest. Activity uses the later of subscription time and the latest episode resource update.
+
 [Connect Ani-RSS](#ani-rss), then:
 
 1. Open **Release radar** and choose the previous, current, or next season. Each season appears on one page.
 2. Click **Sync** to refresh subscriptions, media, and releases for the selected season. **Search** checks the current season in sequence and shows progress immediately. If a title fails, the scan continues; click again to retry unfinished titles.
 3. Click **Subscribe** for a title, choose a release or group, and confirm.
-4. Ani-RSS handles downloading. You can close the window and keep browsing during submission. Subscription status and media progress sync back automatically; releases excluded by download settings show the reason.
+4. Ani-RSS handles downloading. You can close the window and keep browsing during submission. Subscription status and media progress sync back automatically.
+
+Releases excluded by your language, subgroup, or quality preferences show the reason. To use one, select it in title details, click **Subscribe anyway / Download anyway**, then review and submit the task preview. The radar subscription window also offers **Subscribe anyway**. This applies only to your current selection and does not change your settings.
 
 Films with a BD release this season also appear in the radar, with the BD date below the premiere date. When no explicit BD date is available, the search also checks films that premiered within the past year. Their earliest resource publication reported by Ani-RSS determines the season and appears as a “Release” date.
 
 The latest count in “Latest / total episodes” prioritizes Ani-RSS resource and subscription records. “Episode updated” appears when a timestamp is available. Click a column such as “Premiere date” to sort the entire season; click again to reverse the order.
 
-New subscriptions move to the front of the home page in “New Episode Follow-up” and “Random” views. Your year, month, and other filters still apply.
+Open the Subscribed or Paused menu to pause, resume, or unsubscribe. Unsubscribing keeps downloaded files; deleting the subscription and files has a separate confirmation. New subscriptions move forward within their group, subject to the home page date filters.
 
 ### Fill gaps and download
 
@@ -141,6 +145,16 @@ After a single-episode or single-volume task finishes, **Settings → Subscripti
 After connecting a writable library and saving the settings, click **Folders** in Release radar to create placeholder folders for subscribed titles. Existing folders are reused; repeating the operation skips folders already created.
 
 The same action is available under **Settings → General → Library**, alongside **Verify all local resources**. Both run in the background and show progress and results. Completeness is assessed against the files currently present.
+
+### Set local library quiet hours
+
+Storage checks are read-only. Write permissions are confirmed by actual operations such as creating folders or organizing files.
+
+In **Settings → Connections → Local library**, enable daily quiet hours, enter start and end times, and save. Times follow the host device and can cross midnight, such as 23:00 to 08:00.
+
+Local library probes, scans, verification, playback, and writes pause while existing records remain visible. Access resumes after quiet hours. Ani-RSS and external libraries at other paths continue running. Other applications or libraries on the same disk may still wake it.
+
+Keep configuration, databases, and logs on another disk as well. For Docker, update to the 0.3.4 image to include quiet-hour protection during container startup.
 
 ### Relationship graph
 
@@ -257,3 +271,5 @@ To restore, put these files back in their corresponding locations and start with
 | The port is already in use | Choose another port using the [port settings](reference.en.md#ports), then restart. |
 
 For more detail, open **Settings → Diagnostics / Logs** and check the component's status and recent errors. Background tasks resume retries when the network returns.
+
+For troubleshooting, set `ANM_LOG_LEVEL=DEBUG` before starting to show detailed timings. The default output is sufficient for normal use.

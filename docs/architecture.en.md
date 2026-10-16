@@ -68,6 +68,8 @@ Collection status comes from media checks. Available resources, download tasks, 
 
 Background work runs separately from page interactions. Diagnostics summarizes network, storage, image, and service status; Logs shows recent significant results.
 
+Local library quiet hours are checked before filesystem access, including probes, scans, verification, playback, and writes. Sleeping is distinct from a disconnection and preserves known media and caches. Metadata, Ani-RSS APIs, and external libraries at other paths remain available.
+
 ## Settings and data storage
 
 | Content | Local release | Host folders for Docker |

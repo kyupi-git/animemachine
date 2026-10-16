@@ -5,6 +5,24 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.3.4
+
+0.3.4 improves update ordering, adds local library quiet hours and Ani-RSS subscription controls, and retains existing settings, media, and cover caches when upgrading.
+
+### Added and improved
+
+- Improved New Episode Follow-up and Release radar: titles are grouped by media type, aired titles show recent activity first, and upcoming titles follow their expected premiere dates. Subscription time also contributes to activity ordering.
+- Improved local library controls: daily quiet hours can cross midnight. Library access pauses while cached status stays visible; Ani-RSS and external libraries at other paths continue running.
+- Improved Ani-RSS subscription management: pause, resume, unsubscribe, or delete a subscription with its files from the subscription status menu. Keeping files and deleting them have separate confirmation messages.
+- Improved resource selection: manually use Ani-RSS or local Torrent resources excluded by your preferences. Exclusion reasons and download confirmation remain visible, and the override applies only to that selection. Subscription and download actions use distinct labels, and home filters take less space.
+- Improved console output: startup information, task results, and errors remain visible; progress is consolidated and repeated warnings are rate-limited. Detailed timings can be enabled when needed.
+
+### Fixed
+
+- Fixed repeated write probes during storage status polling. Storage checks now use read-only permission queries. Unchanged settings and image progress are no longer rewritten.
+- Fixed resource cache identity compatibility by merging duplicate resources under stable title identifiers. Interrupted season searches can resume without repeatedly showing a historical failure.
+- Fixed subtitle releases incorrectly appearing unavailable. Common language tags are recognized, cached eligibility is recalculated from release titles, and language mismatches are distinguished from disabled subgroups.
+
 ## 0.3.3
 
 0.3.3 expands film release information in Release radar, fixes Archive version checks, application update checks, and season resource searches, and improves diagnostic loading. Existing settings, media, and cover caches carry over when you upgrade.

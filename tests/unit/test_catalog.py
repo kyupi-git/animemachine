@@ -134,12 +134,13 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual([10, 9], [item["id"] for item in ascending["items"][:2]])
             self.assertEqual([item["id"] for item in ascending["items"]], [item["id"] for item in descending["items"]])
 
-    def test_recent_episode_sort_falls_back_when_ani_rss_is_unavailable(self):
+    def test_recent_episode_sort_remains_available_without_ani_rss(self):
         unavailable = {"connection_state": "error", "credentialConfigured": True, "effective_mode": "manual"}
         with mock.patch.object(catalog.ani_rss, "state", return_value=unavailable):
             result = catalog.query_catalog(DB, {"sort": ["recent_episode"], "seed": ["stable"], "limit": ["all"]})
-        self.assertFalse(result["recentEpisodeSortAvailable"])
-        self.assertEqual("random", result["effectiveSort"])
+        self.assertTrue(result["recentEpisodeSortAvailable"])
+        self.assertFalse(result["aniRssAvailable"])
+        self.assertEqual("recent_episode", result["effectiveSort"])
 
     def test_detail_episode_progress_distinguishes_current_from_known_total(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -884,6 +885,19 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual([3, 4], warmup._needed_ids([1, 2, 3, 4]))
             restored = catalog.CatalogWarmup(db_path, object(), FakeFetcher(), interactive=lambda: False)
             self.assertEqual(state["controls"], restored.snapshot()["controls"])
+
+    def test_unchanged_image_progress_is_not_written_again(self):
+        with tempfile.TemporaryDirectory() as raw:
+            warmup = catalog.CatalogWarmup(Path(raw) / 'catalog.sqlite3', object(), None, interactive=lambda: False)
+            warmup._persist()
+            with mock.patch.object(Path, 'write_text', autospec=True, side_effect=Path.write_text) as write:
+                warmup._persist()
+                write.assert_not_called()
+                warmup.state['state'] = 'paused'
+                warmup._persist()
+                write.assert_called_once()
+            restored = catalog.CatalogWarmup(Path(raw) / 'catalog.sqlite3', object(), None, interactive=lambda: False)
+            self.assertEqual('paused', restored.state['state'])
 
     def test_image_preload_restores_controls_with_current_worker_limits(self):
         class FakeFetcher:

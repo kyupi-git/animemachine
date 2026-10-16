@@ -15,6 +15,7 @@ from typing import Any
 from pathlib import Path
 
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
+from ..storage.sleep import require_awake
 from ..storage.path_policy import is_junction
 
 
@@ -242,16 +243,19 @@ def compound_title_from_evidence(primary: str, aliases: Iterable[str], evidence_
 class ExistingPathIndex:
     """Small structural index used before creating any physical target."""
 
-    def __init__(self, root: Path, ignored: Iterable[str] = ()) -> None:
+    def __init__(self, root: Path, ignored: Iterable[str] = (), *, config: dict[str, Any] | None = None) -> None:
         self.root = root
+        self.config = config
+        require_awake(root, config)
         self.rows: list[dict[str, Any]] = []
         self.by_date: dict[str, list[dict[str, Any]]] = {}
         self.by_path: dict[str, dict[str, Any]] = {}
-        storage = status_for_path(root, timeout=4.0)
+        storage = status_for_path(root, timeout=4.0, config=config)
         if storage.state != AVAILABLE:
             raise StorageUnavailableError(f"library storage unavailable: {root}")
         try:
             for top in root.iterdir():
+                require_awake(root, self.config)
                 if top.is_symlink() or is_junction(top) or not stat.S_ISDIR(top.lstat().st_mode) or is_ignored_library_container(top.name, ignored):
                     continue
                 # The generic work pattern also matches a series directory.  Test
@@ -259,6 +263,7 @@ class ExistingPathIndex:
                 # single top-level work and all of its children become invisible.
                 if SERIES_DIRECTORY_RE.fullmatch(top.name):
                     for child in top.iterdir():
+                        require_awake(root, self.config)
                         match = WORK_DIRECTORY_RE.fullmatch(child.name) if not child.is_symlink() and not is_junction(child) and stat.S_ISDIR(child.lstat().st_mode) else None
                         if match:
                             self._append(child, top, match.group("date"), match.group("title"))
@@ -274,8 +279,10 @@ class ExistingPathIndex:
         try:
             pending = [str(path)]
             while pending and not has_media:
+                require_awake(self.root, self.config)
                 with os.scandir(pending.pop()) as entries:
                     for item in entries:
+                        require_awake(self.root, self.config)
                         if is_junction(item.path):
                             continue
                         if item.is_dir(follow_symlinks=False):

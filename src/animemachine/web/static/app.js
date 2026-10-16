@@ -40,8 +40,7 @@ let config = {},
   pageSize = "12",
   sort = "recent_episode",
   configuredSort = "recent_episode",
-  recentEpisodeSortAvailable = false,
-  recentEpisodeSortDeferred = false,
+  recentEpisodeSortAvailable = true,
   lastAniRssGeneration = null,
   direction = "asc",
   imagesEnabled = true,
@@ -63,6 +62,7 @@ let seed = "";
 const selected = new Set(),
   torrentSelections = new Map(),
   resourceSelections = new Map(),
+  policyOverrides = new Map(),
   playbackSources = new Map(),
   planState = { id: null },
   relationHiddenCodes = new Set();
@@ -109,19 +109,19 @@ const i18n = {
     catalog: "AnimeMachine",
     catalogTagline: "全自动动画收藏库",
     aboutTitle: "关于 AnimeMachine",
-    checkUpdate: "检测更新",
+    checkUpdate: "检查更新",
     updateNow: "更新",
-    updateChecking: "正在检测更新…",
+    updateChecking: "正在检查更新…",
     updateAvailable: "检测到新版{version}可用！",
     updateLatest: "当前已是最新版本。",
     updatePreparing: "正在下载并校验更新…",
     updateRestarting: "更新已就绪，AnimeMachine 正在自动重启…",
     updateFailed: "更新失败：{message}",
     updateRestartTimeout: "更新后服务未在预期时间内恢复。",
-    playbackHandoffUnavailable: "外部播放器交接不可用。",
+    playbackHandoffUnavailable: "无法生成外部播放器链接。",
     randomSeedUnavailable: "无法取得新的随机种子。",
     maintenanceUnsupported: "不支持的维护操作。",
-    updateCheckFailed: "检测更新失败：{message}",
+    updateCheckFailed: "检查更新失败：{message}",
     updateDockerRequired: "当前 Docker 镜像尚不包含 Web 在线升级运行时；请先通过 Docker Compose 更新一次镜像，之后即可直接在线升级。",
     updateDockerStateUnavailable: "Docker 状态目录不可写，无法安全保存在线升级数据。",
     updatePortableRequired: "在线升级仅对官方便携 Release 启用；源码部署仍可检测新版本。",
@@ -175,7 +175,7 @@ const i18n = {
     username: "用户名",
     password: "密码",
     usersTab: "用户",
-    usersHint: "普通用户可浏览和提交下载，但不能修改设置。",
+    usersHint: "普通用户可浏览、播放和提交任务，不能修改设置。",
     userCreateHint: "用户名为 3–64 个字母、数字、点、下划线或连字符；密码至少 10 位。",
     userRole: "角色",
     existingUsers: "现有用户",
@@ -191,7 +191,7 @@ const i18n = {
     disableUser: "停用",
     disableInitialAdmin: "停用初始admin用户（建议创建新的管理员用户，停用初始admin用户）",
     enableUser: "启用",
-    submissionAllowed: "允许提交",
+    submissionAllowed: "允许提交任务",
     loadingDb: "正在读取数据库…",
     backgroundSync: "后台同步",
     loadingWorks: "作品加载中，请稍等...",
@@ -218,13 +218,13 @@ const i18n = {
     characterDesign: "角色设计",
     music: "音乐",
     voiceActor: "声优",
-    personSearch: "输入姓名进行模糊搜索",
+    personSearch: "输入姓名",
     tag: "题材 / 标签",
     all: "全部",
     works: " 部作品",
     loading: "正在检索…",
     none: "没有符合条件的作品。",
-    failed: "载入失败",
+    failed: "操作失败",
     queryFailed: "查询失败",
     invalidDownloadRoute: "下载方式无效，请刷新页面后重新选择作品。",
     pending: "待完善",
@@ -260,12 +260,12 @@ const i18n = {
     previous_selection: "既有任务已选择",
     not_selected: "未选择",
     planNoDownload: "所选作品没有需要新增或替换的文件。",
-    planBuilding: "正在后台生成大批量下载计划，页面可以继续使用…",
+    planBuilding: "正在后台生成任务预览，可继续浏览…",
     planWarnings: "计划包含需要注意的既有内容或冲突。",
     libraryPathUnreadable: "无法读取收藏库目标路径。",
     localFileUnreadable: "无法读取本地文件。",
     managedFileChanged: "本地文件与已记录的来源校验值不一致。",
-    exactComparisonUnavailable: "已计算本地哈希，但缺少可比较的来源校验基准，不能宣称内容完全相同。",
+    exactComparisonUnavailable: "本地校验已完成；缺少来源校验值，暂无法确认内容一致。",
     managedHashBaselineRecorded: "已为来源明确的受管文件记录首个哈希基准。",
     targetIsSymbolicLink: "目标是符号链接或重解析文件，已阻止自动写入。",
     targetNotRegularFile: "目标位置已被目录或其它非普通文件占用。",
@@ -303,10 +303,17 @@ const i18n = {
     selectedWorks: "部作品已选择",
     clear: "清空",
     previewPlan: "开始下载",
-    torrents: "可用资源",
-    noTorrent: "没有符合当前资格策略的资源",
+    enableSubscription: "启用订阅",
+    subscriptionPlan: "订阅确认",
+    mixedPlan: "订阅与下载",
+    taskPreview: "任务预览",
+    torrents: "资源",
+    noTorrent: "暂未找到资源，可尝试重新搜索。",
     excludedSourceClass: "片源类型不符",
     excludedSerialProfile: "语言不符",
+    forceSubscribe: "强行订阅",
+    forceDownload: "强行下载",
+    forcePolicyNotice: "本次使用未勾选的资源，仅对当前选择生效。",
     excludedResourceGroup: "资源组不符",
     excludedResolution: "分辨率不符",
     excludedSubtitle: "字幕不符",
@@ -322,14 +329,14 @@ const i18n = {
     aniRssFallback: "备选调用 Ani-RSS",
     aniRssManual: "手动调用 Ani-RSS",
     aniRssApiKey: "API Key",
-    aniRssApiKeyHint: "保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。",
+    aniRssApiKeyHint: "密钥单独保存，重启后仍可用；部署配置中的密钥优先。",
     aniRssCredentialConfigured: "API Key 已保存到受限凭据存储。",
     aniRssMediaPath: "Ani-RSS 媒体路径",
     aniRssSyncMinutes: "状态同步间隔（分钟）",
     aniRssHint: "此模式只控制资源查询与规划；订阅和 API 媒体状态仍按同步间隔更新。连接无效时自动停用远端资源，恢复后使用所选模式；媒体目录始终只读。",
     searchPoolRunning: "正在检索资源池…",
     searchPoolDone: "检索完成，已更新可用资源",
-    searchPoolNone: "检索完成，仍未找到可安全关联的资源",
+    searchPoolNone: "检索完成，暂未找到对应资源",
     verifyWork: "立即核验",
     verifyRunning: "正在核验…",
     scanIdle: "后台图片状态加载中",
@@ -349,6 +356,9 @@ const i18n = {
     imageNoImage: "暂无图片",
     imageError: "图片加载失败",
     aniRssDelete: "删除",
+    aniRssPause: "暂停订阅", aniRssResume: "恢复订阅", aniRssCancel: "取消订阅（保留文件）", aniRssDeleteFiles: "删除订阅及文件",
+    aniRssCancelConfirm: "取消“{title}”的 Ani-RSS 订阅并保留已下载文件？",
+    radarInterrupted: "检索已中断，可继续", librarySleepInvalid: "休眠开始时间和结束时间不能相同。",
     aniRssDeleteConfirm: "确认删除此 Ani-RSS 订阅及其已下载文件？",
     aniRssDeleteFailed: "Ani-RSS 删除未确认",
     themeSystem: "跟随系统",
@@ -403,7 +413,7 @@ const i18n = {
     radarPolicyExcluded: "资源不符合下载设置", radarWorks: "{count} 部作品",
     radarTaskProgress: "检索进度",
     retryAction: "重试",
-    recentEpisodeRequiresAniRss: "连接 Ani-RSS 后可用",
+    recentEpisodeRequiresAniRss: "连接 Ani-RSS 后可检索资源与管理订阅。",
     random: "随机",
     sortDate: "年月",
     sortTitle: "作品名",
@@ -443,7 +453,7 @@ const i18n = {
     other: "其它",
     generalTab: "常规",
     resourceGroupsTab: "资源组",
-    resourceGroupsHint: "收藏类资源不检查字幕；连载类资源按选定语言匹配资源组与字幕标记。界面只显示组名，匹配词由后台维护。",
+    resourceGroupsHint: "收藏类资源不限制字幕；连载资源按所选语言和资源组筛选，日语允许无字幕资源。",
     serialSubtitleLanguage: "连载资源字幕语言",
     followInterfaceLanguage: "跟随界面语言",
     archiveGroups: "收藏类 / 归档类",
@@ -454,7 +464,7 @@ const i18n = {
     otherResourceGroups: "其它（未识别或不符合上述规则）",
     connectionsTab: "连接",
     diagnosticsTab: "诊断",
-    diagnosticsHint: "只显示当前运行状态和近期结果；不会显示密钥、媒体内容或完整文件路径。",
+    diagnosticsHint: "查看当前运行状态、网络连接和近期结果。",
     systemHealth: "系统健康",
     systemHealthHint: "网络、图片和播放详情可在“诊断”中查看。",
     healthLoading: "正在汇总运行状态…",
@@ -489,10 +499,10 @@ const i18n = {
     currentRoute: "当前请求路径",
     networkProfile: "当前网络环境",
     performanceBaseline: "性能基线",
-    perfCatalogReady: "Catalog Ready",
+    perfCatalogReady: "作品目录就绪",
     perfFirstScreen: "首屏可用",
     perfFirstCover: "首张封面",
-    perfWarmComplete: "Warm 完成",
+    perfWarmComplete: "后台准备完成",
     previousRun: "上次运行",
     routeDirect: "直连",
     routeEnvironment: "环境代理",
@@ -511,8 +521,8 @@ const i18n = {
     selectionIncumbentCooldown: "当前源进入冷却，切换到候选源",
     selectionCandidateCooldown: "候选源仍在冷却，保持当前源",
     selectionMeaningfullyBetter: "候选源优势已超过切换阈值",
-    catalogAvailable: "Catalog 已可用",
-    catalogPreparing: "Catalog 准备中",
+    catalogAvailable: "作品目录已就绪",
+    catalogPreparing: "作品目录准备中",
     backgroundImagesPreparing: "后台图片准备中",
     preferencesSaveFailed: "浏览器无法保存显示偏好，请允许本站使用本地存储。",
     catalogResolving: "正在检查底库更新",
@@ -570,16 +580,19 @@ const i18n = {
     resumeCount: "续传",
     upstreamState: "Ani-RSS 上游",
     transferRate: "传输速率",
-    startupStarting: "Starting · 核心初始化中",
-    startupReady: "Ready · Web 已可使用",
-    startupWarming: "Warming · Web 已可使用，后台准备中",
-    startupWarm: "Warm · 后台准备完成",
+    startupStarting: "正在初始化",
+    startupReady: "网页已就绪",
+    startupWarming: "网页已就绪，后台准备中",
+    startupWarm: "后台准备完成",
     subscriptionsTab: "订阅",
     logsTab: "日志",
     historyTab: "历史记录",
-    subscriptionsHint: "本地下载完成后，会继续检查同一来源的后续发布；发现新资源后等待确认。",
-    noWatches: "暂无监视任务。",
-    removeWatch: "删除监视",
+    subscriptionsHint: "此处显示本地 Torrent 的后续发布监视，新资源需确认后下载。Ani-RSS 订阅可在作品详情或新作雷达中管理。",
+    noWatches: "暂无本地追更任务。",
+    removeWatch: "取消追更",
+    watchEpisode: "第 {sequence} 话",
+    watchVolume: "第 {sequence} 卷",
+    watchPending: "待确认 {count} 项",
     externalSource: "外部来源",
     readOnlyMapping: "只读映射",
     originalWithKind: "原作·{kind}",
@@ -602,12 +615,18 @@ const i18n = {
     endpoint: "服务地址",
     qbtApiKey: "API Key",
     qbtApiKeyPlaceholder: "留空则沿用已保存或部署凭据",
-    qbtApiKeyHint: "保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。",
+    qbtApiKeyHint: "密钥单独保存，重启后仍可用；部署配置中的密钥优先。",
     qbtCredentialConfigured: "API Key 已保存到受限凭据存储",
     torrentPoolPath: "Torrent 池路径",
     torrentPoolHint: "将 .torrent 文件放入此目录，AnimeMachine 会自动读取。",
     libraryPath: "动画收藏库路径",
-    qbtLibraryPath: "qBittorrent 容器内路径",
+    librarySleepEnabled: "启用每日休眠时段",
+    localLibrarySettings: "本地收藏库",
+    librarySleepStart: "开始时间",
+    librarySleepEnd: "结束时间",
+    librarySleepHint: "按运行设备的本地时间，可跨午夜。期间暂停本地库探测、扫描、播放及写入，保留缓存状态；Ani-RSS 和其它路径的外部库继续运行。",
+    librarySleeping: "本地收藏库休眠中；时段结束后自动恢复访问。",
+    qbtLibraryPath: "qBittorrent 保存路径",
     testConnection: "测试连接",
     connectionOk: "连接成功",
     authRequired: "服务可达，需要认证",
@@ -617,27 +636,27 @@ const i18n = {
     externalReadOnlyType: "目录结构",
     genericLayout: "通用目录",
     aniRssLayout: "ani-rss 兼容目录",
-    externalReadOnlyPath: "容器内只读路径",
+    externalReadOnlyPath: "媒体库路径",
     externalScanMinutes: "只读扫描间隔（分钟）",
     externalLibraryHint:
       "只读取文件名、路径、大小和修改时间，不写入外部媒体库；ani-rss 是常见的兼容来源之一。",
-    playbackConnection: "外部播放器交接",
+    playbackConnection: "外部播放器",
     preferDirectPaths: "优先使用播放器可访问的 SMB / NFS 路径",
     playbackPublicUrl: "外部设备访问 AnimeMachine 的地址（可留空）",
     playlistTtl: "播放会话空闲失效时间（秒）",
     playlistMaximum: "播放会话最长有效时间（秒）",
     directPathMappings: "直连路径映射（每行：容器路径 => 播放器路径）",
-    playbackConnectionHint: "直连不可用时自动生成支持 Range 的短时 HTTP 地址；不会转码或提供 Web 连续播放。",
+    playbackConnectionHint: "播放器无法直读媒体路径时，自动使用临时 HTTP 播放链接。",
     subtitleSources: "字幕源",
     subtitlesEnabled: "启用归档资源字幕匹配",
     assrtEndpoints: "ASSRT API 端点（每行一个）",
     assrtToken: "ASSRT Token",
     openSubtitlesEndpoint: "OpenSubtitles API 端点",
     openSubtitlesKey: "OpenSubtitles API Key",
-    subtitleSourcesHint: "只使用已配置的正式 API；按当前界面语言排序，低置信度结果必须由用户选择。",
+    subtitleSourcesHint: "从已配置的字幕服务查找，按界面语言排列候选结果，选择后应用。",
     searchSubtitles: "检索字幕", useSubtitle: "使用该字幕", subtitlePresent: "字幕已存在",
     searchSubtitlesShort: "查找", useSubtitleShort: "应用",
-    subtitleEmbedded: "媒体已内嵌字幕", subtitleNotFound: "未找到可靠字幕", subtitleApplied: "字幕已安装",
+    subtitleEmbedded: "媒体已内嵌字幕", subtitleNotFound: "未找到可靠字幕", subtitleApplied: "字幕已保存",
     logsHint: "近期运行状态、警告和错误。",
     historyHint: "查看文件移动、改名和移除记录，恢复可撤销的操作。",
     noHistory: "暂无用户内容变更记录。",
@@ -709,7 +728,7 @@ const i18n = {
     updateRestarting: "The update is ready. AnimeMachine is restarting automatically…",
     updateFailed: "Update failed: {message}",
     updateRestartTimeout: "The service did not recover within the expected time after the update.",
-    playbackHandoffUnavailable: "External player handoff is unavailable.",
+    playbackHandoffUnavailable: "An external player link could not be created.",
     randomSeedUnavailable: "A new random seed could not be obtained.",
     maintenanceUnsupported: "Unsupported maintenance operation.",
     updateCheckFailed: "Update check failed: {message}",
@@ -766,7 +785,7 @@ const i18n = {
     username: "Username",
     password: "Password",
     usersTab: "Users",
-    usersHint: "Users may browse and submit downloads, but cannot change settings.",
+    usersHint: "Users can browse, play media, and submit tasks, but cannot change settings.",
     userCreateHint: "Usernames use 3–64 letters, digits, dots, underscores or hyphens; passwords require at least 10 characters.",
     userRole: "Role",
     existingUsers: "Existing users",
@@ -782,7 +801,7 @@ const i18n = {
     disableUser: "Disable",
     disableInitialAdmin: "Disable the initial admin user (create a new administrator first)",
     enableUser: "Enable",
-    submissionAllowed: "Allow submissions",
+    submissionAllowed: "Allow task submissions",
     loadingDb: "Loading database…",
     backgroundSync: "Background sync",
     loadingWorks: "Loading works, please wait...",
@@ -809,13 +828,13 @@ const i18n = {
     characterDesign: "Character design",
     music: "Music",
     voiceActor: "Voice actor",
-    personSearch: "Type a name to search",
+    personSearch: "Name",
     tag: "Theme / tag",
     all: "All",
     works: " works",
     loading: "Searching…",
     none: "No matching works.",
-    failed: "Load failed",
+    failed: "Operation failed",
     queryFailed: "Query failed",
     invalidDownloadRoute: "The download route is invalid. Refresh the page and select the works again.",
     pending: "Not specified",
@@ -852,13 +871,13 @@ const i18n = {
     previous_selection: "Already selected in task",
     not_selected: "Not selected",
     planNoDownload: "The selected works need no new or replacement files.",
-    planBuilding: "Building the large download plan in the background. You may keep using this page…",
+    planBuilding: "Preparing a task preview in the background. You can keep browsing…",
     planWarnings: "The plan contains existing-content notices or conflicts.",
     libraryPathUnreadable: "The library target path could not be read.",
     localFileUnreadable: "The local file could not be read.",
     managedFileChanged:
       "The local file differs from its recorded provenance hash.",
-    exactComparisonUnavailable: "The local hash was computed, but no comparable source digest exists; exact equality cannot be claimed.",
+    exactComparisonUnavailable: "The local file was checked. A source checksum is needed to confirm an exact match.",
     managedHashBaselineRecorded: "An initial hash baseline was recorded for the provenance-backed managed file.",
     targetIsSymbolicLink: "The target is a symbolic link or reparse file; automatic writes were blocked.",
     targetNotRegularFile: "The target is occupied by a directory or another non-regular file.",
@@ -898,10 +917,17 @@ const i18n = {
     selectedWorks: "works selected",
     clear: "Clear",
     previewPlan: "Start download",
-    torrents: "Available resources",
-    noTorrent: "No source qualifies under the current policy",
+    enableSubscription: "Enable subscription",
+    subscriptionPlan: "Subscription preview",
+    mixedPlan: "Subscriptions and downloads",
+    taskPreview: "Task preview",
+    torrents: "Resources",
+    noTorrent: "No resources found yet. Try searching again.",
     excludedSourceClass: "Source type mismatch",
     excludedSerialProfile: "Language mismatch",
+    forceSubscribe: "Subscribe anyway",
+    forceDownload: "Download anyway",
+    forcePolicyNotice: "This selection uses resources excluded by your preferences. Your settings stay unchanged.",
     excludedResourceGroup: "Release group mismatch",
     excludedResolution: "Resolution mismatch",
     excludedSubtitle: "Subtitle mismatch",
@@ -917,14 +943,14 @@ const i18n = {
     aniRssFallback: "Use Ani-RSS as fallback",
     aniRssManual: "Use Ani-RSS manually",
     aniRssApiKey: "API key",
-    aniRssApiKeyHint: "Saved keys survive restart without being written to config.json, browser storage, or API responses. Deployment environment/Secret credentials retain precedence.",
+    aniRssApiKeyHint: "Keys are stored separately and remain available after restart. Deployment credentials take precedence.",
     aniRssCredentialConfigured: "API key saved to restricted credential storage.",
     aniRssMediaPath: "Ani-RSS media path",
     aniRssSyncMinutes: "State sync interval (minutes)",
     aniRssHint: "This mode controls resource discovery and planning only; subscriptions and API media state still refresh on the sync interval. An unavailable connection disables remote resources until recovery. Media access is always read-only.",
     searchPoolRunning: "Searching the torrent pool…",
     searchPoolDone: "Search complete; available sources updated",
-    searchPoolNone: "Search complete; no safely linkable source found",
+    searchPoolNone: "Search complete; no matching resources found",
     verifyWork: "Verify now",
     verifyRunning: "Verifying…",
     scanIdle: "Loading background image status",
@@ -944,6 +970,9 @@ const i18n = {
     imageNoImage: "No image",
     imageError: "Image failed",
     aniRssDelete: "Delete",
+    aniRssPause: "Pause subscription", aniRssResume: "Resume subscription", aniRssCancel: "Unsubscribe, keep files", aniRssDeleteFiles: "Delete subscription and files",
+    aniRssCancelConfirm: "Unsubscribe from “{title}” in Ani-RSS and keep downloaded files?",
+    radarInterrupted: "Search interrupted; ready to resume", librarySleepInvalid: "Quiet hours must have different start and end times.",
     aniRssDeleteConfirm: "Delete this Ani-RSS subscription and its downloaded files?",
     aniRssDeleteFailed: "Ani-RSS deletion was not confirmed",
     themeSystem: "System theme",
@@ -998,7 +1027,7 @@ const i18n = {
     radarPolicyExcluded: "Releases excluded by download settings", radarWorks: "{count} titles",
     radarTaskProgress: "Search progress",
     retryAction: "Retry",
-    recentEpisodeRequiresAniRss: "Available when Ani-RSS is connected",
+    recentEpisodeRequiresAniRss: "Connect Ani-RSS to search releases and manage subscriptions.",
     random: "Random",
     sortDate: "Date",
     sortTitle: "Title",
@@ -1038,7 +1067,7 @@ const i18n = {
     other: "Other",
     generalTab: "General",
     resourceGroupsTab: "Release groups",
-    resourceGroupsHint: "Archive releases ignore subtitles. Serial releases match both the selected language profile and release markers; matching keywords remain internal.",
+    resourceGroupsHint: "Archive releases do not require subtitles. Serial releases follow the selected language and release groups; Japanese also permits unsubtitled releases.",
     serialSubtitleLanguage: "Serial subtitle language",
     followInterfaceLanguage: "Follow interface language",
     archiveGroups: "Collection / archive",
@@ -1049,7 +1078,7 @@ const i18n = {
     otherResourceGroups: "Other (unrecognized or unmatched)",
     connectionsTab: "Connections",
     diagnosticsTab: "Diagnostics",
-    diagnosticsHint: "Shows current runtime state and recent results only; secrets, media content, and full file paths are not exposed.",
+    diagnosticsHint: "View current system status, connections, and recent results.",
     systemHealth: "System health",
     systemHealthHint: "See Diagnostics for network, image and playback details.",
     healthLoading: "Summarizing runtime status…",
@@ -1084,10 +1113,10 @@ const i18n = {
     currentRoute: "Current request route",
     networkProfile: "Current network profile",
     performanceBaseline: "Performance baseline",
-    perfCatalogReady: "Catalog Ready",
+    perfCatalogReady: "Catalog ready",
     perfFirstScreen: "First screen usable",
     perfFirstCover: "First cover",
-    perfWarmComplete: "Warm complete",
+    perfWarmComplete: "Background preparation complete",
     previousRun: "Previous run",
     routeDirect: "Direct",
     routeEnvironment: "Environment proxy",
@@ -1106,8 +1135,8 @@ const i18n = {
     selectionIncumbentCooldown: "Current source is cooling down; switched candidate",
     selectionCandidateCooldown: "Candidate is cooling down; kept current source",
     selectionMeaningfullyBetter: "Candidate advantage exceeded the switch threshold",
-    catalogAvailable: "Catalog available",
-    catalogPreparing: "Catalog preparing",
+    catalogAvailable: "Catalog ready",
+    catalogPreparing: "Preparing the catalog",
     backgroundImagesPreparing: "Preparing images in background",
     preferencesSaveFailed: "Cannot save display preferences. Allow local storage for this site.",
     catalogResolving: "Checking catalog updates",
@@ -1165,16 +1194,19 @@ const i18n = {
     resumeCount: "Resumes",
     upstreamState: "Ani-RSS upstream",
     transferRate: "Transfer rate",
-    startupStarting: "Starting · Core initialization in progress",
-    startupReady: "Ready · Web is available",
-    startupWarming: "Warming · Web is available; background preparation continues",
-    startupWarm: "Warm · Background preparation complete",
+    startupStarting: "Starting up",
+    startupReady: "Ready to use",
+    startupWarming: "Ready to use; background preparation continues",
+    startupWarm: "Background preparation complete",
     subscriptionsTab: "Subscriptions",
     logsTab: "Logs",
     historyTab: "History",
-    subscriptionsHint: "After a local download completes, later releases from the same source are checked and held for confirmation.",
-    noWatches: "No active watches.",
-    removeWatch: "Remove watch",
+    subscriptionsHint: "This list tracks later releases for local Torrent downloads. New releases await confirmation. Manage Ani-RSS subscriptions in title details or Release radar.",
+    noWatches: "No local follow-up tasks yet.",
+    removeWatch: "Stop tracking",
+    watchEpisode: "Episode {sequence}",
+    watchVolume: "Volume {sequence}",
+    watchPending: "{count} pending confirmation",
     externalSource: "External source",
     readOnlyMapping: "Read-only mapping",
     originalWithKind: "Original · {kind}",
@@ -1197,12 +1229,18 @@ const i18n = {
     endpoint: "Endpoint",
     qbtApiKey: "API Key",
     qbtApiKeyPlaceholder: "Leave blank to keep the saved or deployment credential",
-    qbtApiKeyHint: "Saved keys survive restart without being written to config.json, browser storage, or API responses. Deployment environment/Secret credentials retain precedence.",
+    qbtApiKeyHint: "Keys are stored separately and remain available after restart. Deployment credentials take precedence.",
     qbtCredentialConfigured: "API Key saved to restricted credential storage",
     torrentPoolPath: "Torrent pool path",
     torrentPoolHint: "Place .torrent files in this directory for AnimeMachine to read automatically.",
     libraryPath: "Anime library path",
-    qbtLibraryPath: "Path inside qBittorrent",
+    librarySleepEnabled: "Enable daily library quiet hours",
+    localLibrarySettings: "Local library",
+    librarySleepStart: "Start time",
+    librarySleepEnd: "End time",
+    librarySleepHint: "Uses the host's local time and can cross midnight. Local library probes, scans, playback and writes pause while cached status remains visible. Ani-RSS and external libraries at other paths continue running.",
+    librarySleeping: "The local library is sleeping. Access resumes when quiet hours end.",
+    qbtLibraryPath: "qBittorrent save path",
     testConnection: "Test connection",
     connectionOk: "Connected",
     authRequired: "Service reachable; authentication required",
@@ -1212,27 +1250,27 @@ const i18n = {
     externalReadOnlyType: "Directory layout",
     genericLayout: "Generic folders",
     aniRssLayout: "ani-rss compatible",
-    externalReadOnlyPath: "Read-only path inside the container",
+    externalReadOnlyPath: "Media library path",
     externalScanMinutes: "Read-only scan interval (minutes)",
     externalLibraryHint:
         "Reads names, paths, sizes and modification times without writing to the external library. ani-rss is one common compatible source.",
-    playbackConnection: "External player handoff",
+    playbackConnection: "External players",
     preferDirectPaths: "Prefer player-accessible SMB / NFS paths",
     playbackPublicUrl: "AnimeMachine URL reachable by external devices (optional)",
     playlistTtl: "Playback idle timeout (seconds)",
     playlistMaximum: "Maximum playback session lifetime (seconds)",
     directPathMappings: "Direct path mappings (one per line: container path => player path)",
-    playbackConnectionHint: "Falls back to short-lived Range-enabled HTTP URLs. No transcoding or continuous Web playback.",
+    playbackConnectionHint: "Temporary HTTP playback links are used when the player cannot access the media path directly.",
     subtitleSources: "Subtitle sources",
     subtitlesEnabled: "Enable subtitle matching for archive releases",
     assrtEndpoints: "ASSRT API endpoints (one per line)",
     assrtToken: "ASSRT token",
     openSubtitlesEndpoint: "OpenSubtitles API endpoint",
     openSubtitlesKey: "OpenSubtitles API key",
-    subtitleSourcesHint: "Only configured official APIs are used. Results follow the UI language; low-confidence matches require manual selection.",
+    subtitleSourcesHint: "Search configured subtitle services, then choose subtitles to apply. Results are ordered for your interface language.",
     searchSubtitles: "Find subtitles", useSubtitle: "Use subtitle", subtitlePresent: "Subtitles available",
     searchSubtitlesShort: "Find", useSubtitleShort: "Apply",
-    subtitleEmbedded: "Embedded subtitles detected", subtitleNotFound: "No reliable subtitles found", subtitleApplied: "Subtitles installed",
+    subtitleEmbedded: "Embedded subtitles detected", subtitleNotFound: "No reliable subtitles found", subtitleApplied: "Subtitles saved",
     logsHint: "Recent status messages, warnings and errors.",
     refresh: "Refresh",
     noLogs: "No important events yet.",
@@ -1304,10 +1342,10 @@ const i18n = {
     updateRestarting: "更新の準備が完了しました。AnimeMachine を自動的に再起動しています…",
     updateFailed: "更新に失敗しました：{message}",
     updateRestartTimeout: "更新後、所定時間内にサービスの復帰を確認できませんでした。",
-    playbackHandoffUnavailable: "外部プレーヤー連携を利用できません。",
+    playbackHandoffUnavailable: "外部プレーヤーの起動リンクを作成できませんでした。",
     randomSeedUnavailable: "新しいランダムシードを取得できませんでした。",
     maintenanceUnsupported: "未対応のメンテナンス操作です。",
-    updateCheckFailed: "更新確認に失敗しました：{message}",
+    updateCheckFailed: "更新の確認に失敗しました：{message}",
     updateDockerRequired: "この Docker イメージには Web オンライン更新ランタイムがまだ含まれていません。Docker Compose で一度イメージを更新すると、以後はオンライン更新できます。",
     updateDockerStateUnavailable: "Docker の状態ディレクトリへ書き込めないため、オンライン更新を安全に準備できません。",
     updatePortableRequired: "オンライン更新は公式ポータブル Release のみ有効です。ソース環境でも新しいバージョンの確認はできます。",
@@ -1361,7 +1399,7 @@ const i18n = {
     username: "ユーザー名",
     password: "パスワード",
     usersTab: "ユーザー",
-    usersHint: "一般ユーザーは閲覧とダウンロード登録ができますが、設定は変更できません。",
+    usersHint: "一般ユーザーは閲覧・再生・タスクの送信ができます。設定の変更は管理者が行います。",
     userCreateHint: "ユーザー名は3～64文字の英数字・ピリオド・アンダースコア・ハイフン、パスワードは10文字以上です。",
     userRole: "ロール",
     existingUsers: "既存ユーザー",
@@ -1377,7 +1415,7 @@ const i18n = {
     disableUser: "無効化",
     disableInitialAdmin: "初期 admin ユーザーを無効化（先に新しい管理者ユーザーを作成してください）",
     enableUser: "有効化",
-    submissionAllowed: "登録を許可",
+    submissionAllowed: "タスクの送信を許可",
     loadingDb: "データベースを読み込み中…",
     backgroundSync: "バックグラウンド同期",
     loadingWorks: "作品を読み込んでいます。しばらくお待ちください...",
@@ -1404,13 +1442,13 @@ const i18n = {
     characterDesign: "キャラクターデザイン",
     music: "音楽",
     voiceActor: "声優",
-    personSearch: "名前を入力して検索",
+    personSearch: "名前を入力",
     tag: "ジャンル / タグ",
     all: "すべて",
     works: " 作品",
     loading: "検索中…",
     none: "該当作品はありません。",
-    failed: "読込失敗",
+    failed: "処理に失敗しました",
     queryFailed: "検索失敗",
     invalidDownloadRoute: "ダウンロード経路が無効です。ページを再読み込みして作品を選び直してください。",
     pending: "未指定",
@@ -1447,13 +1485,13 @@ const i18n = {
     previous_selection: "既存タスクで選択済み",
     not_selected: "未選択",
     planNoDownload: "選択作品に追加・置換対象ファイルはありません。",
-    planBuilding: "大規模なダウンロード計画をバックグラウンドで作成しています。このページは引き続き利用できます…",
+    planBuilding: "タスクの確認画面を準備しています。そのまま閲覧を続けられます…",
     planWarnings: "既存内容の注意または競合を含む計画です。",
     libraryPathUnreadable: "ライブラリの対象パスを読み取れません。",
     localFileUnreadable: "ローカルファイルを読み取れません。",
     managedFileChanged:
       "ローカルファイルが記録済みの出所ハッシュと一致しません。",
-    exactComparisonUnavailable: "ローカルハッシュは計算済みですが、比較可能な出所ハッシュがないため完全一致とは判定できません。",
+    exactComparisonUnavailable: "ローカルファイルの検証は完了しました。完全一致の確認には配信元のチェックサムが必要です。",
     managedHashBaselineRecorded: "出所が確定した管理対象ファイルの初回ハッシュ基準を記録しました。",
     targetIsSymbolicLink: "保存先がシンボリックリンクまたは再解析ファイルのため、自動書き込みを停止しました。",
     targetNotRegularFile: "保存先がディレクトリまたは通常ファイル以外の項目で占有されています。",
@@ -1493,10 +1531,17 @@ const i18n = {
     selectedWorks: "作品を選択",
     clear: "クリア",
     previewPlan: "ダウンロードを開始",
-    torrents: "利用可能なリソース",
-    noTorrent: "現在の条件を満たすリソースはありません",
+    enableSubscription: "購読を有効化",
+    subscriptionPlan: "購読内容の確認",
+    mixedPlan: "購読とダウンロード",
+    taskPreview: "タスクの確認",
+    torrents: "リソース",
+    noTorrent: "リソースがまだ見つかりません。再検索をお試しください。",
     excludedSourceClass: "ソース種別不一致",
     excludedSerialProfile: "言語不一致",
+    forceSubscribe: "このリソースで購読",
+    forceDownload: "このリソースでダウンロード",
+    forcePolicyNotice: "今回の選択では設定対象外のリソースを使用します。設定は変更されません。",
     excludedResourceGroup: "リリースグループ不一致",
     excludedResolution: "解像度不一致",
     excludedSubtitle: "字幕不一致",
@@ -1512,14 +1557,14 @@ const i18n = {
     aniRssFallback: "Ani-RSS を予備として使用",
     aniRssManual: "Ani-RSS を手動で使用",
     aniRssApiKey: "API キー",
-    aniRssApiKeyHint: "保存したキーは再起動後も有効で、config.json、ブラウザ保存領域、API 応答には書き出しません。デプロイ環境変数／Secret がある場合はそちらを優先します。",
+    aniRssApiKeyHint: "キーは別途保存され、再起動後も利用できます。デプロイ設定のキーがある場合はそちらを優先します。",
     aniRssCredentialConfigured: "API キーを制限付き資格情報ストレージへ保存しました。",
     aniRssMediaPath: "Ani-RSS メディアパス",
     aniRssSyncMinutes: "状態同期間隔（分）",
     aniRssHint: "このモードはリソース検索と計画だけを制御し、購読と API メディア状態は同期間隔どおり更新します。接続できない場合はリモートリソースを停止し、復旧後に選択したモードへ戻ります。メディアは常に読み取り専用です。",
     searchPoolRunning: "Torrent プールを検索中…",
     searchPoolDone: "検索が完了し、利用可能なソースを更新しました",
-    searchPoolNone: "検索完了。安全に関連付けられるソースは見つかりませんでした",
+    searchPoolNone: "検索が完了しました。対応するリソースは見つかりませんでした",
     verifyWork: "今すぐ確認",
     verifyRunning: "確認中…",
     scanIdle: "バックグラウンド画像状態を読み込み中",
@@ -1539,6 +1584,9 @@ const i18n = {
     imageNoImage: "画像なし",
     imageError: "画像の読み込みに失敗",
     aniRssDelete: "削除",
+    aniRssPause: "購読を一時停止", aniRssResume: "購読を再開", aniRssCancel: "購読解除（ファイルを保持）", aniRssDeleteFiles: "購読とファイルを削除",
+    aniRssCancelConfirm: "Ani-RSS で「{title}」の購読を解除し、ダウンロード済みファイルを残しますか？",
+    radarInterrupted: "検索を中断しました。続行できます", librarySleepInvalid: "休止の開始時刻と終了時刻を別々に設定してください。",
     aniRssDeleteConfirm: "この Ani-RSS 購読とダウンロード済みファイルを削除しますか？",
     aniRssDeleteFailed: "Ani-RSS の削除を確認できませんでした",
     themeSystem: "システム設定",
@@ -1593,7 +1641,7 @@ const i18n = {
     radarPolicyExcluded: "ダウンロード設定の対象外です", radarWorks: "{count} 作品",
     radarTaskProgress: "検索の進捗",
     retryAction: "再試行",
-    recentEpisodeRequiresAniRss: "Ani-RSS 接続時に利用できます",
+    recentEpisodeRequiresAniRss: "Ani-RSS を接続すると、リソースの検索と購読の管理ができます。",
     random: "ランダム",
     sortDate: "年月",
     sortTitle: "作品名",
@@ -1633,7 +1681,7 @@ const i18n = {
     other: "その他",
     generalTab: "一般",
     resourceGroupsTab: "リリースグループ",
-    resourceGroupsHint: "アーカイブ向けは字幕を問いません。連載向けは選択言語のグループと字幕表記を照合します。照合語は内部で管理します。",
+    resourceGroupsHint: "アーカイブ向けは字幕の有無を問いません。連載向けは選択した言語と配信グループで絞り込み、日本語では字幕なしも対象にします。",
     serialSubtitleLanguage: "連載リリースの字幕言語",
     followInterfaceLanguage: "UI 言語に合わせる",
     archiveGroups: "収集 / アーカイブ",
@@ -1644,7 +1692,7 @@ const i18n = {
     otherResourceGroups: "その他（未識別または条件外）",
     connectionsTab: "接続",
     diagnosticsTab: "診断",
-    diagnosticsHint: "現在の実行状態と直近の結果のみを表示します。キー、メディア内容、完全なファイルパスは表示しません。",
+    diagnosticsHint: "現在の動作状況、接続状態、直近の結果を確認できます。",
     systemHealth: "システム状態",
     systemHealthHint: "ネットワーク、画像、再生の詳細は「診断」で確認できます。",
     healthLoading: "実行状態を集約中…",
@@ -1679,10 +1727,10 @@ const i18n = {
     currentRoute: "現在の通信経路",
     networkProfile: "現在のネットワーク環境",
     performanceBaseline: "性能ベースライン",
-    perfCatalogReady: "Catalog Ready",
+    perfCatalogReady: "作品データ準備完了",
     perfFirstScreen: "初回画面利用可能",
     perfFirstCover: "最初のカバー",
-    perfWarmComplete: "Warm 完了",
+    perfWarmComplete: "バックグラウンド準備完了",
     previousRun: "前回実行",
     routeDirect: "直接接続",
     routeEnvironment: "環境変数プロキシ",
@@ -1701,8 +1749,8 @@ const i18n = {
     selectionIncumbentCooldown: "現在のソースがクールダウン中のため候補へ切替",
     selectionCandidateCooldown: "候補がクールダウン中のため現在のソースを維持",
     selectionMeaningfullyBetter: "候補の優位差が切替閾値を超過",
-    catalogAvailable: "Catalog 利用可能",
-    catalogPreparing: "Catalog 準備中",
+    catalogAvailable: "作品データ準備完了",
+    catalogPreparing: "作品データを準備中",
     backgroundImagesPreparing: "バックグラウンドで画像を準備中",
     preferencesSaveFailed: "表示設定を保存できません。このサイトのローカルストレージを許可してください。",
     catalogResolving: "カタログの更新を確認中",
@@ -1760,16 +1808,19 @@ const i18n = {
     resumeCount: "再開回数",
     upstreamState: "Ani-RSS 上流",
     transferRate: "転送速度",
-    startupStarting: "Starting · コア初期化中",
-    startupReady: "Ready · Web 利用可能",
-    startupWarming: "Warming · Web 利用可能、バックグラウンド準備中",
-    startupWarm: "Warm · バックグラウンド準備完了",
+    startupStarting: "起動中",
+    startupReady: "画面を利用できます",
+    startupWarming: "画面を利用できます。バックグラウンドで準備中です",
+    startupWarm: "バックグラウンド準備完了",
     subscriptionsTab: "購読",
     logsTab: "ログ",
     historyTab: "履歴",
-    subscriptionsHint: "ローカルへのダウンロード完了後も、同じ配信元の続きが公開されているか確認し、新しいリリースを確認待ちにします。",
-    noWatches: "監視タスクはありません。",
-    removeWatch: "監視を削除",
+    subscriptionsHint: "ここではローカル Torrent の続きの配信を確認します。新しいリリースは確認後にダウンロードします。Ani-RSS の購読は作品詳細または新作レーダーで管理できます。",
+    noWatches: "ローカルの続きの配信を確認するタスクはありません。",
+    removeWatch: "追跡を解除",
+    watchEpisode: "第 {sequence} 話",
+    watchVolume: "第 {sequence} 巻",
+    watchPending: "確認待ち {count} 件",
     externalSource: "外部ソース",
     readOnlyMapping: "読み取り専用マッピング",
     originalWithKind: "原作・{kind}",
@@ -1792,12 +1843,18 @@ const i18n = {
     endpoint: "接続先",
     qbtApiKey: "API Key",
     qbtApiKeyPlaceholder: "空欄の場合は保存済み／デプロイ資格情報を使用",
-    qbtApiKeyHint: "保存したキーは再起動後も有効で、config.json、ブラウザ保存領域、API 応答には書き出しません。デプロイ環境変数／Secret がある場合はそちらを優先します。",
+    qbtApiKeyHint: "キーは別途保存され、再起動後も利用できます。デプロイ設定のキーがある場合はそちらを優先します。",
     qbtCredentialConfigured: "API Key を制限付き資格情報ストレージへ保存済み",
     torrentPoolPath: "Torrent プールのパス",
     torrentPoolHint: "このフォルダーに .torrent ファイルを入れると、AnimeMachine が自動で読み込みます。",
     libraryPath: "アニメライブラリのパス",
-    qbtLibraryPath: "qBittorrent コンテナ内のパス",
+    librarySleepEnabled: "毎日のライブラリ休止時間を設定",
+    localLibrarySettings: "ローカルライブラリ",
+    librarySleepStart: "開始時刻",
+    librarySleepEnd: "終了時刻",
+    librarySleepHint: "実行端末のローカル時刻を使用し、日付をまたぐ設定も可能です。休止中はローカル庫の接続確認・スキャン・再生・書き込みを止め、保存済みの状態を表示します。Ani-RSS と別のパスの外部ライブラリは引き続き動作します。",
+    librarySleeping: "ローカルライブラリは休止中です。終了時刻になるとアクセスを再開します。",
+    qbtLibraryPath: "qBittorrent の保存先",
     testConnection: "接続テスト",
     connectionOk: "接続成功",
     authRequired: "サービスに到達しました。認証が必要です。",
@@ -1807,27 +1864,27 @@ const i18n = {
     externalReadOnlyType: "ディレクトリ構成",
     genericLayout: "汎用フォルダー",
     aniRssLayout: "ani-rss 互換",
-    externalReadOnlyPath: "コンテナ内の読み取り専用パス",
+    externalReadOnlyPath: "メディアライブラリのパス",
     externalScanMinutes: "読み取り専用走査間隔（分）",
     externalLibraryHint:
         "名前・パス・サイズ・更新時刻だけを読み取り、外部ライブラリへは書き込みません。ani-rss は一般的な互換元の一つです。",
-    playbackConnection: "外部プレーヤー連携",
+    playbackConnection: "外部プレーヤー",
     preferDirectPaths: "プレーヤーから到達できるSMB / NFSパスを優先",
     playbackPublicUrl: "外部端末から到達できるAnimeMachine URL（任意）",
     playlistTtl: "再生セッションのアイドル期限（秒）",
     playlistMaximum: "再生セッションの最長有効時間（秒）",
     directPathMappings: "直接パスの対応（1行ごと：コンテナパス => プレーヤーパス）",
-    playbackConnectionHint: "直接接続できない場合はRange対応の短時間HTTP URLを生成します。変換やWeb連続再生は行いません。",
+    playbackConnectionHint: "プレーヤーがメディアのパスに直接アクセスできない場合は、一時的な HTTP 再生リンクを使います。",
     subtitleSources: "字幕ソース",
     subtitlesEnabled: "アーカイブ作品の字幕照合を有効にする",
     assrtEndpoints: "ASSRT APIエンドポイント（1行に1件）",
     assrtToken: "ASSRTトークン",
     openSubtitlesEndpoint: "OpenSubtitles APIエンドポイント",
     openSubtitlesKey: "OpenSubtitles APIキー",
-    subtitleSourcesHint: "設定済みの公式APIだけを使用します。日本語では字幕なしも許容し、低信頼の候補は手動選択とします。",
+    subtitleSourcesHint: "設定した字幕サービスから検索し、表示言語に合わせて候補を並べます。使用する字幕を選んで適用してください。",
     searchSubtitles: "字幕を検索", useSubtitle: "この字幕を使用", subtitlePresent: "字幕あり",
     searchSubtitlesShort: "検索", useSubtitleShort: "適用",
-    subtitleEmbedded: "内蔵字幕を検出", subtitleNotFound: "信頼できる字幕が見つかりません", subtitleApplied: "字幕を導入しました",
+    subtitleEmbedded: "内蔵字幕を検出", subtitleNotFound: "信頼できる字幕が見つかりません", subtitleApplied: "字幕を保存しました",
     logsHint: "最近の動作状況、警告、エラーを表示します。",
     refresh: "更新",
     noLogs: "重要なログはまだありません。",
@@ -1888,6 +1945,11 @@ const i18n = {
   },
 };
 const values = {
+  mediaFilter: {
+    movie: ["剧场版", "Film", "劇場版"],
+    ova: ["OVA", "OVA", "OVA"],
+    web: ["网络", "Web", "Web"],
+  },
   media: {
     tv: ["TV", "TV", "TV"],
     movie: ["剧场版 / 电影", "Theatrical / film", "劇場版 / 映画"],
@@ -2081,6 +2143,7 @@ const priorityValueLabel = (value) => ({
   unknown: ["其它 / 未识别", "Other / unrecognized", "その他 / 未識別"],
 }[value]?.[li()] || value);
 function localizedError(message, status = 0) {
+  if (String(message || "").includes("local_library_sleeping")) return t("librarySleeping");
   const value = String(message || ""), mappings = [
     [/^invalid_credentials$/, "errorCredentials"],
     [/^administrator_required$|^forbidden$/, "errorPermission"],
@@ -2266,26 +2329,9 @@ function aniRssReady(state) {
   return state?.connection_state === "ready" && Boolean(state?.credentialConfigured);
 }
 
-function applyRecentEpisodeSortAvailability(state, { refresh = false } = {}) {
-  const previousSort = sort,
-    available = aniRssReady(state),
-    changed = available !== recentEpisodeSortAvailable;
-  recentEpisodeSortAvailable = available;
-  if (!available && sort === "recent_episode") {
-    recentEpisodeSortDeferred = true;
-    sort = "random";
-    if ($("sort")) $("sort").value = sort;
-  } else if (available && recentEpisodeSortDeferred) {
-    sort = "recent_episode";
-    configuredSort = "recent_episode";
-    recentEpisodeSortDeferred = false;
-    if ($("sort")) $("sort").value = sort;
-  }
+function applyRecentEpisodeSortAvailability() {
+  recentEpisodeSortAvailable = true;
   updateSortControls();
-  if (refresh && changed && sort !== previousSort) {
-    page = 0;
-    search({ background: true }).catch(() => {});
-  }
 }
 function eraLabel(x) {
   if (x === "before1980")
@@ -2326,7 +2372,7 @@ function renderMediaChecks() {
   $("media_type").innerHTML = options.media_types
     .map(
       (c) =>
-        `<label class="check"><input type="checkbox" value="${esc(c)}" ${use.has(c) ? "checked" : ""}><span>${esc(label("media", c))}</span></label>`,
+        `<label class="check" title="${esc(label("media", c))}"><input type="checkbox" aria-label="${esc(label("media", c))}" value="${esc(c)}" ${use.has(c) ? "checked" : ""}><span>${esc(values.mediaFilter[c]?.[li()] || label("media", c))}</span></label>`,
     )
     .join("");
   $("media_type")
@@ -2998,8 +3044,8 @@ const suffix = (c) =>
     if (item?.eligible) return "";
     const reason = String(item?.eligibilityReason || "");
     if (reason === "source_class_disabled") return t("excludedSourceClass");
-    if (reason === "resource_group_disabled")
-      return item?.sourceFamily === "serial" ? t("excludedSerialProfile") : t("excludedResourceGroup");
+    if (reason === "resource_group_disabled") return t("excludedResourceGroup");
+    if (reason === "serial_language_mismatch") return t("excludedSerialProfile");
     if (reason === "resolution_disabled") return t("excludedResolution");
     if (reason === "subtitle_disabled") return t("excludedSubtitle");
     if (reason === "scope_excluded") return t("excludedScope");
@@ -3010,7 +3056,7 @@ const suffix = (c) =>
     const buckets = new Map(), groups = [];
     for (const row of rows) {
       const sequence = row.releaseUnit === "volume" ? row.volumeSequence : row.episodeSequence,
-        mergeable = ["episode", "volume"].includes(row.releaseUnit) && sequence?.length,
+        mergeable = row.eligible && ["episode", "volume"].includes(row.releaseUnit) && sequence?.length,
         key = mergeable
           ? [row.eligible, row.sourceFamily, row.sourceClass, row.resourceGroup, row.subtitle, row.resolution, row.scan, row.bitDepth, row.releaseUnit].join("|")
           : row.infoHash;
@@ -3056,7 +3102,7 @@ const suffix = (c) =>
         .filter(Boolean)
         .join(" · ");
     const exclusion = eligibilityReasonText(y);
-    return `<label class="torrent ${y.eligible ? "" : "disabled"}"><input type="radio" name="resource-${id}" value="torrent:${esc(y.infoHash)}" ${y.eligible ? "" : "disabled"} ${torrentSelections.get(id) === y.infoHash ? "checked" : ""}><span class="torrent-lines"><b title="${esc(storageDirectory)}">${esc(storageDirectory)}</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
+    return `<label class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}"><input type="radio" name="resource-${id}" value="torrent:${esc(y.infoHash)}" data-policy-override="${!y.eligible && !!y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${torrentSelections.get(id) === y.infoHash && (y.eligible || policyOverrides.get(id) === `torrent:${y.infoHash}`) ? "checked" : ""}><span class="torrent-lines"><b title="${esc(storageDirectory)}">${esc(storageDirectory)}</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
   },
   aniResourceHtml = (y, id) => {
     const exclusion = eligibilityReasonText(y),
@@ -3072,7 +3118,7 @@ const suffix = (c) =>
         resourceResolutionText(y.resolution),
         Number(y.itemCount || 0) > 0 ? `${fmt(y.itemCount)} ${t("files")}` : "",
       ].filter(Boolean).join(" · ");
-    return `<label class="torrent ${y.eligible ? "" : "disabled"}"><input type="radio" name="resource-${id}" value="ani-rss:${esc(y.resourceId)}" ${y.eligible ? "" : "disabled"} ${resourceSelections.get(id) === y.resourceId ? "checked" : ""}><span class="torrent-lines"><b>Ani-RSS</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
+    return `<label class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}"><input type="radio" name="resource-${id}" value="ani-rss:${esc(y.resourceId)}" data-policy-override="${!y.eligible && !!y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${resourceSelections.get(id) === y.resourceId && (y.eligible || policyOverrides.get(id) === `ani-rss:${y.resourceId}`) ? "checked" : ""}><span class="torrent-lines"><b>Ani-RSS</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
   };
 
 function graphTitle(node) {
@@ -5083,15 +5129,43 @@ async function handoffPlayback(kind, animeId, button) {
   location.href = handoff.protocolUrl;
 }
 
-function aniSubscriptionManagementHtml(subscription) {
-  const progress = subscription.episodeProgress || {},
-    state = t(subscription.enabled ? "radarSubscribed" : "radarPaused");
-  return `<div class="ani-rss-playback-management"><small>${esc(subscription.title)} · ${state} · ${progress.current ? fmt(progress.current) : "?"} / ${progress.total ? fmt(progress.total) : "?"}</small><button type="button" class="text-button ani-rss-delete" data-icon="remove" data-ani-rss-delete="${esc(subscription.remoteId)}">${t("aniRssDelete")}</button></div>`;
+function aniSubscriptionMenu(subscription, animeId, disabled = false) {
+  const remoteId = esc(subscription.remoteId), title = esc(subscription.title || ""),
+    button = (action, key, icon, danger = false) => `<button type="button" class="text-button ${danger ? "danger" : ""}" data-icon="${icon}" data-subscription-action="${action}" data-remote-id="${remoteId}" data-anime-id="${animeId}" data-subscription-title="${title}" ${disabled ? "disabled" : ""}>${t(key)}</button>`;
+  return `<details class="subscription-menu"><summary title="${title}" aria-label="${title} · ${t(subscription.enabled ? "radarSubscribed" : "radarPaused")}">${t(subscription.enabled ? "radarSubscribed" : "radarPaused")} ▾</summary><div class="subscription-menu-actions">${button(subscription.enabled ? "pause" : "resume", subscription.enabled ? "aniRssPause" : "aniRssResume", subscription.enabled ? "pause" : "play")}${button("cancel", "aniRssCancel", "remove")}${authSession?.role === "admin" ? button("delete", "aniRssDeleteFiles", "remove", true) : ""}</div></details>`;
+}
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-subscription-action]");
+  if (!button || button.disabled) return;
+  const { subscriptionAction: action, remoteId, animeId, subscriptionTitle: title } = button.dataset;
+  if (action === "cancel" && !window.confirm(t("aniRssCancelConfirm").replace("{title}", title))) return;
+  if (action === "delete" && !window.confirm(`${title}\n\n${t("aniRssDeleteConfirm")}`)) return;
+  const menu = button.closest("details");
+  menu.querySelectorAll("button").forEach((item) => { item.disabled = true; });
+  try {
+    const deleting = action === "cancel" || action === "delete";
+    const result = await api(`/api/ani-rss/subscriptions/${encodeURIComponent(remoteId)}/${deleting ? "delete" : "enabled"}`, {
+      method: "POST", timeoutMs: 100000, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(deleting ? { deleteFiles: action === "delete" } : { enabled: action === "resume" }),
+    });
+    if (deleting && !result.deleted) throw new Error(t("aniRssDeleteFailed"));
+    menu.open = false;
+    if (deleting && playbackSources.get(Number(animeId)) === `ani-rss:${remoteId}`) playbackSources.delete(Number(animeId));
+    if (detailDialog.open && Number(detailDialog.dataset.animeId) === Number(animeId)) await showDetail(Number(animeId));
+    if ($("radarDialog").open) await loadRadar();
+    await search({ background: true });
+  } catch (error) { alert(error.message); }
+  finally { menu.querySelectorAll("button").forEach((item) => { item.disabled = false; }); }
+});
+function aniSubscriptionManagementHtml(subscription, animeId) {
+  const progress = subscription.episodeProgress || {};
+  return `<div class="ani-rss-playback-management"><small>${esc(subscription.title)} · ${progress.current ? fmt(progress.current) : "?"} / ${progress.total ? fmt(progress.total) : "?"}</small>${aniSubscriptionMenu(subscription, animeId)}</div>`;
 }
 
 let detailGeneration = 0;
 detailDialog.addEventListener("close", () => { detailGeneration++; });
 async function showDetail(id) {
+  detailDialog.dataset.animeId = String(id);
   const generation = ++detailGeneration;
   if ($("detail").dataset.animeId !== String(id)) {
     $("detail").dataset.animeId = String(id);
@@ -5206,9 +5280,10 @@ async function showDetail(id) {
     libraryContent = libraryHtml({ ...x.library, targets: libraryTargets }, x.id)
       || (playableAniSubscriptions.length ? `<p class="muted">${t("aniRssRemoteOnlyLibrary")}</p>` : `<p class="muted">${t("notInLibrary")}</p>`),
     playbackSourceSelector = playbackSourceHtml(playableTargets, playableAniSubscriptions, selectedPlaybackSource),
-    aniRssManagement = aniSubscriptions.map(aniSubscriptionManagementHtml).join(""),
+    aniRssManagement = aniSubscriptions.map((subscription) => aniSubscriptionManagementHtml(subscription, id)).join(""),
     resourceList = `${torrentGroups(x.torrents).map((group) => torrentGroupHtml(group, x.id)).join("")}${aniResources.map((y) => aniResourceHtml(y, x.id)).join("")}`,
-    hasEligibleResource = (x.torrents || []).some((y) => y.eligible) || aniResources.some((y) => y.eligible);
+    hasEligibleResource = (x.torrents || []).some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `torrent:${y.infoHash}`))
+      || aniResources.some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `ani-rss:${y.resourceId}`));
   if (generation !== detailGeneration) return;
   $("detail").innerHTML =
     `<div class="detail-hero"><header class="detail-intro"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
@@ -5226,6 +5301,10 @@ async function showDetail(id) {
             torrentSelections.set(id, value);
             resourceSelections.delete(id);
           }
+          if (r.dataset.policyOverride === "true") policyOverrides.set(id, r.value);
+          else policyOverrides.delete(id);
+          $("startWorkDownload").disabled = false;
+          updateDetailResourceAction();
           selected.add(id);
           updateSelection();
           render();
@@ -5239,24 +5318,13 @@ async function showDetail(id) {
       setTimeout(() => showDetail(id), 900);
     };
   });
+  $("startWorkDownload").dataset.defaultProvider = !(x.torrents || []).some((row) => row.eligible)
+    && aniResources.some((row) => row.eligible) ? "ani-rss" : "torrent";
+  updateDetailResourceAction();
   if ($("playbackSource")) $("playbackSource").onchange = (event) => {
     playbackSources.set(id, event.target.value);
     showDetail(id).catch((error) => alert(error.message));
   };
-  $("detail").querySelectorAll("[data-ani-rss-delete]").forEach((button) => {
-    button.onclick = async () => {
-      if (!window.confirm(t("aniRssDeleteConfirm"))) return;
-      button.disabled = true;
-      try {
-        const result = await api(`/api/ani-rss/subscriptions/${encodeURIComponent(button.dataset.aniRssDelete)}/delete`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ deleteFiles: false }),
-        });
-        if (!result.deleted) throw new Error(t("aniRssDeleteFailed"));
-        if (playbackSources.get(id) === `ani-rss:${button.dataset.aniRssDelete}`) playbackSources.delete(id);
-        await showDetail(id);
-      } catch (error) { alert(error.message); button.disabled = false; }
-    };
-  });
   $("detail").querySelectorAll(".subtitle-tools").forEach((tool) => {
     const searchButton = tool.querySelector(".search-subtitles"),
       applyButton = tool.querySelector(".apply-subtitle"),
@@ -5365,6 +5433,17 @@ async function showDetail(id) {
     detailDialog.scrollTop = 0;
   });
 }
+function updateDetailResourceAction() {
+  const button = $("startWorkDownload");
+  if (!button) return;
+  const choice = $("detail").querySelector('input[name^="resource-"]:checked'),
+    remote = choice ? choice.value.startsWith("ani-rss:") : button.dataset.defaultProvider === "ani-rss",
+    override = choice?.dataset.policyOverride === "true";
+  button.dataset.i18n = remote ? (override ? "forceSubscribe" : "enableSubscription")
+    : (override ? "forceDownload" : "previewPlan");
+  button.textContent = t(button.dataset.i18n);
+  button.dataset.icon = remote ? "subscribe" : "download";
+}
 function updateSelection() {
   $("selectionBar").hidden = !selected.size;
   $("selectionCount").textContent = selected.size;
@@ -5377,6 +5456,7 @@ async function createPlan(routingMode = "default", originalRequest = null) {
     animeIds: [...selected],
     torrentSelections: Object.fromEntries(torrentSelections),
     resourceSelections: Object.fromEntries(resourceSelections),
+    policyOverrides: Object.fromEntries(policyOverrides),
   };
   const request = routingMode === "default" ? { ...baseRequest } : { ...baseRequest, routingMode };
   delete request._skippedWorks;
@@ -5388,7 +5468,7 @@ async function createPlan(routingMode = "default", originalRequest = null) {
     });
     planState.id = p.planId;
     if (p.state === "building") {
-      $("plan").innerHTML = `<h2>${t("plan")}</h2><p class="notice">${t("planBuilding")}</p><p><b>${fmt(p.workCount)}</b> ${t("selectedWorks")}</p>`;
+      $("plan").innerHTML = `<h2>${t("taskPreview")}</h2><p class="notice">${t("planBuilding")}</p><p><b>${fmt(p.workCount)}</b> ${t("selectedWorks")}</p>`;
       showModalDialog(planDialog);
       while (p.state === "building") {
         await new Promise((resolve) => setTimeout(resolve, 750));
@@ -5396,7 +5476,9 @@ async function createPlan(routingMode = "default", originalRequest = null) {
       }
       if (p.state === "error") throw new Error(p.error || "plan build failed");
     }
-    const assessments = (p.assessments || [])
+    const subscriptionOnly = (p.aniRssJobs || []).length > 0 && !(p.jobs || []).length,
+      planTitleKey = subscriptionOnly ? "subscriptionPlan" : (p.aniRssJobs || []).length ? "mixedPlan" : "plan",
+      assessments = (p.assessments || [])
         .map((assessment) => {
           const actions = Object.entries(assessment.summary || {})
               .filter(([, count]) => count)
@@ -5430,12 +5512,14 @@ async function createPlan(routingMode = "default", originalRequest = null) {
         .map((work) => `<div class="plan-job disabled"><b>${esc(preferred(work) || work.title_ja || `#${work.id}`)}</b><small>${t("torrentUnavailable")}</small></div>`)
         .join(""),
       routeButtons = `<div class="plan-route-actions"><button type="button" class="tool ${routingMode === "ani-rss" ? "active" : ""}" data-plan-route="ani-rss" data-icon="subscribe">${t("planUseAniRss")}</button><button type="button" class="tool ${routingMode === "torrent" ? "active" : ""}" data-plan-route="torrent" data-icon="download">${t("planUseTorrent")}</button><button type="button" class="tool ${routingMode === "default" ? "active" : ""}" data-plan-route="default" data-icon="refresh">${t("planRestoreDefault")}</button></div>`,
-      stoppedNotice = (p.aniRssJobs || []).length ? "" : `<p class="notice">${t("planStopped")}</p>`,
+      stoppedNotice = ((p.aniRssJobs || []).length ? "" : `<p class="notice">${t("planStopped")}</p>`)
+        + ([...(p.jobs || []), ...(p.aniRssJobs || [])].some((job) => job.policyOverride)
+          ? `<p class="notice">${t("forcePolicyNotice")}</p>` : ""),
       submitButton = capabilities.submissionEnabled
-        ? `<button id="submitStoppedPlan" data-icon="download" class="primary" ${p.taskCount ? "" : "disabled"}>${t("submitStopped")}</button>`
+        ? `<button id="submitStoppedPlan" data-i18n="${subscriptionOnly ? "enableSubscription" : "submitStopped"}" data-icon="${subscriptionOnly ? "subscribe" : "download"}" class="primary" ${p.taskCount ? "" : "disabled"}>${t(subscriptionOnly ? "enableSubscription" : "submitStopped")}</button>`
         : `<p class="muted">${t("submissionDisabled")}</p>`;
     $("plan").innerHTML =
-      `<h2>${t("plan")}</h2>${stoppedNotice}<div class="plan-summary-row"><p><b>${p.taskCount}</b> ${t("tasks")} · ${fmt(p.totalBytes)} bytes</p>${routeButtons}</div>${p.taskCount ? "" : `<p class="notice safe">${t("planNoDownload")}</p>`}${assessments}${jobs}${aniRssJobs}${skippedJobs}${submitButton}`;
+      `<h2 data-i18n="${planTitleKey}">${t(planTitleKey)}</h2>${stoppedNotice}<div class="plan-summary-row"><p><b>${p.taskCount}</b> ${t("tasks")} · ${fmt(p.totalBytes)} bytes</p>${routeButtons}</div>${p.taskCount ? "" : `<p class="notice safe">${t("planNoDownload")}</p>`}${assessments}${jobs}${aniRssJobs}${skippedJobs}${submitButton}`;
     $("plan").querySelectorAll("[data-plan-route]").forEach((button) => {
       button.onclick = () => createPlan(button.dataset.planRoute, baseRequest);
     });
@@ -5443,6 +5527,7 @@ async function createPlan(routingMode = "default", originalRequest = null) {
       $("submitStoppedPlan").onclick = async () => {
         const button = $("submitStoppedPlan");
         button.disabled = true;
+        button.dataset.i18n = "submitting";
         button.textContent = t("submitting");
         try {
           await api(`/api/plans/${planState.id}/submit`, {
@@ -5450,6 +5535,7 @@ async function createPlan(routingMode = "default", originalRequest = null) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ confirmStopped: true }),
           });
+          button.dataset.i18n = "submitted";
           button.textContent = t("submitted");
           button.insertAdjacentHTML("beforebegin", `<p class="notice safe">${t("submitAccepted")}</p>`);
           if ((p.aniRssJobs || []).length && ["recent_episode", "random"].includes(sort)) {
@@ -5458,7 +5544,8 @@ async function createPlan(routingMode = "default", originalRequest = null) {
           }
         } catch (error) {
           button.disabled = false;
-          button.textContent = t("submitStopped");
+          button.dataset.i18n = subscriptionOnly ? "enableSubscription" : "submitStopped";
+          button.textContent = t(button.dataset.i18n);
           alert(`${t("queryFailed")}: ${friendlyPlanError(error)}`);
         }
       };
@@ -5704,6 +5791,10 @@ function openSettings() {
     ? t("aniRssCredentialConfigured") : t("aniRssApiKeyHint");
   $("torrentPoolPath").value = config.deployment.torrentPoolRoot || "";
   $("libraryPath").value = config.deployment.libraryUncRoot || "";
+  const librarySleep = config.library?.sleep || {};
+  $("librarySleepEnabled").checked = librarySleep.enabled === true;
+  $("librarySleepStart").value = librarySleep.start || "00:00";
+  $("librarySleepEnd").value = librarySleep.end || "08:00";
   $("qbtLibraryPath").value = config.deployment.qbtLibraryRoot || "";
   const externalSource = (config.externalLibraries || [])[0] || { id: "external-read-only", kind: "generic", enabled: false, path: "/External", scanMinutes: 60 };
   $("externalReadOnlyEnabled").checked = Boolean(externalSource.enabled);
@@ -5807,6 +5898,12 @@ async function saveSettings(e) {
   };
   nextConfig.deployment.torrentPoolRoot = $("torrentPoolPath").value.trim();
   nextConfig.deployment.libraryUncRoot = $("libraryPath").value.trim();
+  nextConfig.library.sleep = {
+    enabled: $("librarySleepEnabled").checked,
+    start: $("librarySleepStart").value || "00:00",
+    end: $("librarySleepEnd").value || "08:00",
+  };
+  if (nextConfig.library.sleep.start === nextConfig.library.sleep.end) throw new Error(t("librarySleepInvalid"));
   nextConfig.deployment.qbtLibraryRoot = $("qbtLibraryPath").value.trim();
   const externalSource = {
     ...(nextConfig.externalLibraries || [])[0],
@@ -6055,11 +6152,19 @@ async function loadHistory() {
     $("historyList").innerHTML = `<p class="error">${esc(error.message)}</p>`;
   }
 }
+function watchProgressText(item) {
+  const sequence = Number(item.lastSequence || 0),
+    key = { episode: "watchEpisode", volume: "watchVolume" }[item.releaseUnit];
+  return [
+    key && sequence > 0 ? interpolate(t(key), { sequence: fmt(sequence) }) : "",
+    interpolate(t("watchPending"), { count: fmt(Number(item.pendingCount) || 0) }),
+  ].filter(Boolean).join(" · ");
+}
 async function loadWatches() {
   try {
     const r = await api(`/api/watches?language=${encodeURIComponent(language)}`);
     $("watchList").innerHTML = r.items.length
-      ? r.items.map((x) => `<div class="log"><b>${esc(x.title)}</b><span>${esc(sourceClassText(x.sourceClass))} · ${esc(x.resourceGroup || t("other"))} · ${esc(x.resolution ? `${x.resolution}p` : t("other"))} · ${esc(x.subtitle || t("other"))}</span><small>${esc(x.releaseUnit)} #${x.lastSequence} · ${x.pendingCount}</small><button type="button" class="text-button remove-watch" data-icon="remove" data-watch="${x.watchId}">${t("removeWatch")}</button></div>`).join("")
+      ? r.items.map((x) => `<div class="log"><b>${esc(x.title)}</b><span>${esc(sourceClassText(x.sourceClass))} · ${esc(x.resourceGroup || t("other"))} · ${esc(x.resolution ? `${x.resolution}p` : t("other"))} · ${esc(x.subtitle || t("other"))}</span><small>${esc(watchProgressText(x))}</small><button type="button" class="text-button remove-watch" data-icon="remove" data-watch="${x.watchId}">${t("removeWatch")}</button></div>`).join("")
       : `<p class="muted">${t("noWatches")}</p>`;
     document.querySelectorAll(".remove-watch").forEach((button) => button.onclick = async () => {
       await api(`/api/watches/${button.dataset.watch}`, { method: "DELETE" });
@@ -6266,7 +6371,7 @@ function renderPlaybackDiagnostics(payload) {
 function systemHealthLabels() {
   return {
     names: { network: t("healthNetwork"), aniRss: t("healthAniRss"), qbittorrent: t("healthQbittorrent"), storage: t("healthStorage"), imagePreload: t("healthImagePreload"), playback: t("healthPlayback") },
-    details: { ready: t("healthReady"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
+    details: { ready: t("healthReady"), sleeping: t("librarySleeping"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
   };
 }
 function systemHealthExtra(item) {
@@ -6556,6 +6661,11 @@ function radarHeader(sortKey, labelKey, className = "") {
   return `<th class="${className}" aria-sort="${active ? (radarDirection === "asc" ? "ascending" : "descending") : "none"}"><button class="radar-sort" type="button" data-radar-sort="${sortKey}">${esc(t(labelKey))}<span class="radar-sort-arrow" aria-hidden="true">${active ? (radarDirection === "asc" ? "↑" : "↓") : ""}</span></button></th>`;
 }
 async function loadRadar() {
+  if ($("radarResults").querySelector(".subscription-menu[open]")) {
+    clearTimeout(radarTimer);
+    radarTimer = setTimeout(loadRadar, 2000);
+    return;
+  }
   if (!$("radarDialog").open) return;
   clearTimeout(radarTimer);
   radarTimer = null;
@@ -6614,7 +6724,7 @@ async function loadRadar() {
     ]);
     if (generation !== radarGeneration || !$("radarDialog").open) return;
     if (topModalDialog() !== $("radarDialog")) { radarRefreshPending = true; return; }
-    const available = data.recentEpisodeSortAvailable;
+    const available = data.aniRssAvailable;
     $("radarSearch").disabled = !available || scan.state === "running";
     $("radarSync").disabled = !available || scan.state === "running";
     const searchLabel = $("radarSearch").querySelector("[data-i18n]");
@@ -6628,7 +6738,7 @@ async function loadRadar() {
     } else $("radarSearchProgress").removeAttribute("value");
     $("radarSearchStatus").textContent = scan.state === "idle" ? "" :
       scan.state === "running" && scan.phase === "sync" ? t("radarSyncing") :
-      `${t(scan.state === "complete" ? "radarComplete" : scan.state === "running" ? "radarChecking" : "failed")} · ${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "running" && scan.currentTitle ? ` · ${scan.currentTitle}` : ""}${scan.error ? ` · ${scan.error}` : ""}`;
+      `${t(scan.state === "complete" ? "radarComplete" : scan.state === "running" ? "radarChecking" : scan.state === "interrupted" ? "radarInterrupted" : "failed")} · ${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "running" && scan.currentTitle ? ` · ${scan.currentTitle}` : ""}${scan.error ? ` · ${scan.error}` : ""}`;
     $("radarSearchStatus").title = $("radarSearchStatus").textContent;
     updateRadarSeasonCount($(`radarTab${radarSeason}`), season, data.total);
     $("radarStatus").textContent = available ? "" : t("recentEpisodeRequiresAniRss");
@@ -6640,7 +6750,8 @@ async function loadRadar() {
         const pending = radarPendingSubscriptions.has(item.id) || radarSubmittingSubscriptions.has(item.id);
         const state = item.subscription_state;
         const stamp = item.last_episode_update_at ? new Date(item.last_episode_update_at) : null;
-        const subscription = pending ? esc(t("radarSubscriptionPending")) : state === "active" ?
+        const subscription = pending ? esc(t("radarSubscriptionPending")) : item.ani_rss_subscriptions?.length ?
+          item.ani_rss_subscriptions.map((value) => aniSubscriptionMenu(value, item.id, !available)).join("") : state === "active" ?
           `<span class="radar-subscribed">${t("radarSubscribed")}</span>` : state === "paused" ? esc(t("radarPaused")) :
           `<button class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("radarSubscribe")}</button>`;
         const updateToken = radarUpdateToken(item), seenKey = radarSeenKey(item);
@@ -6687,7 +6798,8 @@ async function openRadarSubscription(animeId) {
   $("radarSubscribeForm").dataset.animeId = String(animeId);
   $("radarSubscribeStatus").textContent = t("radarLoading");
   $("radarSubscribeWork").textContent = "";
-  $("radarSubscribeSubmit").textContent = t("radarSubscribe");
+  $("radarSubscribeSubmit").textContent = t("enableSubscription");
+  $("radarSubscribeSubmit").dataset.i18n = "enableSubscription";
   showModalDialog(dialog);
   try {
     let detail = await api(`/api/anime/${animeId}?language=${encodeURIComponent(language)}`);
@@ -6718,11 +6830,22 @@ async function openRadarSubscription(animeId) {
     if (!active()) return;
     const resources = follow(detail);
     $("radarResource").innerHTML = resources.map((r) =>
-      `<option value="${esc(r.resourceId)}" ${r.eligible ? "" : "disabled"}>${esc([r.title, r.resolution ? r.resolution + "p" : "", !r.eligible ? t("radarPolicyExcluded") : ""].filter(Boolean).join(" · "))}</option>`).join("");
-    const selectedResource = resources.find((r) => r.eligible);
+      `<option value="${esc(r.resourceId)}" data-policy-override="${!r.eligible && !!r.canOverride}" ${r.eligible || r.canOverride ? "" : "disabled"}>${esc([r.title, r.resolution ? r.resolution + "p" : "", eligibilityReasonText(r)].filter(Boolean).join(" · "))}</option>`).join("");
+    const selectedResource = resources.find((r) => r.eligible) || resources.find((r) => r.canOverride);
     if (selectedResource) $("radarResource").value = selectedResource.resourceId;
     $("radarSubscribeStatus").textContent = selectedResource ? t("radarSubscribeHint") : resources.length ? t("radarPolicyExcluded") : t("radarNoResources");
     $("radarSubscribeSubmit").disabled = !selectedResource;
+    const updateChoice = () => {
+      const row = resources.find((r) => r.resourceId === $("radarResource").value);
+      $("radarSubscribeSubmit").disabled = !row || (!row.eligible && !row.canOverride);
+      $("radarSubscribeSubmit").dataset.i18n = row && !row.eligible && row.canOverride ? "forceSubscribe" : "enableSubscription";
+      $("radarSubscribeSubmit").textContent = t($("radarSubscribeSubmit").dataset.i18n);
+      $("radarSubscribeStatus").textContent = row?.canOverride && !row.eligible
+        ? `${eligibilityReasonText(row)} · ${t("forcePolicyNotice")}`
+        : row?.eligible ? t("radarSubscribeHint") : resources.length ? t("radarPolicyExcluded") : t("radarNoResources");
+    };
+    $("radarResource").onchange = updateChoice;
+    updateChoice();
   } catch (error) {
     if (active()) $("radarSubscribeStatus").textContent = error.message;
   }
@@ -6758,11 +6881,16 @@ $("radarSubscribeForm").onsubmit = async (event) => {
   const generation = radarSubscribeGeneration;
   radarSubmittingSubscriptions.add(animeId);
   button.disabled = true;
+  button.dataset.i18n = "radarSubmitting";
   button.textContent = t("radarSubmitting");
   $("radarSubscribeStatus").textContent = t("radarSubmittingHint");
   $("radarResource").disabled = true;
   try {
-    await api(`/api/ani-rss/resources/${encodeURIComponent(resource)}/subscribe`, { method: "POST", timeoutMs: 240000 });
+    await api(`/api/ani-rss/resources/${encodeURIComponent(resource)}/subscribe`, {
+      method: "POST", timeoutMs: 240000,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policyOverride: $("radarResource").selectedOptions[0]?.dataset.policyOverride === "true" }),
+    });
     radarPendingSubscriptions.add(animeId);
     if (generation === radarSubscribeGeneration) {
       $("radarSubscribeStatus").textContent = t("radarSubscriptionDone");
@@ -6779,7 +6907,7 @@ $("radarSubscribeForm").onsubmit = async (event) => {
   } finally {
     radarSubmittingSubscriptions.delete(animeId);
     if (generation === radarSubscribeGeneration) $("radarResource").disabled = false;
-    if (generation === radarSubscribeGeneration) button.textContent = t("radarSubscribe");
+    if (generation === radarSubscribeGeneration) $("radarResource").onchange?.();
     loadRadar();
   }
 };
@@ -7320,7 +7448,6 @@ $("refreshWatches").onclick = loadWatches;
 $("sort").onchange = (e) => {
   sort = e.target.value;
   configuredSort = sort;
-  recentEpisodeSortDeferred = false;
   updateSortControls();
   page = 0;
   search();
@@ -7373,6 +7500,7 @@ $("clearSelection").onclick = () => {
   selected.clear();
   torrentSelections.clear();
   resourceSelections.clear();
+  policyOverrides.clear();
   updateSelection();
   render();
 };

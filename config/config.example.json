@@ -189,6 +189,11 @@
     "incompleteMetadataAutoMap": false
   },
   "library": {
+    "sleep": {
+      "enabled": false,
+      "start": "00:00",
+      "end": "08:00"
+    },
     "createPlaceholders": true,
     "preserveExistingMedia": true,
     "reuseEquivalentExistingPath": true,

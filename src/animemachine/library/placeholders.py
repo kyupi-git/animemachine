@@ -11,6 +11,7 @@ from typing import Any, Callable
 from ..catalog.migrations import migrate as migrate_operational
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
 from ..storage.path_policy import is_junction
+from ..storage.sleep import require_awake, sleeping_path
 from ..torrents import mapper, runtime, scanner
 from . import history, layout
 
@@ -38,7 +39,8 @@ def create(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
     if not configured:
         raise ValueError("connect a writable local library first")
     root = Path(configured).absolute()
-    if status_for_path(root, require_write=True, timeout=4.0).state != AVAILABLE or not root.is_dir():
+    require_awake(root, config)
+    if status_for_path(root, require_write=True, timeout=4.0, config=config).state != AVAILABLE or not root.is_dir():
         raise StorageUnavailableError("the local library is unavailable or read-only")
     summary: dict[str, Any] = {"created": 0, "existing": 0, "skipped": 0, "failed": 0,
                                "done": 0, "total": 0, "errors": []}
@@ -58,11 +60,12 @@ def create(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
         aliases: dict[int, list[str]] = {}
         for anime_id, title in meta.execute("SELECT anime_id,title FROM anime_title"):
             aliases.setdefault(int(anime_id), []).append(str(title))
-        index = layout.ExistingPathIndex(root, config.get("library", {}).get("ignoredContainers", []))
+        index = layout.ExistingPathIndex(root, config.get("library", {}).get("ignoredContainers", []), config=config)
         transaction_id = uuid.uuid4().hex
         for anime_id in owners:
             if throttle:
                 throttle()
+            require_awake(root, config)
             anime = meta.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,)).fetchone()
             created_paths: list[tuple[Path, tuple[int, int]]] = []
             event_id = None
@@ -93,7 +96,8 @@ def create(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
                         (transaction_id, str(target), json.dumps(evidence), history.utcnow()))
                     event_id = int(event.lastrowid)
                     meta.commit()
-                    if status_for_path(root, require_write=True, timeout=4.0).state != AVAILABLE or not root.is_dir():
+                    require_awake(root, config)
+                    if status_for_path(root, require_write=True, timeout=4.0, config=config).state != AVAILABLE or not root.is_dir():
                         raise StorageUnavailableError("local library disconnected during directory creation")
                     pending = []
                     current = target
@@ -101,6 +105,7 @@ def create(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
                         pending.append(current)
                         current = current.parent
                     for directory in reversed(pending):
+                        require_awake(root, config)
                         _guard(root, directory)
                         try:
                             directory.mkdir()
@@ -131,6 +136,8 @@ def create(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
                 operational.rollback()
                 # Roll back only our unchanged, still-empty directories, deepest first.
                 for directory, identity in reversed(created_paths):
+                    if sleeping_path(root, config):
+                        break
                     try:
                         _guard(root, directory)
                         current_stat = directory.stat()

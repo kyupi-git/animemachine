@@ -159,7 +159,10 @@ def _drop_privileges(arguments: list[str]) -> None:
         return
     uid = _numeric_id("PUID", 1000)
     gid = _numeric_id("PGID", 1000)
+    from animemachine.storage.sleep import sleeping_path
     for path in _writable_paths(arguments):
+        if sleeping_path(path):
+            continue
         try:
             path.mkdir(parents=True, exist_ok=True)
             stat = path.stat()

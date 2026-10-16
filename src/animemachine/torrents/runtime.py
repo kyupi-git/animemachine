@@ -22,7 +22,7 @@ from collections import defaultdict
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from ..config.loader import (archive_group_enabled, canonical_resolution, option_enabled, resource_group_enabled,
+from ..config.loader import (archive_group_enabled, canonical_resolution, manual_policy_override, option_enabled, resource_group_enabled,
                         region_policy_enabled, serial_group_matches, serial_profile_language,
                         serial_rule_enabled, source_family)
 from . import differential as differential_plan
@@ -745,6 +745,11 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
             reason = "source_class_disabled"
         elif not group_enabled:
             reason = "resource_group_disabled"
+            if family == "serial" and not serial_matches and any(
+                    serial_rule_enabled(config["torrentPolicy"], serial_language, match["id"])
+                    for match in serial_group_matches(f"{row['torrent_path']} {row['info_name']} {manifest_text}",
+                        row["effective_group"], serial_language, require_subtitles=False)):
+                reason = "serial_language_mismatch"
         elif not resolution_enabled:
             reason = "resolution_disabled"
         elif not subtitle_enabled:
@@ -774,6 +779,8 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
             "attachmentCount": int(row["attachment_count"] or 0), "attachmentKinds": int(row["attachment_kinds"] or 0),
             "archiveStart": row["archive_start"], "expectedEpisodes": int(row["archive_episode_count"] or 0),
             "eligible": eligible, "eligibilityReason": reason,
+            "canOverride": bool(not eligible and region_enabled and scope_ok and row["scan_state"] != "reject"
+                                and row["metadata_state"] == "available" and manifest_count and exact_partition),
         })
 
     def contiguous(values: set[int]) -> int:
@@ -979,7 +986,9 @@ def _create_plan_connected(db: sqlite3.Connection, config: dict[str, Any], reque
     library_root_value = str(config.get("deployment", {}).get("libraryUncRoot") or "").strip()
     if library_root_value:
         library_root = Path(library_root_value)
-        storage = status_for_path(library_root, require_write=True, timeout=4.0)
+        from ..storage.sleep import require_awake
+        require_awake(library_root, config)
+        storage = status_for_path(library_root, require_write=True, timeout=4.0, config=config)
         if storage.state != AVAILABLE:
             raise StorageUnavailableError(f"library storage unavailable: {library_root}")
     requested_ids = sorted({int(value) for value in request.get("animeIds", [])})
@@ -1000,12 +1009,16 @@ def _create_plan_connected(db: sqlite3.Connection, config: dict[str, Any], reque
         status = library_status(db, anime_id)
         if status["state"] in {"queued", "downloading", "occupied_review", "deprecated", "upgrade_staged", "upgrade_blocked"}:
             raise ValueError(f"anime {anime_id} cannot be safely planned in state: {status['state']}")
-        torrents = [item for item in torrents_for_anime(db, anime_id, config) if item["eligible"]]
         selected_hash = explicit.get(anime_id)
+        aliases = [value for value in requested_ids if physical_anime_id(db, value) == anime_id]
+        override = bool(selected_hash and manual_policy_override(request, (anime_id, *aliases), f"torrent:{selected_hash}"))
+        torrents = [item for item in torrents_for_anime(db, anime_id, config) if item["eligible"] or (
+            override and item.get("canOverride") and item["infoHash"] == selected_hash)]
         if selected_hash:
             selected = next((item for item in torrents if item["infoHash"] == selected_hash), None)
             if not selected:
                 raise ValueError(f"anime {anime_id} selected torrent is not eligible")
+            selected["policyOverride"] = not selected["eligible"]
             torrents = [selected, *[item for item in torrents if item["infoHash"] != selected_hash]]
         if not torrents:
             raise ValueError(f"anime {anime_id} has no eligible verified torrent")
@@ -1013,7 +1026,7 @@ def _create_plan_connected(db: sqlite3.Connection, config: dict[str, Any], reque
         # Episode/volume selections represent an exact release stream. Expand
         # that stream with every non-overlapping unit sharing its fingerprint;
         # the UI presents this atomic set as one multi-episode/multi-volume row.
-        if torrents[0].get("releaseUnit") in {"episode", "volume"}:
+        if not torrents[0].get("policyOverride") and torrents[0].get("releaseUnit") in {"episode", "volume"}:
             top = torrents[0]
             sequence_key = "episodeSequence" if top["releaseUnit"] == "episode" else "volumeSequence"
             seen = set(top.get(sequence_key) or [])
@@ -1110,6 +1123,7 @@ def _create_plan_connected(db: sqlite3.Connection, config: dict[str, Any], reque
                 "infoHash": info_hash, "resourceGroup": group, "savePath": existing_submission["qbt_save_path"] if existing_submission else _qbt_path(save_target, config),
                 "contentLayout": "NoSubfolder", "tags": sorted({group, *config["components"]["downloadClient"]["tags"], str(torrent["source_class"] or "Unknown"), *( ["collection"] if torrent["collection_hint"] or torrent["release_unit"] == "collection" else [])}),
                 "targets": targets, "files": files, "selectedBytes": selected_bytes,
+                "policyOverride": any(chosen.get("policyOverride") for _, chosen, _ in selected_works),
             })
     # Manual and automatic choices may be mixed in one cart. Different hashes
     # must never write the same final file, even when two logical Archive works

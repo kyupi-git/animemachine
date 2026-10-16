@@ -69,6 +69,13 @@ class FakeAniRss(BaseHTTPRequestHandler):
         elif path == "/api/deleteAni":
             type(self).delete_paths.append(self.path)
             ids = set(body or []); type(self).subscriptions = [item for item in self.subscriptions if item.get("id") not in ids]; data = True
+        elif path == "/api/batchEnable":
+            ids = set(body or [])
+            enabled = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get('value') == ['true']
+            for item in self.subscriptions:
+                if item.get('id') in ids:
+                    item['enable'] = enabled
+            data = None
         else:
             self.send_error(404); return
         payload = json.dumps({"code": 200, "message": "ok", "data": data}).encode()
@@ -241,6 +248,48 @@ class AniRssTest(unittest.TestCase):
             probe = json.loads(db.execute("SELECT evidence_json FROM ani_rss_action WHERE action_id=?", (result["actionId"],)).fetchone()[0])["mediaProbe"]
         return result, dt.datetime.fromisoformat(probe["nextAt"])
 
+    def test_pause_and_resume_change_only_the_requested_subscription(self):
+        FakeAniRss.subscriptions = [{'id': 'remote-a', 'title': 'Work', 'bgmUrl': 'https://bgm.tv/subject/123', 'enable': True},
+                                   {'id': 'remote-b', 'title': 'Other', 'bgmUrl': 'https://bgm.tv/subject/456', 'enable': False}]
+        ani_rss.sync(self.db_path, self.config)
+        others = [dict(item) for item in FakeAniRss.subscriptions if item['id'] != 'remote-a']
+        for enabled in (False, True):
+            result = ani_rss.set_subscription_enabled(self.db_path, 'remote-a', self.config, enabled=enabled)
+            self.assertTrue(result['confirmed'])
+            self.assertEqual(enabled, result['enabled'])
+            self.assertEqual(others, [item for item in FakeAniRss.subscriptions if item['id'] != 'remote-a'])
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+                self.assertEqual(int(enabled), db.execute("SELECT enabled FROM ani_rss_subscription WHERE remote_id='remote-a'").fetchone()[0])
+        with mock.patch.object(ani_rss, '_client') as client:
+            with self.assertRaises(ValueError):
+                ani_rss.set_subscription_enabled(self.db_path, 'missing', self.config, enabled=False)
+            client.assert_not_called()
+
+    def test_pause_requires_confirmation_and_preserves_cached_state_on_remote_mismatch(self):
+        FakeAniRss.subscriptions = [{'id': 'remote-a', 'title': 'Work', 'bgmUrl': 'https://bgm.tv/subject/123', 'enable': True}]
+        ani_rss.sync(self.db_path, self.config)
+        remote = dict(next(item for item in FakeAniRss.subscriptions if item['id'] == 'remote-a'))
+        client = mock.Mock()
+        client.subscriptions.return_value = [remote]
+        with mock.patch.object(ani_rss, '_client', return_value=client):
+            with self.assertRaises(RuntimeError):
+                ani_rss.set_subscription_enabled(self.db_path, 'remote-a', self.config, enabled=not remote['enable'])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(int(remote['enable']), db.execute("SELECT enabled FROM ani_rss_subscription WHERE remote_id='remote-a'").fetchone()[0])
+
+    def test_legacy_resource_ids_cannot_collide_with_refreshed_stable_work_ids(self):
+        import hashlib
+        ani_rss.search(self.db_path, 1, self.config)
+        before = ani_rss.resources(self.db_path, 1)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            row = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id=1 LIMIT 1").fetchone()
+            payload = json.loads(row[15])
+            legacy = 'ar-' + hashlib.sha256(f"1\0follow\0{payload['rss']}".encode()).hexdigest()[:24]
+            db.execute('INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (legacy, 2, *row[2:]))
+        ani_rss.search(self.db_path, 1, self.config)
+        self.assertEqual([item['resourceId'] for item in before], [item['resourceId'] for item in ani_rss.resources(self.db_path, 1)])
+        self.assertIn(legacy, [item['resourceId'] for item in ani_rss.resources(self.db_path, 2)])
+
     def test_different_subtitle_rss_reuses_same_work_and_season(self):
         ani_rss.search(self.db_path, 1, self.config)
         resource = ani_rss.resources(self.db_path, 1)[0]
@@ -396,6 +445,66 @@ class AniRssTest(unittest.TestCase):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db:
             self.assertEqual((1, "2026-10-01T10:03:00+00:00"), db.execute(
                 "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state").fetchone())
+
+    def test_cached_language_policy_recalculates_from_release_titles_without_remote_calls(self):
+        ani_rss.sync(self.db_path, self.config)
+        policy = self.config['torrentPolicy']
+        policy.update({'sourceFamilies': {'serial': ['webrip']}, 'allowUnlisted': {'resourceGroup': False},
+                       'serialSubtitle': {'language': 'zh', 'enabledByLanguage': {'zh': []}}})
+        group = {'label': '拨雪寻春', 'rss': 'https://mikan.test/RSS/Bangumi?subgroupid=1',
+                 'items': [{'title': '[❀拨雪寻春❀] Work - 01 [1080p][简日内封]'}]}
+        client = mock.Mock()
+        client.call.side_effect = lambda path, **kwargs: ([group] if path == 'mikanGroup' else
+            {'weeks': [{'items': [{'url': 'https://mikan.test/Home/Bangumi/1', 'title': '作品'}]}]})
+        with mock.patch.object(ani_rss, '_client', return_value=client):
+            ani_rss.search(self.db_path, 1, self.config)
+        policy['serialSubtitle']['enabledByLanguage']['zh'] = ['haruhana']
+        with mock.patch.object(ani_rss, '_client', side_effect=AssertionError('must use cache')):
+            row = ani_rss.resources(self.db_path, 1, self.config)[0]
+            self.assertTrue(row['eligible'])
+            self.assertEqual('eligible', row['eligibilityReason'])
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+                self.assertEqual(1, db.execute('SELECT eligible FROM ani_rss_resource').fetchone()[0])
+                before = db.execute('SELECT * FROM metadata').fetchall()
+            ani_rss.resources(self.db_path, 1, self.config)
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+                self.assertEqual(before, db.execute('SELECT * FROM metadata').fetchall())
+            policy['serialSubtitle']['enabledByLanguage']['zh'] = []
+            row = ani_rss.resources(self.db_path, 1, self.config)[0]
+            self.assertFalse(row['eligible'])
+            self.assertEqual('resource_group_disabled', row['eligibilityReason'])
+            policy['serialSubtitle']['enabledByLanguage']['zh'] = ['haruhana']
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+                payload = json.dumps({**group, 'items': [{'title': '[拨雪寻春] Work - 01 [1080p][ENG]'}]})
+                db.execute('UPDATE ani_rss_resource SET payload_json=?', (payload,))
+                db.execute("DELETE FROM metadata WHERE key='ani_rss_resource_policy_revision'")
+            row = ani_rss.resources(self.db_path, 1, self.config)[0]
+            self.assertFalse(row['eligible'])
+            self.assertEqual('serial_language_mismatch', row['eligibilityReason'])
+
+    def test_manual_override_requires_explicit_resource_and_keeps_policy_unchanged(self):
+        ani_rss.sync(self.db_path, self.config)
+        self.config['torrentPolicy']['contentClasses'] = {'webrip': False}
+        ani_rss.search(self.db_path, 1, self.config)
+        row = ani_rss.resources(self.db_path, 1, self.config)[0]
+        self.assertFalse(row['eligible'])
+        self.assertTrue(row['canOverride'])
+        request = {'animeIds': [1], 'resourceSelections': {'1': row['resourceId']}}
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            ani_rss.partition_plan(self.db_path, request, self.config)
+        with self.assertRaisesRegex(ValueError, 'ineligible'):
+            ani_rss.subscribe(self.db_path, row['resourceId'], self.config)
+        request['policyOverrides'] = {'1': f"ani-rss:{row['resourceId']}"}
+        local, jobs = ani_rss.partition_plan(self.db_path, request, self.config)
+        self.assertEqual([], local['animeIds'])
+        self.assertTrue(jobs[0]['policyOverride'])
+        ani_rss.subscribe(self.db_path, row['resourceId'], self.config, policy_override=True)
+        self.assertFalse(self.config['torrentPolicy']['contentClasses']['webrip'])
+        self.assertFalse(ani_rss.resources(self.db_path, 1, self.config)[0]['eligible'])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE ani_rss_resource SET expires_at='2000-01-01'")
+        with self.assertRaisesRegex(ValueError, 'expired'):
+            ani_rss.subscribe(self.db_path, row['resourceId'], self.config, policy_override=True)
 
     def test_ambiguous_sequel_chain_does_not_guess_an_episode_offset(self):
         self._sequel_evidence()

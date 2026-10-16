@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
+from ..storage.sleep import require_awake
 
 
 SCHEMA = """
@@ -59,6 +60,7 @@ def mutate(db_path: Path, library_root: Path, history_root: Path, *, operation: 
            transaction_id: str | None = None, details: dict[str, Any] | None = None) -> dict[str, Any]:
     """Apply one guarded move/rename/removal and persist recoverable evidence."""
     operation = operation.casefold()
+    require_awake(library_root)
     if operation not in {"move", "rename", "remove"}:
         raise ValueError("unsupported library mutation")
     storage = status_for_path(library_root, require_write=True, timeout=4.0)
@@ -95,10 +97,12 @@ def mutate(db_path: Path, library_root: Path, history_root: Path, *, operation: 
             event_id = int(cursor.lastrowid)
     try:
         if operation == "remove":
+            require_awake(library_root)
             assert backup is not None
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(backup))
         else:
+            require_awake(library_root)
             assert target is not None
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(source), str(target))
@@ -121,6 +125,7 @@ def mutate(db_path: Path, library_root: Path, history_root: Path, *, operation: 
 
 
 def restore_removed(db_path: Path, library_root: Path, history_root: Path, event_id: int) -> dict[str, Any]:
+    require_awake(library_root)
     """Restore one recoverably removed item when its original path is free."""
     storage = status_for_path(library_root, require_write=True, timeout=4.0)
     if storage.state != AVAILABLE:
@@ -138,6 +143,7 @@ def restore_removed(db_path: Path, library_root: Path, history_root: Path, event
             raise ValueError("history payload or original target is invalid")
         if target.exists():
             raise ValueError("original path is occupied")
+        require_awake(library_root)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source), str(target))
         with db:

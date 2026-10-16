@@ -52,6 +52,7 @@ from ..network import (connectivity as network_connectivity, diagnostics as netw
 from ..torrents import mapper as torrent_mapper
 from .. import metrics
 from ..storage import AVAILABLE, status_for_path
+from ..storage.sleep import StorageSleepingError, require_awake, sleeping_path
 from ..storage import preflight as storage_preflight
 from ..storage import path_policy
 from ..api import auth
@@ -192,6 +193,8 @@ class RateLimiter:
 
 IMAGE_LIMITER = RateLimiter(0.8)
 RECENT_LOGS: deque[dict[str, str]] = deque(maxlen=300)
+_CONSOLE_LAST: dict[str, float] = {}
+_CONSOLE_LOCK = threading.Lock()
 OPTIONS_CACHE: dict[tuple[str, int, int, int], dict[str, Any]] = {}
 OPTIONS_CACHE_LOCK = threading.Lock()
 # Heavy catalog writers share one in-process gate. SQLite WAL keeps reads
@@ -233,6 +236,20 @@ def log_event(level: str, message: str, **details: Any) -> None:
     RECENT_LOGS.appendleft({"at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
                             "level": level.upper(), "message": message,
                             "details": json.dumps(details, ensure_ascii=False) if details else ""})
+    manual_result = message in {"library_audit_complete", "library_placeholders_complete", "metadata_repair_complete"}
+    if not manual_result and (level.upper() not in {"WARNING", "ERROR"} or message == "cover_fetch_failed"):
+        return
+    with _CONSOLE_LOCK:
+        now = time.monotonic()
+        if not manual_result and now - _CONSOLE_LAST.get(message, -float("inf")) < 60:
+            return
+        if len(_CONSOLE_LAST) >= 128:
+            _CONSOLE_LAST.pop(next(iter(_CONSOLE_LAST)))
+        _CONSOLE_LAST[message] = now
+    counts = " ".join(f"{key}={details[key]}" for key in ("created", "updated", "skipped", "failed")
+                      if isinstance(details.get(key), int))
+    print(f"[{level.upper()}] {message.replace('_', ' ')}{': ' + counts if counts else ''}",
+          file=sys.stderr if level.upper() in {"WARNING", "ERROR"} else sys.stdout, flush=True)
 
 
 def instance_random_seed(db_path: Path) -> str:
@@ -2175,15 +2192,19 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         "OR EXISTS(SELECT 1 FROM anime_title tt WHERE tt.anime_id=w.id "
         f"AND translated_title(w.title_ja,{original_language_expr},tt.title,tt.language)))"
     )
+    owner_expr = "COALESCE(w.physical_owner_anime_id,w.id)"
+    acquired_expr = ("EXISTS(SELECT 1 FROM ani_rss_subscription ans WHERE ans.anime_id=w.id AND ans.deleted_at IS NULL) "
+                     f"OR EXISTS(SELECT 1 FROM runtime_work rw WHERE rw.anime_id={owner_expr} AND rw.library_state='existing') "
+                     f"OR EXISTS(SELECT 1 FROM external_media_file em WHERE em.anime_id={owner_expr} AND em.match_state='verified') "
+                     "OR EXISTS(SELECT 1 FROM runtime_watch aw WHERE aw.anime_id=w.id AND aw.state='active')")
     if requested_sort == "recent_episode" and not radar_mode and not q:
-        where.append(f"({subscription_order}>0 OR ((EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND fc.country_code='JP') "
+        where.append(f"(({acquired_expr}) OR ((EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND fc.country_code='JP') "
                      "OR NOT EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND COALESCE(fc.country_code,'')<>'')) "
                      f"AND {translated_expr}))")
     if radar_mode:
-        hard_where.append("w.media_code IN ('tv','movie','ova','web')")
         hard_where.append("(EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code='JP') "
                           "OR NOT EXISTS(SELECT 1 FROM anime_country rc WHERE rc.anime_id=w.id AND rc.country_code!='OTHER'))")
-        hard_where.append(f"NOT ({original_language_expr}='zh' AND NOT {translated_expr})")
+        hard_where.append(f"NOT ({original_language_expr}='zh' AND NOT {translated_expr} AND NOT ({acquired_expr}))")
     keyword_clause = "EXISTS(SELECT 1 FROM anime_title t WHERE t.anime_id=w.id AND t.title LIKE ?)"
     if q:
         where.append(keyword_clause)
@@ -2223,7 +2244,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     start_from, start_to = value("start_from"), value("start_to")
     date_clauses: list[str] = []
     premiere_expr = ("CASE WHEN length(w.raw_date)=10 AND date(w.raw_date,'+0 days')=w.raw_date "
-                     "THEN w.raw_date ELSE COALESCE(w.start_month||'-01','') END")
+                     "THEN w.raw_date ELSE CASE WHEN length(w.start_month)=7 AND strftime('%Y-%m',w.start_month||'-01')=w.start_month "
+                     "THEN w.start_month||'-01' ELSE '' END END")
     movie_release_expr = (
         "(SELECT date(amr.first_release_at,'+8 hours') FROM ani_rss_movie_release_state amr "
         f"WHERE amr.anime_id=w.id AND date(amr.first_release_at,'+8 hours')>=({premiere_expr}))"
@@ -2403,8 +2425,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     offset = max(int(value("offset") or 0), 0)
     locale = value("language") or "zh-Hans"
     title_expr = "COALESCE(w.title_zh_hans,w.title_ja)" if locale == "zh-Hans" else ("COALESCE(w.title_en,w.title_ja)" if locale == "en" else "w.title_ja")
-    recent_episode_available = ani_connection_ready and has_ani_rss_episode_state_table
-    sort = requested_sort if requested_sort != "recent_episode" or recent_episode_available else "random"
+    recent_episode_available = True
+    sort = requested_sort
     seed = value("seed") or instance_random_seed(db_path) or "anm"
     direction = "DESC" if value("direction") == "desc" else "ASC"
     primary = {
@@ -2413,7 +2435,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         "type": "w.media_code",
     }.get(sort, "w.start_month")
     pending_expr = "CASE WHEN EXISTS(SELECT 1 FROM anime_studio_cluster asp WHERE asp.anime_id=w.id) THEN 0 ELSE 1 END"
-    episode_update_expr = "COALESCE((SELECT MAX(aes.last_episode_update_at) FROM ani_rss_subscription ans JOIN ani_rss_episode_state aes ON aes.remote_id=ans.remote_id WHERE ans.deleted_at IS NULL AND ans.enabled=1 AND ans.anime_id=w.id),'')"
+    episode_update_expr = ("COALESCE((SELECT MAX(aes.last_episode_update_at) FROM ani_rss_subscription ans JOIN ani_rss_episode_state aes ON aes.remote_id=ans.remote_id WHERE ans.deleted_at IS NULL AND ans.enabled=1 AND ans.anime_id=w.id),'')"
+                           if has_ani_rss_episode_state_table else "''")
     if has_ani_rss_release_state_table:
         episode_update_expr = (f"MAX({episode_update_expr},COALESCE((SELECT MAX(ars.last_episode_update_at) "
                                "FROM ani_rss_release_state ars WHERE ars.anime_id=w.id),''))")
@@ -2445,24 +2468,55 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         primary = ("MAX(0," + ",".join(
             f"episode_sort_number(w.id,w.episode_count,w.episode_start_number,{current})" for current in currents) + ")"
             if currents else "CAST(0 AS INTEGER)")
-    default_radar_order = radar_mode and requested_sort == "recent_episode"
-    if default_radar_order:
-        update_order = episode_update_expr if ani_connection_ready else "''"
-        order = (f"CASE WHEN ({premiere_expr})='' THEN 1 ELSE 0 END ASC,{premiere_expr} DESC,"
-                 f"julianday({update_order}) DESC,{title_expr} ASC,w.id ASC")
-    elif sort == "recent_episode":
-        order = (f"CASE WHEN {episode_update_expr}='' THEN 1 ELSE 0 END ASC,"
-                 f"{episode_update_expr} DESC,w.start_month DESC,w.media_code ASC,{title_expr} ASC,w.id ASC")
+    if sort == "recent_episode":
+        today = dt.datetime.now().astimezone().date().isoformat()
+        # Unknown days in the current month are not evidence of an actual premiere.
+        exact_date = "length(w.raw_date)=10 AND date(w.raw_date,'+0 days')=w.raw_date"
+        expected_date = f"CASE WHEN {exact_date} THEN w.raw_date ELSE w.start_month||'-32' END"
+        owner = "COALESCE(w.physical_owner_anime_id,w.id)"
+        release_times = []
+        if has_ani_rss_episode_state_table:
+            release_times.append("SELECT julianday(aes.last_episode_update_at) AS stamp FROM ani_rss_subscription ans "
+                                 "JOIN ani_rss_episode_state aes ON aes.remote_id=ans.remote_id "
+                                 "WHERE ans.deleted_at IS NULL AND ans.enabled=1 AND ans.anime_id=w.id")
+        if has_ani_rss_release_state_table:
+            release_times.append("SELECT julianday(last_episode_update_at) AS stamp FROM ani_rss_release_state WHERE anime_id=w.id")
+        if has_ani_rss_movie_release_table:
+            release_times.append("SELECT julianday(last_release_at) AS stamp FROM ani_rss_movie_release_state WHERE anime_id=w.id AND w.media_code='movie'")
+        release_times.extend([
+            f"SELECT julianday(mtime_ns/1000000000.0,'unixepoch') AS stamp FROM external_media_file WHERE anime_id={owner} AND match_state='verified'",
+            f"SELECT julianday(json_extract(evidence_json,'$.latestMediaUpdateAt'),'unixepoch') AS stamp FROM runtime_completeness WHERE anime_id={owner}",
+            "SELECT julianday(a.media_created_at) AS stamp FROM runtime_asset a JOIN runtime_work rw ON rw.target_unc=a.owner_path "
+            f"WHERE rw.anime_id={owner} AND (lower(a.final_path) LIKE '%.mkv' OR lower(a.final_path) LIKE '%.mp4' OR lower(a.final_path) LIKE '%.m2ts' OR lower(a.final_path) LIKE '%.ts' OR lower(a.final_path) LIKE '%.avi' OR lower(a.final_path) LIKE '%.webm')",
+        ])
+        updated = "(SELECT MAX(stamp) FROM (" + " UNION ALL ".join(release_times) + ") WHERE stamp<=julianday('now'))"
+        follow_times = ["SELECT julianday(created_at) AS stamp FROM runtime_watch WHERE anime_id=w.id AND state='active'"]
+        if has_ani_rss_action_table:
+            follow_times.append("SELECT julianday(aa.requested_at) AS stamp FROM ani_rss_action aa "
+                                "JOIN ani_rss_subscription ans ON ans.remote_id=aa.remote_id "
+                                "WHERE aa.anime_id=w.id AND aa.action_kind='follow' AND aa.state='submitted' "
+                                "AND ans.anime_id=w.id AND ans.deleted_at IS NULL")
+        followed = "(SELECT MAX(stamp) FROM (" + " UNION ALL ".join(follow_times) + ") WHERE stamp<=julianday('now'))"
+        activity = f"MAX(COALESCE({updated},0),COALESCE({followed},0))"
+        aired = (f"CASE WHEN ({exact_date} AND w.raw_date<='{today}') OR "
+                 f"(w.start_month<>'' AND w.start_month<'{today[:7]}') OR {updated} IS NOT NULL THEN 1 ELSE 0 END")
+        order = (f"CASE w.media_code WHEN 'tv' THEN 0 WHEN 'movie' THEN 1 WHEN 'ova' THEN 2 WHEN 'web' THEN 3 ELSE 4 END ASC,"
+                 f"{aired} DESC,CASE WHEN {translated_expr} OR {acquired_expr} THEN 0 ELSE 1 END ASC,"
+                 f"CASE WHEN {aired} THEN {activity} END DESC,"
+                 f"CASE WHEN {aired} THEN {updated} END DESC,"
+                 f"CASE WHEN ({premiere_expr})='' THEN 1 ELSE 0 END ASC,"
+                 f"CASE WHEN NOT ({aired}) THEN {expected_date} END ASC,"
+                 f"{premiere_expr} DESC,{title_expr} ASC,w.id ASC")
     elif sort == "random":
         order = f"{pending_expr} ASC,seeded_rank(w.id,?) ASC,w.start_month,w.media_code,{title_expr}"
     else:
         order = f"{primary} {direction},w.start_month ASC,w.media_code ASC,{title_expr} ASC,w.id ASC"
-    if radar_mode and value("radar_grouped") != "0":
-        order = (f"CASE WHEN {translated_expr} THEN 0 ELSE 4 END + "
-                 "CASE w.media_code WHEN 'tv' THEN 0 WHEN 'movie' THEN 1 WHEN 'ova' THEN 2 ELSE 3 END ASC," + order)
-    elif not radar_mode and not q and requested_sort in {"recent_episode", "random"}:
+    if radar_mode and sort != "recent_episode" and value("radar_grouped") != "0":
+        order = (f"CASE WHEN {translated_expr} THEN 0 ELSE 5 END + "
+                 "CASE w.media_code WHEN 'tv' THEN 0 WHEN 'movie' THEN 1 WHEN 'ova' THEN 2 WHEN 'web' THEN 3 ELSE 4 END ASC," + order)
+    elif not radar_mode and not q and requested_sort == "random":
         order = f"{subscription_order} DESC," + order
-    order_values = [seed] if sort == "random" and not default_radar_order else []
+    order_values = [seed] if sort == "random" else []
     predicate = " WHERE " + " AND ".join(base_where + hard_where + where)
     predicate_values = hard_values + values
     search_expanded = bool(q and len(where) > 1)
@@ -2574,6 +2628,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             row["tags"] = db.execute("SELECT group_concat(theme_code,' / ') FROM anime_theme WHERE anime_id=?", (anime_id,)).fetchone()[0]
             row["studios"] = [x[0] for x in db.execute("SELECT DISTINCT cluster_name FROM anime_studio_cluster WHERE anime_id=? ORDER BY cluster_name", (anime_id,))]
             row["countries"] = [x[0] for x in db.execute("SELECT country_code FROM anime_country WHERE anime_id=? ORDER BY country_code", (anime_id,))]
+            row["ani_rss_subscriptions"] = [dict(zip(("remoteId", "title", "enabled"), item)) for item in db.execute(
+                "SELECT remote_id,title,enabled FROM ani_rss_subscription WHERE anime_id=? AND deleted_at IS NULL ORDER BY enabled DESC,title",
+                (anime_id,))] if radar_mode else []
             owner_id = physical_ids.get(anime_id, anime_id)
             if has_ani_rss_episode_state_table and ani_connection_ready:
                 progress = db.execute("""SELECT MAX(s.current_episode),MAX(s.total_episode),
@@ -2641,7 +2698,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     return {"total": total, "limit": limit, "offset": offset, "items": rows,
             "searchExpanded": search_expanded, "filterDimensionCount": filter_dimension_count,
             "requestedSort": requested_sort, "effectiveSort": sort,
-            "recentEpisodeSortAvailable": recent_episode_available}
+            "recentEpisodeSortAvailable": recent_episode_available, "aniRssAvailable": ani_connection_ready}
 
 
 def catalog_options(db_path: Path) -> dict[str, Any]:
@@ -3181,7 +3238,7 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
                         fetched_at=excluded.fetched_at,error=NULL""",
                                (anime_id, mime, data, remote_source, fetched_at))
             if log_timing:
-                print(f"[timing] image.fetch={time.monotonic() - started:.3f}s source=ani-rss", flush=True)
+                metrics.debug(f"[timing] image.fetch={time.monotonic() - started:.3f}s source=ani-rss")
             return data, mime
     except (OSError, ValueError, RuntimeError, sqlite3.Error):
         # Ani-RSS is an optimization, never a dependency for cover loading.
@@ -3234,7 +3291,7 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
                 db.execute("INSERT INTO anime_image(anime_id,mime_type,image_blob,source_url,fetched_at,error) VALUES(?,?,?,?,?,NULL) ON CONFLICT(anime_id) DO UPDATE SET mime_type=excluded.mime_type,image_blob=excluded.image_blob,source_url=excluded.source_url,fetched_at=excluded.fetched_at,error=NULL",
                            (anime_id, mime, data, final_url, fetched_at))
         if log_timing:
-            print(f"[timing] image.fetch={time.monotonic() - started:.3f}s source={urllib.parse.urlparse(final_url).netloc}", flush=True)
+            metrics.debug(f"[timing] image.fetch={time.monotonic() - started:.3f}s source={urllib.parse.urlparse(final_url).netloc}")
         return data, mime
     except Exception as exc:
         error = "no_cover" if isinstance(exc, LookupError) else f"{type(exc).__name__}: {exc}"
@@ -3454,6 +3511,7 @@ class CatalogWarmup:
         self.start_reported = False
         self.state_path = Path(os.getenv("ANM_IMAGE_PRELOAD_STATE", str(db_path.parent / "image-preload-state.json")))
         self.state = self._load_state()
+        self._persisted_payload: str | None = None
         self.throughput_ewma = 0.0
         self.progress_mark = time.monotonic()
         self.next_image_maintenance = time.monotonic()
@@ -3499,13 +3557,16 @@ class CatalogWarmup:
     def _persist(self) -> None:
         with self.lock:
             payload = json.dumps(self.state, ensure_ascii=False, separators=(",", ":")) + "\n"
-        try:
-            self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
-            temporary.write_text(payload, encoding="utf-8")
-            temporary.replace(self.state_path)
-        except OSError as exc:
-            log_event("WARNING", "image_preload_state_failed", errorType=type(exc).__name__)
+            if payload == self._persisted_payload:
+                return
+            try:
+                self.state_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
+                temporary.write_text(payload, encoding="utf-8")
+                temporary.replace(self.state_path)
+                self._persisted_payload = payload
+            except OSError as exc:
+                log_event("WARNING", "image_preload_state_failed", errorType=type(exc).__name__)
 
     def _apply_controls(self) -> None:
         if self.image_fetcher is None:
@@ -4413,6 +4474,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
 
     def reserve_submission_space(plan_id: str, plan: dict[str, Any]) -> int:
         config = config_store.read()
+        if plan.get("jobs"):
+            require_awake(str(config.get("deployment", {}).get("libraryUncRoot") or "/Library"), config)
         if config.get("download", {}).get("requireFreeSpaceCheck", True) is not True:
             return 0
         jobs = list(plan.get("jobs") or [])
@@ -4425,7 +4488,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         if not library_root_value:
             raise ValueError("library root is not configured for the free-space check")
         library_root = Path(library_root_value)
-        storage = status_for_path(library_root, require_write=True, timeout=4.0)
+        require_awake(library_root, config)
+        storage = status_for_path(library_root, require_write=True, timeout=4.0, config=config)
         if storage.state != AVAILABLE:
             raise ValueError(f"library storage is unavailable: {storage.state}")
         try:
@@ -4598,17 +4662,17 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             storage = {}
         storage_warning = False
         library_state = str((storage.get("library") or {}).get("state") or "not_configured")
-        if library_state != AVAILABLE:
+        if library_state not in {AVAILABLE, "sleeping"}:
             storage_warning = True
         for key, value in storage.items():
             state = str(value.get("state") or "")
-            if key != "library" and state not in {"", "not_configured", AVAILABLE}:
+            if key != "library" and state not in {"", "not_configured", AVAILABLE, "sleeping"}:
                 storage_warning = True
         storage_warnings = sum(1 for key, value in storage.items()
-                               if (key == "library" and str(value.get("state") or "") != AVAILABLE)
-                               or (key != "library" and str(value.get("state") or "") not in {"", "not_configured", AVAILABLE}))
+                               if (key == "library" and str(value.get("state") or "") not in {AVAILABLE, "sleeping"})
+                               or (key != "library" and str(value.get("state") or "") not in {"", "not_configured", AVAILABLE, "sleeping"}))
         items.append({"id": "storage", "status": "warning" if storage_warning else "normal",
-                      "detail": "unavailable" if storage_warning else "ready",
+                      "detail": "unavailable" if storage_warning else "sleeping" if library_state == "sleeping" else "ready",
                       "info": {"checked": len(storage), "warnings": storage_warnings}})
 
         preload = catalog_warmup.snapshot()
@@ -4934,7 +4998,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if remote_jobs:
                 with ani_rss_user_operation():
                     for job in remote_jobs:
-                        ani_rss.subscribe(db_path, str(job["resourceId"]), current)
+                        ani_rss.subscribe(db_path, str(job["resourceId"]), current,
+                                          policy_override=job.get("policyOverride") is True)
             runtime_catalog.finish_plan_submission(db_path, plan_id, success=True)
             if payload.get("jobs"):
                 refreshed = qbt_runtime.refresh(db_path, current["components"]["downloadClient"]["endpoint"],
@@ -5360,6 +5425,12 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     stream.seek(start)
                     remaining = length
                     while remaining:
+                        try:
+                            require_awake(path, config_store.read())
+                        except StorageSleepingError:
+                            self.close_connection = True
+                            playback_diagnostics.finish(token, "library-sleeping")
+                            return
                         chunk = stream.read(min(1024 * 1024, remaining))
                         if not chunk:
                             break
@@ -5370,9 +5441,13 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                 playback_diagnostics.finish(token, "client-disconnected")
                 return
-            except path_policy.PathAuthorizationError:
-                playback_diagnostics.finish(token, "unavailable")
-                self.send_error(HTTPStatus.NOT_FOUND, "media token expired or file unavailable")
+            except path_policy.PathAuthorizationError as exc:
+                if str(exc) == "local_library_sleeping":
+                    playback_diagnostics.finish(token, "library-sleeping")
+                    self.send_error(HTTPStatus.LOCKED, "local_library_sleeping")
+                else:
+                    playback_diagnostics.finish(token, "unavailable")
+                    self.send_error(HTTPStatus.NOT_FOUND, "media token expired or file unavailable")
             except OSError:
                 playback_diagnostics.finish(token, "error")
                 self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "media file unavailable")
@@ -5949,16 +6024,35 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     self.json_response({"error": "submission_disabled"}, HTTPStatus.FORBIDDEN)
                     return
                 try:
+                    request = self.read_json() if self.headers.get("Content-Length", "0") != "0" else {}
+                    if not isinstance(request, dict) or not isinstance(request.get("policyOverride", False), bool):
+                        raise ValueError("policyOverride must be boolean")
                     with ani_rss_user_operation():
-                        result = ani_rss.subscribe(db_path, subscribe_match.group(1), config_store.read())
+                        result = ani_rss.subscribe(db_path, subscribe_match.group(1), config_store.read(),
+                                                  policy_override=request.get("policyOverride") is True)
                     self.json_response(result, HTTPStatus.ACCEPTED)
                 except (ValueError, RuntimeError, OSError, urllib.error.URLError, sqlite3.Error) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            ani_rss_enabled_match = re.fullmatch(r"/api/ani-rss/subscriptions/([^/]+)/enabled", parsed.path)
+            if ani_rss_enabled_match:
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict) or not isinstance(request.get("enabled"), bool):
+                        raise ValueError("enabled must be a boolean")
+                    remote_id = urllib.parse.unquote(ani_rss_enabled_match.group(1))
+                    with ani_rss_user_operation():
+                        result = ani_rss.set_subscription_enabled(db_path, remote_id, config_store.read(), enabled=request["enabled"])
+                    self.json_response(result)
+                except (ValueError, RuntimeError, OSError, httpx.HTTPError, sqlite3.Error) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             ani_rss_delete_match = re.fullmatch(r"/api/ani-rss/subscriptions/([^/]+)/delete", parsed.path)
             if ani_rss_delete_match:
                 try:
                     request = self.read_json()
+                    if not isinstance(request, dict) or not isinstance(request.get("deleteFiles", False), bool):
+                        raise ValueError("deleteFiles must be a boolean")
                     remote_id = urllib.parse.unquote(ani_rss_delete_match.group(1))
                     delete_files = request.get("deleteFiles", False) is True
                     if delete_files and self.auth_session.role != "admin":
@@ -5986,6 +6080,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             audit_match = re.fullmatch(r"/api/anime/(\d+)/library/audit", parsed.path)
             if audit_match:
+                current = config_store.read()
+                if sleeping_path(current["deployment"]["libraryUncRoot"], current):
+                    self.json_response({"error": "local_library_sleeping"}, HTTPStatus.CONFLICT)
+                    return
                 anime_id = int(audit_match.group(1))
                 started = start_library_audit(anime_id)
                 self.json_response({"started": started, "animeId": anime_id}, HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
@@ -6192,10 +6290,18 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/library/placeholders":
+                current = config_store.read()
+                if sleeping_path(current["deployment"]["libraryUncRoot"], current):
+                    self.json_response({"error": "local_library_sleeping"}, HTTPStatus.CONFLICT)
+                    return
                 started = start_placeholders()
                 self.json_response({"state": "running", "started": started})
                 return
             if parsed.path == "/api/library/audit":
+                current = config_store.read()
+                if sleeping_path(current["deployment"]["libraryUncRoot"], current):
+                    self.json_response({"error": "local_library_sleeping"}, HTTPStatus.CONFLICT)
+                    return
                 started = start_library_audit()
                 self.json_response({"started": started}, HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
                 return
@@ -6204,6 +6310,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 try:
                     current = config_store.read()
                     library_root = Path(str(current["deployment"]["libraryUncRoot"]))
+                    require_awake(library_root, current)
                     history_root = Path(os.getenv("ANM_HISTORY_DIR", str(Path(os.getenv("ANM_STATE_DIR", "/Data/state")) / "history")))
                     restored = library_history.restore_removed(
                         db_path, library_root, history_root, int(restore_match.group(1)))

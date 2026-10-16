@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from ..library import layout as library_layout
 from ..storage import StorageUnavailableError
+from ..storage.sleep import require_awake
 
 
 MEDIA = {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm"}
@@ -137,7 +138,11 @@ def auto_map(metadata_db: Path, runtime_db: Path, config: dict[str, Any], *,
     aliases_by_id: dict[int, list[str]] = {}
     for anime_id, title in meta.execute("SELECT anime_id,title FROM anime_title"):
         aliases_by_id.setdefault(int(anime_id), []).append(str(title))
-    path_index = library_layout.ExistingPathIndex(Path(root), config.get("library", {}).get("ignoredContainers", []))
+    try:
+        path_index = library_layout.ExistingPathIndex(Path(root), config.get("library", {}).get("ignoredContainers", []), config=config)
+    except StorageUnavailableError:
+        runtime.close(); meta.close()
+        raise
     group_rank = {str(group["name"]).casefold(): int(group["tier"]) * 100 + int(group["order"])
                   for group in config["torrentPolicy"].get("resourceGroups", []) if group.get("enabled", True)}
     stamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
@@ -304,7 +309,7 @@ def reconcile_existing_paths(metadata_db: Path, runtime_db: Path, config: dict[s
     """
     root = Path(str(config["deployment"]["libraryUncRoot"]))
     path_index = library_layout.ExistingPathIndex(
-        root, config.get("library", {}).get("ignoredContainers", []))
+        root, config.get("library", {}).get("ignoredContainers", []), config=config)
     meta = sqlite3.connect(metadata_db); meta.row_factory = sqlite3.Row
     runtime = sqlite3.connect(runtime_db); runtime.row_factory = sqlite3.Row
     aliases_by_id: dict[int, list[str]] = {}
@@ -317,6 +322,11 @@ def reconcile_existing_paths(metadata_db: Path, runtime_db: Path, config: dict[s
     stamp = dt.datetime.now(dt.timezone.utc).isoformat()
     stats = {"examined": 0, "reused": 0, "consolidated": 0, "occupied": 0, "unresolved": 0}
     for work in works:
+        try:
+            require_awake(root, config)
+        except StorageUnavailableError:
+            runtime.close(); meta.close()
+            raise
         stats["examined"] += 1
         current = Path(str(work["target_unc"]))
         try:

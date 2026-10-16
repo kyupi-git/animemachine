@@ -70,10 +70,66 @@ class RadarTests(unittest.TestCase):
                 with self.subTest(ready=ready, sort=order), mock.patch.object(ani_rss, "state", return_value=ready):
                     rows = service.query_catalog(self.db_path, {"radar": ["1"], "sort": [order], "limit": ["all"]}, self.config)["items"]
                     self.assertEqual(1, rows[0]["id"])
-                    self.assertEqual({3, 5}, {row["id"] for row in rows[1:3]})
-                    self.assertEqual([2, 4], [row["id"] for row in rows[-2:]])
+                    if order == "recent_episode":
+                        self.assertEqual([1, 2, 3, 4, 5], [row["id"] for row in rows])
+                    else:
+                        self.assertEqual({3, 5}, {row["id"] for row in rows[1:3]})
+                        self.assertEqual([2, 4], [row["id"] for row in rows[-2:]])
                     first = service.query_catalog(self.db_path, {"radar": ["1"], "sort": [order], "limit": ["2"]}, self.config)["items"]
                     self.assertEqual([row["id"] for row in rows[:2]], [row["id"] for row in first])
+
+    def test_updates_lead_aired_titles_and_upcoming_dates_stay_ascending_in_both_views(self):
+        today = dt.datetime.now(dt.timezone.utc).date()
+        dates = [today - dt.timedelta(days=20), today - dt.timedelta(days=10),
+                 today + dt.timedelta(days=2), today + dt.timedelta(days=1)]
+        stamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            for index, date in enumerate(dates, 1):
+                db.execute("UPDATE anime_work SET raw_date=?,start_month=? WHERE id=?", (date.isoformat(), date.strftime('%Y-%m'), index))
+            db.execute("UPDATE anime_work SET raw_date='',start_month='' WHERE id=5")
+            ani_rss.record_release_progress(db, 1, 1, stamp.isoformat(), published_at=stamp.isoformat())
+            ani_rss.record_release_progress(db, 2, 1, (stamp - dt.timedelta(hours=1)).isoformat(), published_at=(stamp - dt.timedelta(hours=1)).isoformat())
+        for radar in ('0', '1'):
+            params = dict(radar=[radar], start_from=[''], start_to=[''])
+            self.assertEqual([1, 2, 4, 3, 5], [row['id'] for row in self.query(**params)['items']])
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+                ani_rss.record_release_progress(db, 2, 2, (stamp + dt.timedelta(minutes=1)).isoformat(), published_at=(stamp + dt.timedelta(minutes=1)).isoformat())
+            self.assertEqual([2, 1, 4, 3, 5], [row['id'] for row in self.query(**params)['items']])
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+                db.execute("DELETE FROM ani_rss_release_state WHERE anime_id=2")
+                ani_rss.record_release_progress(db, 2, 1, (stamp - dt.timedelta(hours=1)).isoformat(), published_at=(stamp - dt.timedelta(hours=1)).isoformat())
+
+    def test_untranslated_subscriptions_use_activity_time_and_new_episodes_can_overtake_them(self):
+        stamp = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL,title_ja='アニメ' WHERE id=2")
+            db.execute("DELETE FROM anime_title WHERE anime_id=2 AND language<>'ja'")
+            ani_rss.record_release_progress(db, 2, 1, stamp.isoformat(), published_at=stamp.isoformat())
+        self.assertNotIn(2, [row['id'] for row in self.query(radar=['0'])['items']])
+        self.assertNotEqual(2, self.query()['items'][0]['id'])
+        self.add_subscription(2)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE ani_rss_action SET requested_at=?", ((stamp + dt.timedelta(minutes=1)).isoformat(),))
+        for radar in ('0', '1'):
+            self.assertEqual(2, self.query(radar=[radar])['items'][0]['id'])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            ani_rss.record_release_progress(db, 1, 2, (stamp + dt.timedelta(minutes=2)).isoformat(), published_at=(stamp + dt.timedelta(minutes=2)).isoformat())
+        self.assertEqual([1, 2], [row['id'] for row in self.query()['items'][:2]])
+
+    def test_external_and_local_media_admit_untranslated_titles_and_sort_without_ani_rss(self):
+        import time
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL,title_ja='アニメ' WHERE id IN (1,2)")
+            db.execute("DELETE FROM anime_title WHERE anime_id IN (1,2) AND language<>'ja'")
+            db.execute("INSERT INTO external_library_source VALUES('fixture','generic','/External',1,'ready','now','{}')")
+            db.execute("""INSERT INTO external_media_file VALUES('fixture','/External/one.mkv',100,?,1,'verified','','',NULL,NULL,1,'{}','now')""", (int((time.time() - 60) * 1e9),))
+            db.execute("""INSERT INTO runtime_work(private_work_id,anime_id,target_unc,directory_name,official_title,date_code,relation_state,scope_state,library_state,origin,mapping_method,evidence_json,updated_at)
+                VALUES(1,2,'/Library/Two','Two','Two','2026_07','standalone','active','existing','preexisting','fixture','{}','now')""")
+            db.execute("INSERT INTO runtime_completeness VALUES(2,NULL,0,'unassessed','fixture',1,0,?,datetime('now'))",
+                       (json.dumps({'latestMediaUpdateAt': time.time() - 120}),))
+        self.ready = {'connection_state': 'failed', 'credentialConfigured': False}
+        rows = self.query(radar=['0'])['items']
+        self.assertEqual([1, 2], [row['id'] for row in rows[:2]])
 
     def test_radar_premiere_sort_orders_the_whole_season_before_pagination(self):
         archive = Path(self.tmp.name) / "many.zip"
@@ -135,6 +191,8 @@ class RadarTests(unittest.TestCase):
                 VALUES(?,?,?,1,'follow',1,'enabled','now','now','{}')""", (remote_id, anime_id, remote_id))
             db.execute("INSERT INTO ani_rss_action VALUES(?,?,?,?,?,?,?,'same-second','same-second',NULL,'{}')",
                        (remote_id, remote_id, anime_id, remote_id, remote_id, kind, state))
+            db.execute("UPDATE ani_rss_action SET requested_at=?,updated_at=? WHERE action_id=?",
+                       (f"2026-07-02T00:00:{anime_id:02d}Z", f"2026-07-02T00:00:{anime_id:02d}Z", remote_id))
 
     def test_new_subscriptions_stay_first_across_seeds_pages_and_connection_loss(self):
         self.add_subscription(2)
@@ -154,8 +212,8 @@ class RadarTests(unittest.TestCase):
                         params = {"radar": ["0"], "sort": [sort], "seed": [seed]}
                         first = self.query(**params, limit=["2"])["items"]
                         remaining = self.query(**params, offset=["2"])["items"]
-                        self.assertEqual([5, 2], [row["id"] for row in first])
-                        self.assertEqual({1, 3, 4}, {row["id"] for row in remaining})
+                        self.assertEqual([1, 5] if sort == "recent_episode" else [5, 2], [row["id"] for row in first])
+                        self.assertEqual({2, 3, 4} if sort == "recent_episode" else {1, 3, 4}, {row["id"] for row in remaining})
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET start_month='2026-08' WHERE id=1")
         for sort in ("recent_episode", "random"):
@@ -172,7 +230,7 @@ class RadarTests(unittest.TestCase):
             db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL WHERE id=2")
             db.execute("DELETE FROM anime_title WHERE anime_id=2 AND language<>'ja'")
         before = [row["id"] for row in self.query()["items"]]
-        self.assertGreater(before.index(2), before.index(3))
+        self.assertGreater(before.index(2), before.index(1))
         self.assertNotIn(2, {row["id"] for row in self.query(radar=["0"])["items"]})
         archive = Path(self.tmp.name) / "translated.zip"
         incoming = Path(self.tmp.name) / "incoming.sqlite3"
@@ -487,7 +545,7 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
         self.assertEqual(1, ids.count(1))
         self.assertEqual(1, ids.count(2))
 
-    def test_radar_orders_all_eight_categories_and_excludes_other_media(self):
+    def test_radar_orders_five_media_types_with_untranslated_tail_in_each_type(self):
         archive = Path(self.tmp.name) / "categories.zip"
         rows = [{"id": index, "type": 2, "name": f"アニメ {index}",
                  "name_cn": f"译名 {index}" if index <= 4 else "", "date": "2026-07-01",
@@ -500,11 +558,12 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
         for ready in (self.ready, {"connection_state": "failed", "credentialConfigured": False}):
             self.ready = ready
             result = self.query()
-            self.assertEqual(list(range(1, 9)), [item["bgm_id"] for item in result["items"]])
-            self.assertEqual(0, self.query(q=["アニメ 9"])["total"])
+            self.assertEqual([1, 5, 2, 6, 3, 7, 4, 8], [item["bgm_id"] for item in result["items"][:8]])
+            self.assertEqual({9, 10, 11}, {item["bgm_id"] for item in result["items"][8:]})
+            self.assertEqual(1, self.query(q=["アニメ 9"])["total"])
             self.assertEqual(1, self.query(radar=["0"], q=["アニメ 9"])["total"])
 
-    def test_default_order_keeps_latest_premiere_first_and_updates_same_day_ties(self):
+    def test_default_order_uses_episode_updates_before_premiere_dates(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET raw_date='2026-07-02' WHERE id=1")
             db.execute("UPDATE anime_work SET raw_date='2026-07-01' WHERE id IN (2,3)")
@@ -518,7 +577,7 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
             ani_rss.record_release_progress(db, 2, 2, "2026-07-13T00:00:00+00:00", published_at="2026-07-13T00:00:00+00:00")
         ids = [item["id"] for item in self.query()["items"]]
         self.assertLess(ids.index(2), ids.index(3))
-        self.assertLess(ids.index(1), ids.index(2))
+        self.assertLess(ids.index(2), ids.index(1))
 
     def test_movie_resource_date_uses_earliest_release_and_keeps_original_premiere(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
@@ -639,7 +698,7 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
             ani_rss.record_release_progress(db, 1, 10, "2026-09-01T00:00:00+00:00")
         self.ready = {"connection_state": "error", "credentialConfigured": True}
         result = self.query()
-        self.assertEqual("random", result["effectiveSort"])
+        self.assertEqual("recent_episode", result["effectiveSort"])
         self.assertTrue(all(row["subscription_state"] == "unknown" for row in result["items"]))
         self.assertTrue(all(row["episode_progress"]["current"] is None for row in result["items"]))
 
@@ -716,15 +775,21 @@ assert.equal(radarIsHighlighted({bgm_id: 3, last_episode_update_at: 'new'}), fal
         source = (ROOT / "src/animemachine/web/static/app.js").read_text(encoding="utf-8")
         start = source.index('function aniSubscriptionManagementHtml(')
         fragment = source[start:source.index('\n}', start) + 2]
+        menu_start = source.index('function aniSubscriptionMenu(')
+        fragment = source[menu_start:source.index('\n}', menu_start) + 2] + fragment
         script = """
 const assert = require('node:assert/strict');
+const authSession = {role: 'admin'};
 const t = (value) => value, fmt = String;
 const esc = (value) => String(value).replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 """ + fragment + """
 for (const enabled of [true, false]) {
   const html = aniSubscriptionManagementHtml({remoteId: 'empty', title: '<synthetic>', enabled,
     playableCount: 0, episodeProgress: {current: null, total: 12}});
-  assert.ok(html.includes('data-ani-rss-delete="empty"'));
+  assert.ok(html.includes('data-remote-id="empty"'));
+  assert.ok(html.includes('data-subscription-action="cancel"'));
+  assert.ok(html.includes('data-subscription-action="delete"'));
+  assert.ok(html.includes(`data-subscription-action="${enabled ? 'pause' : 'resume'}"`));
   assert.ok(html.includes(enabled ? 'radarSubscribed' : 'radarPaused'));
   assert.ok(html.includes('? / 12'));
   assert.ok(!html.includes('<synthetic>'));

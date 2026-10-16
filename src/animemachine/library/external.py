@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
+from ..storage.sleep import require_awake
 
 VIDEO = {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm", ".flv", ".wmv"}
 YEAR = re.compile(r"\s*[（(](?P<year>19\d{2}|20\d{2})[）)]\s*$")
@@ -151,9 +152,11 @@ def _media_files(root: Path) -> Iterable[Path]:
     pending = [root]
     while pending:
         current = pending.pop()
+        require_awake(current)
         try:
             with os.scandir(current) as entries:
                 for entry in entries:
+                    require_awake(current)
                     if entry.is_dir(follow_symlinks=False):
                         if entry.name.casefold() not in {"complete", "incomplete"}:
                             pending.append(Path(entry.path))

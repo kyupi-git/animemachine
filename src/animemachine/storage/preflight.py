@@ -24,8 +24,8 @@ def run(*, require_all: bool = False, timeout: float = 4.0) -> int:
     for base_profile in profiles_from_env().values():
         profile = _preflight_profile(base_profile)
         status = status_for_profile(profile, timeout=timeout, use_cache=False)
-        if status.state == NOT_CONFIGURED:
-            print(f"[storage] {profile.name}: not configured", flush=True)
+        if status.state in {NOT_CONFIGURED, "sleeping"}:
+            print(f"[storage] {profile.name}: {'sleeping' if status.state == 'sleeping' else 'not configured'}", flush=True)
             continue
         description = f"{profile.storage_type}, {profile.access}, {profile.path}"
         if status.state == AVAILABLE:
@@ -37,7 +37,7 @@ def run(*, require_all: bool = False, timeout: float = 4.0) -> int:
     return 1 if failed else 0
 
 
-def check_config(config: dict, *, timeout: float = 4.0) -> dict[str, dict[str, object]]:
+def check_config(config: dict, *, timeout: float = 4.0, verify_write: bool = False) -> dict[str, dict[str, object]]:
     """Check user-facing storage paths concurrently without exposing low-level errors."""
     deployment = config.get("deployment", {}) if isinstance(config, dict) else {}
     ani = config.get("components", {}).get("aniRss", {}) if isinstance(config, dict) else {}
@@ -56,9 +56,11 @@ def check_config(config: dict, *, timeout: float = 4.0) -> dict[str, dict[str, o
         if not path:
             return key, {"state": NOT_CONFIGURED, "name": name, "path": "", "access": "rw" if writable else "ro",
                          "message": f"{name} is not configured"}
-        status = status_for_path(path, require_write=writable, timeout=timeout)
+        status = status_for_path(path, require_write=writable and verify_write, timeout=timeout, config=config)
         if status.state == AVAILABLE:
-            message = f"{name} is {'read/write' if writable else 'readable'}"
+            message = f"{name} is readable"
+        elif status.state == "sleeping":
+            message = f"{name} is sleeping"
         elif status.state == "permission_denied":
             message = f"{name} permission is insufficient"
         elif status.state in {"host_unreachable", "mount_failed"}:

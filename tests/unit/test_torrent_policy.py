@@ -76,6 +76,17 @@ class TorrentPolicyTests(unittest.TestCase):
         self.assertFalse(archive_group_enabled(policy, "Unlisted-Raws"))
         self.assertFalse(archive_group_enabled({**policy, "archiveGroupIds": []}, "jsum"))
 
+    def test_serial_language_tags_do_not_depend_on_subtitle_packaging(self) -> None:
+        for tag in ("简日内封", "繁日双语", "簡體中文字幕", "简繁字幕", "CHS_JP", "CHT", "GB", "ZH-Hant"):
+            with self.subTest(tag=tag):
+                matches = serial_group_matches(f"[拨雪寻春] Work - 01 [1080p][{tag}]", "拨雪寻春", "zh")
+                self.assertEqual(["haruhana"], [item["id"] for item in matches])
+        for title in ("[拨雪寻春] Work [1080p][ENG]", "[拨雪寻春] 简体魔法 [1080p]", "[拨雪寻春] Work [JPN]",
+                      "[拨雪寻春][简体魔法] Work [1080p]", "[拨雪寻春] Work [1.4 GB][ENG]"):
+            self.assertFalse(serial_group_matches(title, "拨雪寻春", "zh"), title)
+        self.assertFalse(serial_group_matches("[Unknown] Work [CHS]", "Unknown", "zh"))
+        self.assertEqual("erai-raws", serial_group_matches("[Erai-raws] Work [English]", "Erai-raws", "en")[0]["id"])
+
     def test_single_volume_and_episode_are_incremental_candidates(self) -> None:
         volume = INDEXER.classify("[ANi] Show Vol.01 BDRip", "[ANi] Show Vol.01 BDRip",
                                   [{"index": 0, "path": "Show Vol.01/01.mkv", "length": 100}])

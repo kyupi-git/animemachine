@@ -20,6 +20,7 @@ from ..torrents import runtime as runtime_catalog
 from ..config.policy import ConfigStore
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
 from ..storage.path_policy import PathAuthorizationError, authorize_existing, is_junction, open_authorized
+from ..storage.sleep import StorageSleepingError, require_awake
 
 
 EPISODE = re.compile(r"(?i)(?:^|[^a-z0-9])(?:ep?|episode|第)?\s*(\d{1,4})(?:\s*[-_. ]?v\d+)?(?:[^a-z0-9]|$)")
@@ -92,7 +93,8 @@ def _expected(db: sqlite3.Connection, anime_id: int, info_hash: str) -> list[dic
     return rows
 
 
-def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | None = None) -> list[dict[str, Any]]:
+def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | None = None,
+              config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Return file signatures while scanning each physical root at most once.
 
     Several logical works can intentionally share one series or merged-season
@@ -106,7 +108,8 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
             rows.extend(cache[cache_key])
             continue
         root = Path(raw)
-        storage = status_for_path(root, timeout=4.0)
+        require_awake(root, config)
+        storage = status_for_path(root, timeout=4.0, config=config)
         if storage.state != AVAILABLE:
             raise StorageUnavailableError(f"storage unavailable: {root}")
         try:
@@ -124,10 +127,12 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
         found = []
         pending = [str(root)]
         while pending:
+            require_awake(root, config)
             directory = pending.pop()
             try:
                 with os.scandir(directory) as entries:
                     for item in entries:
+                        require_awake(root, config)
                         lowered = item.name.casefold()
                         if is_junction(item.path):
                             continue
@@ -135,8 +140,9 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
                             if lowered not in {".anm-history", ".anm-staging"}:
                                 pending.append(item.path)
                         elif item.is_file(follow_symlinks=False) and lowered not in {"empty.txt", "deprecated.txt"}:
-                            found.append(_signature(item.path, item.stat(follow_symlinks=False).st_size,
-                                                    runtime_catalog.file_kind(item.path)))
+                            info = item.stat(follow_symlinks=False)
+                            found.append({**_signature(item.path, info.st_size, runtime_catalog.file_kind(item.path)),
+                                          "modifiedAt": info.st_mtime_ns / 1_000_000_000})
             except OSError as exc:
                 raise StorageUnavailableError(exc.errno or 0, f"storage unavailable: {root}") from exc
         if cache is not None:
@@ -146,7 +152,8 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
 
 
 def _verify_hash_baselines(db: sqlite3.Connection, owner_paths: list[str],
-                           throttle: Callable[[], None] | None = None) -> dict[str, int]:
+                           throttle: Callable[[], None] | None = None,
+                           config: dict[str, Any] | None = None) -> dict[str, int]:
     if not owner_paths:
         return {"compared": 0, "matched": 0, "mismatched": 0, "unavailable": 0}
     marks = ",".join("?" for _ in owner_paths)
@@ -160,13 +167,18 @@ def _verify_hash_baselines(db: sqlite3.Connection, owner_paths: list[str],
         path = Path(str(final_path))
         try:
             digest = hashlib.sha256()
-            with open_authorized(path, owner_paths) as (stream, canonical, before):
+            with open_authorized(path, owner_paths, config=config) as (stream, canonical, before):
                 if expected_bytes is not None and before.st_size != int(expected_bytes):
                     result["compared"] += 1; result["mismatched"] += 1; continue
-                for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                while True:
+                    require_awake(path, config)
+                    block = stream.read(4 * 1024 * 1024)
+                    if not block:
+                        break
                     digest.update(block)
                     if throttle:
                         throttle()
+            require_awake(path, config)
             after = canonical.stat()
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 result["unavailable"] += 1; continue
@@ -206,9 +218,14 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
             try:
                 root = str(config.get("deployment", {}).get("libraryUncRoot") or "")
                 if root:
+                    require_awake(root, config)
                     for work in works:
-                        authorize_existing(str(work[0]), [root])
-                observed = _observed((str(row[0]) for row in works), observed_cache)
+                        authorize_existing(str(work[0]), [root], config=config)
+                observed = _observed((str(row[0]) for row in works), observed_cache, config)
+            except StorageSleepingError:
+                skipped += 1
+                report()
+                continue
             except (StorageUnavailableError, PathAuthorizationError):
                 skipped += 1
                 unavailable += 1
@@ -220,7 +237,8 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
                         ON CONFLICT(anime_id) DO UPDATE SET preferred_info_hash=NULL,similarity=0,state='unassessed',
                         basis='no_comparison_manifest',observed_files=excluded.observed_files,expected_files=0,
                         evidence_json=excluded.evidence_json,assessed_at=excluded.assessed_at""",
-                           (anime_id, len(observed), json.dumps({"method": "local_file_inventory_only", "paths": len(works)})))
+                           (anime_id, len(observed), json.dumps({"method": "local_file_inventory_only", "paths": len(works),
+                             "latestMediaUpdateAt": max((x["modifiedAt"] for x in observed if x["kind"] == "main_video"), default=None)})))
                 updated += 1
                 report()
                 continue
@@ -232,11 +250,12 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
             basis = "managed_completed" if completed and score == 100.0 else "metadata_distribution"
             exact = {"compared": 0, "matched": 0, "mismatched": 0, "unavailable": 0}
             if config.get("differentialPlanning", {}).get("samePathSizePolicy") == "hash_and_skip":
-                exact = _verify_hash_baselines(db, [str(row[0]) for row in works], throttle)
+                exact = _verify_hash_baselines(db, [str(row[0]) for row in works], throttle, config)
                 if exact["mismatched"]:
                     score = 0.0
                     basis = "hash_mismatch"
             evidence = {"method": "kind_episode_name_size_v1", "paths": len(works),
+                        "latestMediaUpdateAt": max((x["modifiedAt"] for x in observed if x["kind"] == "main_video"), default=None),
                         "managed": any(str(row[1]) == "managed_submission" for row in works),
                         "hashVerification": exact}
             db.execute("""INSERT INTO runtime_completeness VALUES(?,?,?,?,?,?,?,?,datetime('now'))

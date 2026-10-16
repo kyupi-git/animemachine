@@ -9,8 +9,9 @@ import math
 import os
 import tempfile
 import re
+import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .runtime import apply_runtime_overrides
 
@@ -117,11 +118,35 @@ def serial_profile_language(config: dict[str, Any], ui_language: str | None = No
     return "zh" if candidate.casefold().startswith("zh") else ("ja" if candidate.casefold().startswith("ja") else "en")
 
 
+def _subtitle_language_matches(text: str, language: str) -> bool:
+    """Recognize release language tags independently of muxing/embedding wording."""
+    # Restrict the general fallback to metadata brackets. A translated work
+    # title or a Chinese subgroup name does not establish subtitle language.
+    tags = re.findall(r"[\[【(（]([^\[\]【】()（）\r\n]{1,200})[\]】)）]",
+                      unicodedata.normalize("NFKC", text))
+    for tag in tags:
+        if language == "zh":
+            if re.search(r"(?<![A-Za-z0-9])(?:CHS|CHT|BIG5|ZH(?:[-_]HANS|[-_]HANT)?)(?![A-Za-z0-9])", tag, re.I):
+                return True
+            if re.search(r"(?<![A-Za-z0-9])GB(?![A-Za-z0-9])", tag, re.I) and not re.search(r"\d\s*GB\b", tag, re.I):
+                return True
+            normalized = re.sub(r"\s+", "", tag).translate(str.maketrans("簡體雙語內嵌掛", "简体双语内嵌挂"))
+            marker = r"(?:简体(?:中文)?|繁体(?:中文)?|简中|繁中|简日|繁日|简繁(?:日)?|中日|中文)"
+            suffix = r"(?:双语(?:字幕)?|字幕|(?:内[嵌封]|外[挂置])(?:字幕)?)"
+            if re.search(rf"{marker}{suffix}(?![\u3400-\u9fff])|(?<![\u3400-\u9fff]){marker}(?![\u3400-\u9fff])", normalized):
+                return True
+        elif language == "en" and re.search(r"(?<![A-Za-z0-9])(?:ENG|English|EN)(?![A-Za-z0-9])", tag, re.I):
+            return True
+    return False
+
+
 def serial_group_matches(text: str, group: str, language: str,
-                         catalog: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+                         catalog: dict[str, Any] | None = None, *,
+                         require_subtitles: bool = True) -> list[dict[str, Any]]:
     """Return ordered serial-release rules whose group and subtitle clauses both match."""
     rules = (catalog or load_resource_group_catalog()).get("serialProfiles", {}).get(language, [])
     haystack = f"{group or ''} {text or ''}"
+    language_match = _subtitle_language_matches(text or "", language)
     result = []
     for order, raw in enumerate(rules):
         rule_id, display_name, group_keywords, subtitle_keywords = raw
@@ -131,11 +156,11 @@ def serial_group_matches(text: str, group: str, language: str,
         group_text = haystack
         if not any(_keyword_matches(group_text, value) for value in group_keywords):
             continue
-        subtitle_match = any(_keyword_matches(haystack, value) for value in subtitle_keywords)
+        subtitle_match = language_match or any(_keyword_matches(haystack, value) for value in subtitle_keywords)
         # Japanese playback does not require a subtitle track.  Keep the
         # configured group order while accepting a group-only match; unknown
         # groups still follow the explicit "other" switch.
-        if not subtitle_match and language != "ja":
+        if require_subtitles and not subtitle_match and language != "ja":
             continue
         result.append({"id": rule_id, "displayName": display_name, "order": order,
                        "wildcardGroup": "*" in group_keywords, "subtitleMatched": subtitle_match})
@@ -145,6 +170,13 @@ def serial_group_matches(text: str, group: str, language: str,
 def serial_rule_enabled(policy: dict[str, Any], language: str, rule_id: str) -> bool:
     configured = policy.get("serialSubtitle", {}).get("enabledByLanguage", {})
     return True if language not in configured else rule_id in configured[language]
+
+
+def manual_policy_override(request: dict[str, Any], anime_ids: Iterable[int], token: str) -> bool:
+    overrides = request.get("policyOverrides") or {}
+    if not isinstance(overrides, dict) or any(not isinstance(value, str) for value in overrides.values()):
+        raise ValueError("policyOverrides must map work IDs to explicitly selected resources")
+    return any(overrides.get(str(anime_id)) == token for anime_id in anime_ids)
 
 
 def source_family(policy: dict[str, Any], source_class: Any) -> str:
@@ -267,6 +299,14 @@ def _validate(data: Any) -> dict[str, Any]:
     history_name = str(deployment["historyDirectoryName"]).strip()
     if history_name in {".", ".."} or "/" in history_name or "\\" in history_name:
         raise ConfigError("deployment.historyDirectoryName must be one safe directory name")
+    sleep = data["library"].get("sleep", {})
+    if not isinstance(sleep, dict) or not isinstance(sleep.get("enabled", False), bool):
+        raise ConfigError("library.sleep.enabled must be a boolean")
+    for key, default in (("start", "00:00"), ("end", "08:00")):
+        if not isinstance(sleep.get(key, default), str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", sleep.get(key, default)):
+            raise ConfigError(f"library.sleep.{key} must be HH:MM")
+    if sleep.get("start", "00:00") == sleep.get("end", "08:00"):
+        raise ConfigError("library.sleep start and end must differ")
     download_client = data["components"].get("downloadClient")
     if not isinstance(download_client, dict):
         raise ConfigError("components.downloadClient must be an object")

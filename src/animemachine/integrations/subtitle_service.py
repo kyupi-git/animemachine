@@ -58,7 +58,7 @@ def _authorized_files(root: Path) -> list[Path]:
     if not canonical_root.is_dir():
         return []
     rows: list[Path] = []
-    for path in canonical_root.rglob("*"):
+    for path in path_policy.walk_files(canonical_root):
         try:
             candidate = path_policy.authorize_existing(path, [canonical_root])
         except path_policy.PathAuthorizationError:
@@ -95,7 +95,7 @@ def _embedded_subtitle(path: Path, ffprobe: str = "ffprobe") -> bool:
 def inspect_target(path: str, *, ffprobe: str = "ffprobe", config: dict[str, Any] | None = None) -> dict[str, Any]:
     root = Path(path)
     if config is not None:
-        root = path_policy.authorize_existing(root, playback.configured_media_roots(config))
+        root = path_policy.authorize_existing(root, playback.configured_media_roots(config), config=config)
     videos = _main_media(root)
     subtitles = [p for p in _authorized_files(root) if p.suffix.casefold() in SUBTITLE_EXTENSIONS]
     associated = 0
@@ -195,7 +195,7 @@ def _assrt(provider: dict[str, Any], titles: list[str], year: int | None, langua
 
 
 def search(db_path: Path, anime_id: int, target: str, config: dict[str, Any]) -> dict[str, Any]:
-    root = path_policy.authorize_existing(target, playback.configured_media_roots(config))
+    root = path_policy.authorize_existing(target, playback.configured_media_roots(config), config=config)
     inspection = inspect_target(str(root), ffprobe=str(config.get("subtitles", {}).get("ffprobe") or "ffprobe"), config=config)
     if inspection["state"] != "missing":
         return {"state": inspection["state"], "inspection": inspection, "candidates": []}
@@ -361,7 +361,7 @@ def _download(candidate: dict[str, Any], config: dict[str, Any], destination: Pa
 
 
 def apply(anime_id: int, target: str, candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    root = path_policy.authorize_existing(target, playback.configured_media_roots(config))
+    root = path_policy.authorize_existing(target, playback.configured_media_roots(config), config=config)
     external_roots = [Path(str(x.get("path"))) for x in config.get("externalLibraries", []) if x.get("readOnly")]
     ani_rss_media = config.get("components", {}).get("aniRss", {}).get("mediaPath")
     if ani_rss_media:
@@ -382,6 +382,8 @@ def apply(anime_id: int, target: str, candidate: dict[str, Any], config: dict[st
         files = _download(download_candidate, config, Path(raw_temp))
         if not files:
             raise ValueError("download contains no supported subtitles")
+        from ..storage.sleep import require_awake
+        require_awake(output_root, config)
         output_root.mkdir(parents=True, exist_ok=True)
         ordered_files = sorted(files, key=lambda p: (_episode(p.name) is None, _episode(p.name) or 0, p.name.casefold()))
         used: set[Path] = set()
@@ -405,12 +407,14 @@ def apply(anime_id: int, target: str, candidate: dict[str, Any], config: dict[st
             backup.parent.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(backup, "w", zipfile.ZIP_DEFLATED) as package:
                 for path in existing:
+                    require_awake(path, config)
                     package.write(path, path.name)
             if not external:
                 for path in existing:
                     path.unlink()
         installed = []
         for video, source, destination in planned:
+            require_awake(destination, config)
             shutil.copy2(source, destination)
             installed.append({"media": str(video), "subtitle": str(destination)})
     return {"installed": len(installed), "external": external, "items": installed}

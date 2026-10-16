@@ -73,6 +73,9 @@ textarea {
   letter-spacing: 0.12em;
 }
 h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   font:
     700 clamp(21px, 2vw, 26px)/1 Georgia,
@@ -327,6 +330,9 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0 10px;
+}
+.filters .filter-pair {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 .catalog {
   overflow: hidden;
@@ -838,12 +844,16 @@ fieldset h4 {
   margin: 0;
   font-size: 11px;
 }
+.media-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
 .media-checks .check {
-  min-height: 36px;
-  padding: 7px 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #fff;
+  min-height: 26px;
+  padding: 2px 0;
+  gap: 5px;
+  letter-spacing: 0;
 }
 .media-checks .check span {
   white-space: nowrap;
@@ -1336,6 +1346,9 @@ details summary {
 .torrent.disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+.torrent.policy-excluded .torrent-exclusion {
+  color: #c47936;
 }
 .plan-job.disabled {
   opacity: .5;
@@ -2361,7 +2374,6 @@ html[data-theme="dark"] .card.with-cover:hover { background-color: transparent; 
 html[data-theme="dark"] .chip { color: #c7dfd3; background: #28382f; }
 html[data-theme="dark"] .data-table th,
 html[data-theme="dark"] .fact,
-html[data-theme="dark"] .media-checks .check,
 html[data-theme="dark"] .log { background: #202a25; }
 html[data-theme="dark"] .priority-branch { background: #171f1b; }
 html[data-theme="dark"] .priority-children { border-top-color: #40534a; }
@@ -2509,10 +2521,11 @@ html[data-theme="dark"] .diagnostic-item { background: #19221e; }
 
 /* Shared action icons remain intact when labels or pending states change. */
 button[data-icon] { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-button[data-icon]::before, .maintenance-action[data-icon] > b::before {
+button[data-icon]::before, h1[data-icon]::before, .maintenance-action[data-icon] > b::before {
   content: ""; display: inline-block; width: 16px; height: 16px; flex: 0 0 16px;
   background: currentColor; mask: var(--action-icon) center / contain no-repeat;
 }
+h1[data-icon]::before { width: .85em; height: .85em; flex-basis: .85em; }
 .maintenance-action[data-icon] { display: block; text-align: start; }
 .maintenance-action[data-icon]::before { display: none; }
 .maintenance-action[data-icon] > b { display: flex; align-items: center; gap: 8px; }
@@ -2530,6 +2543,12 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .ani-rss-playback-management { flex-wrap: wrap; gap: 6px 12px; }
 .ani-rss-playback-management > small { flex: 1 1 260px; }
 .ani-rss-playback-management .ani-rss-delete { flex: none; margin-left: auto; white-space: nowrap; }
+.subscription-menu { display: inline-block; position: relative; margin-left: auto; font-size: 12px; }
+.subscription-menu > summary { cursor: pointer; list-style: none; white-space: nowrap; color: var(--ink); padding: 4px 0; }
+.subscription-menu > summary::-webkit-details-marker { display: none; }
+.subscription-menu-actions { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 190px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 6px 24px #0002; }
+.subscription-menu-actions .text-button { display: flex; width: 100%; padding: 8px 10px; text-align: left; white-space: normal; }
+.subscription-menu-actions .danger { color: #b33d37; }
 .detail-subtitle-tools { grid-template-columns: max-content minmax(0, 1fr) max-content; grid-template-areas: "label label label" "search candidates apply" "status status status"; }
 .detail-subtitle-tools > b { grid-area: label; }
 .detail-subtitle-tools .search-subtitles { grid-area: search; }

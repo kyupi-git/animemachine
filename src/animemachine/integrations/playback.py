@@ -20,6 +20,7 @@ from typing import Any, Iterable
 from . import ani_rss
 from ..storage import AVAILABLE, status_for_path
 from ..storage import path_policy
+from ..storage.sleep import require_awake, sleeping_path
 
 VIDEO_SUFFIXES = {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ogm"}
 SUBTITLE_SUFFIXES = {".ass", ".ssa", ".srt", ".vtt", ".sup", ".sub"}
@@ -305,7 +306,7 @@ def _under(path: Path, root: Path) -> bool:
 
 
 def authorize_media_path(path: Path | str, config: dict[str, Any]) -> Path:
-    return path_policy.authorize_existing(path, configured_media_roots(config))
+    return path_policy.authorize_existing(path, configured_media_roots(config), config=config)
 
 
 def open_authorized_media(path: Path | str, config: dict[str, Any], *, subtitle_anime_id: int | None = None):
@@ -315,7 +316,7 @@ def open_authorized_media(path: Path | str, config: dict[str, Any], *, subtitle_
         cache_root = state_root / "subtitles" / "external" / str(subtitle_anime_id)
         if path_policy.is_within(cache_root, state_root):
             roots.append(cache_root)
-    return path_policy.open_authorized(path, roots)
+    return path_policy.open_authorized(path, roots, config=config)
 
 
 def _allowed(path: Path, config: dict[str, Any]) -> bool:
@@ -361,7 +362,7 @@ def _scan_preexisting(db: sqlite3.Connection, anime_id: int, config: dict[str, A
             continue
         if not root.is_dir():
             continue
-        for path in root.rglob("*"):
+        for path in path_policy.walk_files(root, config=config):
             key = _path_key(path)
             if key in known or not path.is_file() or not _is_main_video(path):
                 continue
@@ -395,6 +396,7 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
             raise ValueError("anime not found")
         expected_count = int(work["episode_count"]) if work["episode_count"] is not None else None
         rows = list(_existing_rows(db, anime_id, expected_count))
+        rows = [row for row in rows if not sleeping_path(row[0], config)]
         known = {_path_key(row[0]) for row in rows}
         rows.extend(_scan_preexisting(db, anime_id, config, known, expected_count))
     items: list[PlaybackItem] = []
@@ -443,6 +445,7 @@ def _subtitle_for(item: PlaybackItem, anime_id: int,
     if item.locator.source_type != "local":
         return None
     path = item.path
+    require_awake(path)
     cache = directory_cache if directory_cache is not None else {}
     nearby = [path.with_suffix(suffix) for suffix in sorted(SUBTITLE_SUFFIXES)]
 

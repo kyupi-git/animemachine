@@ -116,6 +116,8 @@ def validate_live_library(plan: dict) -> list[str]:
                 continue
             final_path = Path(final_raw)
             try:
+                from ..storage.sleep import require_awake
+                require_awake(final_path)
                 lexists = os.path.lexists(final_path)
                 if final_path.is_symlink():
                     errors.append(f"{label}: finalPath is a symbolic link")

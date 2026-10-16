@@ -171,6 +171,11 @@ class ConfigStore:
 
     def write(self, data: dict[str, Any]) -> None:
         self.validate_for_write(data)
+        try:
+            if json.loads(self.path.read_text(encoding="utf-8-sig")) == data:
+                return
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, raw = tempfile.mkstemp(prefix="config-", suffix=".json", dir=self.path.parent)
         os.close(fd)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
 import threading
 import time
@@ -11,6 +12,13 @@ from typing import TextIO
 
 _PROGRESS_LOCK = threading.RLock()
 _PROGRESS_WIDTHS: dict[int, int] = {}
+_PROGRESS_LOG_TIMES: dict[int, float] = {}
+_PROGRESS_PENDING: dict[int, str] = {}
+
+
+def debug(message: str) -> None:
+    if os.getenv("ANM_LOG_LEVEL", "").strip().upper() == "DEBUG":
+        print(message, flush=True)
 
 
 def _interactive(stream: TextIO) -> bool:
@@ -25,7 +33,18 @@ def progress(message: str, *, final: bool = False, stream: TextIO | None = None)
     target = stream or sys.stdout
     text = str(message)
     if not _interactive(target):
-        print(text, file=target, flush=True)
+        key = id(target)
+        with _PROGRESS_LOCK:
+            now = time.monotonic()
+            if not final and now - _PROGRESS_LOG_TIMES.get(key, -float("inf")) < 5:
+                _PROGRESS_PENDING[key] = text
+                return
+            print(text, file=target, flush=True)
+            _PROGRESS_PENDING.pop(key, None)
+            if final:
+                _PROGRESS_LOG_TIMES.pop(key, None)
+            else:
+                _PROGRESS_LOG_TIMES[key] = now
         return
     key = id(target)
     with _PROGRESS_LOCK:
@@ -44,6 +63,11 @@ def end_progress(stream: TextIO | None = None) -> None:
     """Terminate an active TTY progress line without adding log-only output."""
     target = stream or sys.stdout
     if not _interactive(target):
+        with _PROGRESS_LOCK:
+            pending = _PROGRESS_PENDING.pop(id(target), None)
+            _PROGRESS_LOG_TIMES.pop(id(target), None)
+            if pending is not None:
+                print(pending, file=target, flush=True)
         return
     key = id(target)
     with _PROGRESS_LOCK:
@@ -60,4 +84,4 @@ def stage(name: str) -> Iterator[None]:
         yield
     finally:
         end_progress()
-        print(f"[timing] {name}={time.monotonic() - started:.3f}s", flush=True)
+        debug(f"[timing] {name}={time.monotonic() - started:.3f}s")

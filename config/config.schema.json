@@ -383,7 +383,18 @@
       "type": "object"
     },
     "library": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "sleep": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean", "default": false},
+            "start": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$", "default": "00:00"},
+            "end": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$", "default": "08:00"}
+          },
+          "additionalProperties": false
+        }
+      }
     },
     "naming": {
       "type": "object",

@@ -13,6 +13,24 @@ from animemachine.integrations.season_search import SeasonSearch, movie_search_c
 
 
 class SeasonSearchTests(unittest.TestCase):
+    def test_legacy_resource_conflict_becomes_resumable_and_retry_clears_old_error(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(ani_rss, 'state', return_value={'connection_state': 'ready', 'credentialConfigured': True}):
+            path = Path(folder) / '.season-search-state.json'
+            path.write_text(json.dumps({'state': 'failed', 'from': '2026-10', 'to': '2026-12', 'done': 1,
+                'total': 2, 'failed': 0, 'completedIds': [1], 'error': 'IntegrityError: UNIQUE constraint failed: ani_rss_resource.resource_id'}), encoding='utf-8')
+            store = mock.Mock()
+            store.read.return_value = {}
+            scan = SeasonSearch(Path(folder) / 'catalog.sqlite3', store, mock.Mock(return_value={'items': [{'id': 1}, {'id': 2}]}), contextlib.nullcontext)
+            self.assertEqual('interrupted', scan.status()['state'])
+            self.assertIsNone(scan.status()['error'])
+            with mock.patch.object(ani_rss, 'search', return_value={'found': 1}) as search:
+                scan.start('2026-10', '2026-12', 'en')
+                scan.thread.join(5)
+            self.assertEqual([2], [call.args[1] for call in search.call_args_list])
+            self.assertEqual('complete', scan.status()['state'])
+            self.assertEqual(2, scan.status()['done'])
+            self.assertIsNone(scan.status()['error'])
+
     def test_movie_discovery_covers_one_year_and_excludes_future_or_older_premieres(self):
         query = mock.Mock(return_value={"items": [
             {"id": index, "media_code": media, "raw_date": date, "start_month": month}

@@ -2,6 +2,7 @@
 from .status import (
     AVAILABLE,
     NOT_CONFIGURED,
+    SLEEPING,
     StorageProfile,
     StorageStatus,
     StorageUnavailableError,
@@ -20,6 +21,7 @@ from .status import (
 __all__ = [
     "AVAILABLE",
     "NOT_CONFIGURED",
+    "SLEEPING",
     "StorageProfile",
     "StorageStatus",
     "StorageUnavailableError",
