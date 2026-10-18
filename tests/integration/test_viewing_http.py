@@ -107,8 +107,20 @@ class ViewingHTTPTests(unittest.TestCase):
                 response.read()
         with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
             self.assertIsNone(json.load(response)["episode"])
-        with self.request(url) as response:
-            self.assertEqual(b"synthetic-media", response.read())
+        recorded = threading.Event()
+        original_started = playback.MediaTokenRegistry.started
+
+        def record_access(*args, **kwargs):
+            result = original_started(*args, **kwargs)
+            recorded.set()
+            return result
+
+        # The stream must successfully write bytes before recording playback.
+        # Receiving those bytes can precede the server's SQLite commit.
+        with mock.patch.object(playback.MediaTokenRegistry, "started", record_access):
+            with self.request(url) as response:
+                self.assertEqual(b"synthetic-media", response.read())
+            self.assertTrue(recorded.wait(5), "media access was not recorded")
         with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
             anchor = json.load(response)
         self.assertEqual(1, anchor["episode"])
