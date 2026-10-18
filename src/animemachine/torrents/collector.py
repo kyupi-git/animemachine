@@ -15,6 +15,7 @@ import ssl
 import struct
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 import zlib
 from html import unescape
 from html.parser import HTMLParser
@@ -35,6 +36,7 @@ from .collector_filter import (
 from .collector_state import CollectorState, namespaced_result_key
 from .metainfo import MAX_TORRENT_BYTES, inspect_bytes, read_torrent_file
 from ..network import tls as network_tls, transport as network_transport
+from ..network import registry as network_registry, hedging as network_hedging
 
 
 def _env_bool(name: str, default: str) -> bool:
@@ -385,6 +387,25 @@ def _shared_http_request_once(url, method="GET", data=None, headers=None, timeou
 
 
 def http_request_once(url, method="GET", data=None, headers=None, timeout=TIMEOUT, redirects=5, max_bytes=HTML_MAX_BYTES):
+    parsed = urllib.parse.urlsplit(url)
+    mikan = network_registry.for_service("mikan")
+    if method.upper() == "GET" and parsed.scheme == "https" and parsed.hostname in {
+            urllib.parse.urlsplit(item.base_url).hostname for item in mikan}:
+        path = parsed.path + ("?" + parsed.query if parsed.query else "")
+        torrent = parsed.path.casefold().endswith(".torrent")
+        rss = parsed.path.startswith("/RSS/")
+        def validate(raw, mime):
+            if torrent:
+                inspect_bytes(raw, filename=Path(parsed.path).name)
+            elif rss:
+                if ET.fromstring(raw).tag != "rss":
+                    raise ValueError("invalid Mikan RSS")
+            elif b"/Home/" not in raw or not any(mark in raw.lower() for mark in (b"mikan", "蜜柑".encode())):
+                raise ValueError("invalid Mikan page")
+            return raw, mime
+        (raw, mime), _, final = network_hedging.first_valid(mikan, path, capability="torrent" if torrent else "html",
+            validator=validate, headers=headers, timeout=timeout, max_bytes=max_bytes, hedge_delays=(0, .4, 1.0))
+        return raw, mime, final
     if not PROXY_ENABLED:
         return _shared_http_request_once(url, method=method, data=data, headers=headers, timeout=timeout, max_bytes=max_bytes)
     try:
@@ -561,7 +582,7 @@ def fetch_mikan(term, page):
         url = "https://mikanani.me/Home/Search?" + urllib.parse.urlencode(params)
     else:
         url = "https://mikanani.me/Home/Classic" if page == 1 else f"https://mikanani.me/Home/Classic/{page}"
-    text, _ = get_text(url)
+    text, final = get_text(url)
     items = []
     for row in rows(text):
         aa = anchors(row)
@@ -576,6 +597,29 @@ def fetch_mikan(term, page):
             "details_url": absolute("https://mikanani.me/", a["href"]),
             "download_url": absolute("https://mikanani.me/", downloads[0]["href"]),
         })
+    # Search returns title cards on current Mikan, rather than the Classic
+    # release table. Resolve each title through its public RSS feed.
+    if term and not items and page == 1:
+        ids = list(dict.fromkeys(re.findall(r'/Home/Bangumi/(\d+)', text)))[:4]
+        origin = urllib.parse.urlunsplit((*urllib.parse.urlsplit(final)[:2], "", "", ""))
+        failures = []
+        for identifier in ids:
+            try:
+                feed, _, feed_url = http_request(origin + "/RSS/Bangumi?bangumiId=" + identifier)
+                root = ET.fromstring(feed)
+                for entry in root.findall("./channel/item")[:40]:
+                    title = entry.findtext("title") or ""
+                    link = entry.findtext("link") or ""
+                    enclosure = entry.find("enclosure")
+                    download = enclosure.get("url", "") if enclosure is not None else ""
+                    if title and download:
+                        items.append({"id": "mikan:" + (link or download), "title": title,
+                                      "details_url": urllib.parse.urljoin(feed_url, link),
+                                      "download_url": urllib.parse.urljoin(feed_url, download)})
+            except (OSError, RuntimeError, ValueError, httpx.HTTPError, ET.ParseError) as exc:
+                failures.append(exc)
+        if ids and len(failures) == len(ids):
+            raise failures[-1]
     return items, html_has_page(text, page + 1)
 
 

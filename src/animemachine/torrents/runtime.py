@@ -357,6 +357,55 @@ def sync_overlay(metadata_db: Path, runtime_db: Path, *, offline_metadata: Path 
         return _sync_overlay_connections(product, runtime, offline_metadata=offline_metadata)
 
 
+def _managed_snapshot(db: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+    """Keep product-owned actions separate from the replaceable scanner index."""
+    result = {}
+    for table in ("runtime_submission", "runtime_torrent", "runtime_torrent_file", "runtime_file_map", "runtime_torrent_work"):
+        result[table] = [dict(row) for row in db.execute(
+            f"SELECT * FROM {table} WHERE info_hash IN (SELECT info_hash FROM runtime_submission)")]
+    result["runtime_work"] = [dict(row) for row in db.execute("""SELECT * FROM runtime_work WHERE private_work_id IN (
+        SELECT tw.private_work_id FROM runtime_torrent_work tw JOIN runtime_submission s USING(info_hash))""")]
+    result["runtime_asset"] = [dict(row) for row in db.execute("""SELECT * FROM runtime_asset WHERE owner_path IN (
+        SELECT w.target_unc FROM runtime_work w JOIN runtime_torrent_work tw USING(private_work_id)
+        JOIN runtime_submission s USING(info_hash))""")]
+    return result
+
+
+def _restore_managed_snapshot(db: sqlite3.Connection, snapshot: dict[str, list[dict[str, Any]]]) -> None:
+    def insert(table: str, row: dict[str, Any], *, replace: bool = False) -> None:
+        columns = list(row)
+        db.execute(f"INSERT OR {'REPLACE' if replace else 'IGNORE'} INTO {table}({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
+                   tuple(row[key] for key in columns))
+
+    for table in ("runtime_torrent", "runtime_torrent_file"):
+        for row in snapshot[table]:
+            insert(table, row)
+    identities = {}
+    next_id = int(db.execute("SELECT COALESCE(MAX(private_work_id),0)+1 FROM runtime_work").fetchone()[0])
+    for row in snapshot["runtime_work"]:
+        current = db.execute("SELECT private_work_id,anime_id FROM runtime_work WHERE target_unc=?", (row["target_unc"],)).fetchone()
+        if current and int(current["anime_id"]) != int(row["anime_id"]):
+            raise RuntimeError("managed library path changed title identity")
+        new_id = int(current["private_work_id"]) if current else next_id
+        if not current:
+            next_id += 1
+            insert("runtime_work", {**row, "private_work_id": new_id})
+        db.execute("UPDATE runtime_work SET library_state=?,origin='managed_submission',updated_at=? WHERE private_work_id=?",
+                   (row["library_state"], row["updated_at"], new_id))
+        identities[int(row["private_work_id"])] = new_id
+    for row in snapshot["runtime_torrent_work"]:
+        new_id = identities[int(row["private_work_id"])]
+        db.execute("DELETE FROM runtime_torrent_work WHERE info_hash=? AND anime_id=? AND private_work_id<>?",
+                   (row["info_hash"], row["anime_id"], new_id))
+        insert("runtime_torrent_work", {**row, "private_work_id": new_id}, replace=True)
+    for table in ("runtime_submission", "runtime_file_map"):
+        for row in snapshot[table]:
+            insert(table, row, replace=True)
+    for row in snapshot["runtime_asset"]:
+        # Scanner-local numeric IDs can be reused by another asset.
+        insert("runtime_asset", {key: value for key, value in row.items() if key != "asset_id"})
+
+
 def _sync_overlay_connections(product: sqlite3.Connection, runtime: sqlite3.Connection, *,
                               offline_metadata: Path | None = None) -> dict[str, int]:
     stamp = utcnow()
@@ -435,6 +484,7 @@ def _sync_overlay_connections(product: sqlite3.Connection, runtime: sqlite3.Conn
     archive_start_by_id = {int(row[0]): str(row[1] or "") for row in product.execute("SELECT id,start_month FROM anime_work")}
     with product:
         product.execute("UPDATE download_plan SET state='stale',updated_at=? WHERE state='preview'", (stamp,))
+        managed = _managed_snapshot(product)
         for table in ("runtime_asset", "runtime_submission", "runtime_torrent_summary", "runtime_file_map", "runtime_torrent_file", "runtime_torrent_work", "runtime_work", "runtime_torrent", "runtime_review"):
             product.execute(f"DELETE FROM {table}")
         product.executemany("INSERT INTO runtime_work VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", mapped_rows)
@@ -500,6 +550,7 @@ def _sync_overlay_connections(product: sqlite3.Connection, runtime: sqlite3.Conn
                  row["source_info_hash"], row["source_file_index"], row["source_torrent_path"], row["replacement_state"],
                  row["evidence_json"], row["verified_at"],)
                 for row in runtime.execute("SELECT * FROM asset_provenance ORDER BY asset_id")))
+        _restore_managed_snapshot(product, managed)
         product.execute("""INSERT INTO runtime_torrent_summary
             SELECT t.info_hash,COALESCE(f.manifest_text,''),COALESCE(f.manifest_count,0),
                    COALESCE(l.link_count,0),COALESCE(m.map_count,0),
@@ -515,9 +566,9 @@ def _sync_overlay_connections(product: sqlite3.Connection, runtime: sqlite3.Conn
             LEFT JOIN (SELECT info_hash,COUNT(*) map_count FROM runtime_file_map GROUP BY info_hash) m USING(info_hash)""")
         metadata = {
             "runtime_synced_at": stamp,
-            "runtime_work_count": str(len(mapped_rows)),
+            "runtime_work_count": str(product.execute("SELECT COUNT(*) FROM runtime_work").fetchone()[0]),
             "runtime_unmapped_work_count": str(len(reviews)),
-            "runtime_torrent_count": str(torrent_count),
+            "runtime_torrent_count": str(product.execute("SELECT COUNT(*) FROM runtime_torrent").fetchone()[0]),
             "runtime_verified_link_count": str(product.execute("SELECT COUNT(*) FROM runtime_torrent_work").fetchone()[0]),
             "runtime_manifest_file_count": str(product.execute("SELECT COUNT(*) FROM runtime_torrent_file").fetchone()[0]),
             "runtime_submission_count": str(product.execute("SELECT COUNT(*) FROM runtime_submission").fetchone()[0]),
@@ -528,8 +579,8 @@ def _sync_overlay_connections(product: sqlite3.Connection, runtime: sqlite3.Conn
         watch_matches = refresh_watch_matches(product)
     result = {
         "metadataWorks": product.execute("SELECT COUNT(*) FROM anime_work").fetchone()[0],
-        "mappedRuntimeWorks": len(mapped_rows), "unmappedRuntimeWorks": len(reviews),
-        "torrents": torrent_count, "verifiedLinks": product.execute("SELECT COUNT(*) FROM runtime_torrent_work").fetchone()[0],
+        "mappedRuntimeWorks": product.execute("SELECT COUNT(*) FROM runtime_work").fetchone()[0], "unmappedRuntimeWorks": len(reviews),
+        "torrents": product.execute("SELECT COUNT(*) FROM runtime_torrent").fetchone()[0], "verifiedLinks": product.execute("SELECT COUNT(*) FROM runtime_torrent_work").fetchone()[0],
         "manifestFiles": product.execute("SELECT COUNT(*) FROM runtime_torrent_file").fetchone()[0],
         "submissions": product.execute("SELECT COUNT(*) FROM runtime_submission").fetchone()[0],
         "watchMatches": watch_matches,
@@ -1286,6 +1337,32 @@ def recoverable_plan_submissions(db_path: Path) -> list[dict[str, Any]]:
                 continue
             recovered.append({"planId": row["plan_id"], "state": row["state"], "payload": payload})
         return recovered
+
+
+def record_completed_media(db: sqlite3.Connection, info_hash: str) -> int:
+    """Publish completed additions from their approved paths, without disk probes."""
+    recorded = 0
+    for row in db.execute("SELECT plan_json FROM download_plan WHERE state='submitted' ORDER BY updated_at DESC"):
+        payload = json.loads(row[0])
+        jobs = [job for job in payload.get("jobs", []) if job.get("infoHash") == info_hash]
+        if not jobs:
+            continue
+        for job in jobs:
+            for item in job.get("files", []):
+                if item.get("action") not in {"add_missing", "add_coexisting"} or not item.get("selected"):
+                    continue
+                owner, final = str(item.get("ownerPath") or ""), str(item.get("finalPath") or "")
+                if not owner or not final or not _collision_key(final).startswith(_collision_key(owner).rstrip('/') + '/'):
+                    continue
+                if not db.execute("SELECT 1 FROM runtime_work WHERE target_unc=?", (owner,)).fetchone():
+                    continue
+                recorded += db.execute("""INSERT OR IGNORE INTO runtime_asset(
+                    final_path,owner_path,bytes,source_info_hash,source_file_index,replacement_state,evidence_json,verified_at)
+                    VALUES(?,?,?,?,?,'current',?,?)""",
+                    (final, owner, int(item["length"]), info_hash, int(item["index"]),
+                     json.dumps({"basis": "completed_approved_download", "planId": payload["planId"]}), utcnow())).rowcount
+        break
+    return recorded
 
 
 def finish_plan_submission(db_path: Path, plan_id: str, *, success: bool, error: str | None = None,

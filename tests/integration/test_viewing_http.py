@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import shutil
+import sqlite3
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from unittest import mock
+
+from animemachine.catalog import service
+from animemachine.config.policy import ConfigStore
+from animemachine.integrations import playback
+
+
+class ViewingHTTPTests(unittest.TestCase):
+    authentication = False
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.database = self.root / "catalog.sqlite3"
+        shutil.copyfile(Path(__file__).parents[1] / "fixtures/anime-catalog.sqlite3", self.database)
+        self.env = mock.patch.dict(os.environ, {"ANM_AUTH_ENABLED": str(self.authentication).lower(),
+            "ANM_AUTH_DB": str(self.root / "auth.sqlite3"), "ANM_ADMIN_USERNAME": "admin", "ANM_ADMIN_PASSWORD": "episode-test-040"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.config = ConfigStore(self.root / "config.json", service.EXAMPLE_CONFIG)
+        cfg = self.config.read()
+        cfg["deployment"]["libraryUncRoot"] = str(self.root)
+        self.config.write(cfg)
+        handler = service.make_handler(self.database, self.config, start_warmup=False)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.close_server)
+        self.base = f"http://127.0.0.1:{self.server.server_port}"
+        self.headers = {}
+        if self.authentication:
+            with self.request("/api/auth/login", {"username": "admin", "password": "episode-test-040"}) as response:
+                self.headers = {"Cookie": response.headers["Set-Cookie"].split(";", 1)[0],
+                                "X-CSRF-Token": json.load(response)["csrfToken"]}
+        with contextlib.closing(sqlite3.connect(self.database)) as db:
+            self.anime_id, self.bgm_id = db.execute("SELECT id,bgm_id FROM anime_work ORDER BY id LIMIT 1").fetchone()
+
+    def close_server(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(3)
+
+    def request(self, path, body=None, method=None, headers=None):
+        request = urllib.request.Request(path if path.startswith("http") else self.base + path,
+            data=json.dumps(body).encode() if body is not None else None,
+            method=method, headers={"Content-Type": "application/json", **self.headers, **(headers or {})})
+        return urllib.request.urlopen(request, timeout=10)
+
+    def test_radar_unwatched_highlight_tracks_account_playback_not_detail_clicks(self):
+        def radar():
+            with self.request('/api/anime?radar=1&limit=all') as response:
+                return next(row for row in json.load(response)['items'] if row['id'] == self.anime_id)
+        with mock.patch.object(playback, 'latest_cached_episodes', return_value={self.anime_id: 3}):
+            self.assertTrue(radar()['hasUnwatched'])
+            with self.request(f'/api/anime/{self.anime_id}') as response:
+                response.read()
+            self.assertTrue(radar()['hasUnwatched'])
+            with self.request(f'/api/anime/{self.anime_id}/viewing') as response:
+                record = json.load(response)
+            with self.request(f'/api/anime/{self.anime_id}/viewing', {'episode': 2, 'revision': record['revision'], 'bgmId': self.bgm_id}) as response:
+                record = json.load(response)
+            self.assertTrue(radar()['hasUnwatched'])
+            with self.request(f'/api/anime/{self.anime_id}/viewing', {'episode': 3, 'revision': record['revision'], 'bgmId': self.bgm_id}) as response:
+                response.read()
+            self.assertFalse(radar()['hasUnwatched'])
+            self.assertEqual(3, radar()['viewing']['episode'])
+
+    def test_viewing_failure_keeps_radar_titles_available(self):
+        with mock.patch.object(playback, 'latest_cached_episodes', side_effect=sqlite3.DatabaseError('unavailable')):
+            with self.request('/api/anime?radar=1&limit=all') as response:
+                payload = json.load(response)
+        self.assertTrue(payload['items'])
+        self.assertTrue(payload['viewingUnavailable'])
+        self.assertFalse(any(row['hasUnwatched'] for row in payload['items']))
+
+    def test_head_subtitles_playlist_do_not_mark_played_but_media_get_does(self):
+        media = self.root / "Show - 01.mp4"
+        media.write_bytes(b"synthetic-media")
+        subtitle = media.with_suffix(".srt")
+        subtitle.write_bytes(b"synthetic-subtitle")
+        item = playback.PlaybackItem(playback.MediaLocator.local(media, media.stat().st_size), "Ep01", 1.0, media.stat().st_size, "managed")
+        with mock.patch.object(playback, "collect_items", return_value=[item]):
+            with self.request(f"/api/anime/{self.anime_id}/playback/handoff", {"player": "copy"}) as response:
+                handoff = json.load(response)
+        with self.request(handoff["playlistUrl"]) as response:
+            body = response.read().decode()
+        url = next(line for line in body.splitlines() if line.startswith("http"))
+        sub = next(line.split("=", 1)[1] for line in body.splitlines() if line.startswith("#EXTVLCOPT"))
+        for path, method in ((url, "HEAD"), (sub, "GET")):
+            with self.request(path, method=method) as response:
+                response.read()
+        with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
+            self.assertIsNone(json.load(response)["episode"])
+        with self.request(url) as response:
+            self.assertEqual(b"synthetic-media", response.read())
+        with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
+            anchor = json.load(response)
+        self.assertEqual(1, anchor["episode"])
+        # A later stream retry cannot undo a user's explicit correction.
+        with self.request(f"/api/anime/{self.anime_id}/viewing", {"episode": 0, "revision": anchor["revision"], "bgmId": self.bgm_id}) as response:
+            self.assertEqual(0, json.load(response)["episode"])
+        with self.request(url) as response:
+            response.read()
+        with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
+            self.assertEqual(0, json.load(response)["episode"])
+
+    def test_stable_identity_survives_catalog_id_change_and_stale_form_is_rejected(self):
+        with self.request(f"/api/anime/{self.anime_id}/viewing", {"episode": 4, "revision": 0, "bgmId": self.bgm_id}) as response:
+            self.assertEqual(4, json.load(response)["episode"])
+        with contextlib.closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("UPDATE anime_work SET id=id+1000")
+        new_id = self.anime_id + 1000
+        with self.request(f"/api/anime/{new_id}/viewing") as response:
+            self.assertEqual(4, json.load(response)["episode"])
+        with self.request("/api/viewing") as response:
+            self.assertEqual(new_id, json.load(response)["items"][0]["animeId"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request(f"/api/anime/{new_id}/viewing", {"episode": 9, "revision": 1, "bgmId": self.bgm_id + 1})
+        self.assertEqual(409, error.exception.code)
+        error.exception.close()
+
+    def test_unknown_event_capability_does_not_write_and_bad_season_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/playback/started/unknown", {"event": 1})
+        self.assertEqual(404, error.exception.code)
+        error.exception.close()
+
+    def test_non_object_requests_fail_cleanly_without_breaking_other_pages(self):
+        paths = [f'/api/anime/{self.anime_id}/playback/handoff', '/api/playback/catchup',
+                 f'/api/anime/{self.anime_id}/viewing', '/api/images/refresh']
+        for path in paths:
+            for payload in ([], None, True, 'invalid'):
+                with self.subTest(path=path, payload=payload):
+                    request = urllib.request.Request(self.base + path, data=json.dumps(payload).encode(),
+                        headers={'Content-Type': 'application/json', **self.headers})
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        urllib.request.urlopen(request, timeout=5)
+                    with error.exception as response:
+                        self.assertEqual(400, response.status)
+                        self.assertEqual('JSON object required', json.load(response)['error'])
+        with self.request('/api/health') as response:
+            self.assertTrue(json.load(response)['ok'])
+
+    def test_downloaded_precise_playlist_reads_current_resume_and_player_restart_keeps_recording(self):
+        media = self.root / "Show - 01.mp4"
+        media.write_bytes(b"synthetic-media")
+        item = playback.PlaybackItem(playback.MediaLocator.local(media, media.stat().st_size), "Ep01", 1.0, media.stat().st_size, "managed", self.bgm_id)
+        with self.request(f"/api/anime/{self.anime_id}/viewing", {"episode": 1, "positionMs": 14000, "revision": 0, "bgmId": self.bgm_id}) as response:
+            response.read()
+        with mock.patch.object(playback, "collect_items", return_value=[item]):
+            with self.request(f"/api/anime/{self.anime_id}/playback/handoff", {"player": "copy", "enhanced": True}) as response:
+                handoff = json.load(response)
+        with self.request(handoff["playlistUrl"]) as response:
+            media_url = next(line for line in response.read().decode().splitlines() if line.startswith("http"))
+        self.assertTrue(media_url.endswith("Show%20-%2001.mp4?anm=1"))
+        token = urllib.parse.urlparse(media_url).path.split("/")[4]
+        manifest_url = f"/api/playback/item/{token}/episode.anm"
+        with self.request(manifest_url) as response:
+            manifest = json.load(response)
+        self.assertEqual(9000, manifest["resumeMs"])
+        self.assertEqual(f"Ep01 [ANM:{token[:12]}]", manifest["title"])
+        # A player without the optional extension opens the same playlist entry
+        # as ordinary video, including range requests, instead of parsing JSON.
+        with self.request(media_url, headers={"Range": "bytes=0-8"}) as response:
+            self.assertEqual(206, response.status)
+            self.assertEqual("video/mp4", response.headers["Content-Type"])
+            self.assertEqual(b"synthetic", response.read())
+        for instance, event, position, expected in (("first", 9, 15000, True), ("restart", 1, 17000, True), ("first", 10, 16000, False)):
+            with self.request(manifest["eventUrl"], {"event": event, "positionMs": position, "durationMs": 20000, "instance": instance}) as response:
+                self.assertEqual(expected, json.load(response)["recorded"])
+        with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
+            self.assertEqual(17000, json.load(response)["positionMs"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request(manifest["eventUrl"], {"event": 2, "positionMs": -1, "instance": "restart"})
+        self.assertEqual(400, error.exception.code)
+        error.exception.close()
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/playback/catchup", {"from": "2026-02", "to": "2026-05"})
+        self.assertEqual(400, error.exception.code)
+        error.exception.close()
+
+
+class AccountViewingHTTPTests(ViewingHTTPTests):
+    authentication = True
+
+    def test_account_identity_comes_from_session_and_viewer_can_correct_own_record(self):
+        with self.request("/api/auth/users", {"username": "viewer", "password": "viewing-test-040", "role": "user"}) as response:
+            response.read()
+        with self.request(f"/api/anime/{self.anime_id}/viewing", {"episode": 4, "revision": 0, "bgmId": self.bgm_id}) as response:
+            response.read()
+        with self.request("/api/auth/login", {"username": "viewer", "password": "viewing-test-040"}) as response:
+            self.headers = {"Cookie": response.headers["Set-Cookie"].split(";", 1)[0],
+                            "X-CSRF-Token": json.load(response)["csrfToken"]}
+        with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
+            self.assertIsNone(json.load(response)["episode"])
+        with self.request(f"/api/anime/{self.anime_id}/viewing", {"episode": 2, "revision": 0, "bgmId": self.bgm_id, "userId": 1}) as response:
+            self.assertEqual(2, json.load(response)["episode"])
+        # Folder paths are administrative information, including cached results.
+        for method, body in (("GET", None), ("POST", {})):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request("/api/library/layout-preview", body, method)
+            self.assertEqual(403, error.exception.code)
+            error.exception.close()
+        with self.request("/api/auth/login", {"username": "admin", "password": "episode-test-040"}) as response:
+            self.headers = {"Cookie": response.headers["Set-Cookie"].split(";", 1)[0],
+                            "X-CSRF-Token": json.load(response)["csrfToken"]}
+        with self.request(f"/api/anime/{self.anime_id}/viewing") as response:
+            self.assertEqual(4, json.load(response)["episode"])
+
+
+if __name__ == "__main__":
+    unittest.main()

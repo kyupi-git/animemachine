@@ -33,10 +33,10 @@ Issues = "https://github.com/kyupi-git/animemachine/issues"
 
 [project.optional-dependencies]
 test = [
-  "coverage==7.16.1",
-  "mypy==1.18.2",
+  "coverage==7.16.2",
+  "mypy==2.4.0",
   "pip-audit==2.9.0",
-  "ruff==0.16.9",
+  "ruff==0.17.0",
 ]
 
 [project.scripts]
@@ -51,7 +51,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-animemachine = ["web/static/*", "resources/*.json"]
+animemachine = ["web/static/*", "resources/*.json", "resources/potplayer/*"]
 
 [tool.setuptools.dynamic]
 version = {file = ["VERSION"]}

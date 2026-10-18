@@ -16,6 +16,7 @@ def norm(value: str | None) -> str:
 
 
 def queries(name: str, partial: bool = False) -> list[str]:
+    name = unicodedata.normalize("NFKC", name).translate(str.maketrans({"【": "[", "】": "]"}))
     values: list[str] = []
     remainder = re.sub(r"^(?:\[[^\]]+\]\s*)+", "", name).strip()
     remainder = re.split(
@@ -46,7 +47,7 @@ def queries(name: str, partial: bool = False) -> list[str]:
         flags=re.I,
     )[0].strip()
     candidates = [remainder, descriptive_head]
-    candidates.extend(re.split(r"\s*(?:_|\||｜)\s*", remainder))
+    candidates.extend(re.split(r"\s+/\s+|\s*(?:_|\||｜)\s*", remainder))
     for candidate in candidates:
         candidate = re.split(
             r"\s*[\[(](?:BD\b|BD[ ._-]*RIP|Ma\d|Hi\d|1080|720|2160|x26|HEVC|AVC|FLAC|AAC|YUV)",
@@ -54,9 +55,9 @@ def queries(name: str, partial: bool = False) -> list[str]:
             maxsplit=1,
             flags=re.I,
         )[0].strip(" -_")
-        if len(norm(candidate)) >= 3:
+        if len(norm(candidate)) >= 2:
             values.append(candidate.strip())
     for group in re.findall(r"\[([^\[\]]+)\]", name):
-        if len(norm(group)) >= 3 and not TECH.search(group):
+        if len(norm(group)) >= 3 and not norm(group).isdecimal() and not TECH.search(group):
             values.append(group.strip())
     return list(dict.fromkeys(values))

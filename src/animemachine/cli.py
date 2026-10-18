@@ -464,8 +464,8 @@ def background_bootstrap(shell_created: bool, catalog_ready: threading.Event | N
             sync_runtime(scan_pool=True, sync_ani_rss=False)
         with catalog.background_task_lease("metadata") as allowed:
             if allowed:
-                with catalog.DATABASE_MAINTENANCE_LOCK:
-                    metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read())
+                metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read(),
+                                          operation_lock=catalog.DATABASE_MAINTENANCE_LOCK)
     except Exception as exc:
         sync_status("deferred", state="error", details={"errorType": type(exc).__name__})
         print(f"[bootstrap] Deferred: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
@@ -603,8 +603,8 @@ def periodic_sync(stop: threading.Event, bootstrap_finished: threading.Event | N
                 sync_runtime(scan_pool=True, sync_ani_rss=False)
             with catalog.background_task_lease("metadata", stop_event=stop) as allowed:
                 if allowed:
-                    with catalog.DATABASE_MAINTENANCE_LOCK:
-                        metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read())
+                    metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read(),
+                                              operation_lock=catalog.DATABASE_MAINTENANCE_LOCK)
             last_run = time.monotonic()
         except Exception as exc:
             sync_status("deferred", state="error", details={"errorType": type(exc).__name__})

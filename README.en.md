@@ -4,7 +4,7 @@
 
 AnimeMachine is an anime library manager with Chinese, English, and Japanese interfaces. It combines title metadata, media files, and subscription progress, with support for search, seasonal subscriptions, collection management, series relationships, and playback. It runs on Windows, Linux, macOS, and Docker.
 
-![Browse covers and see resource availability and collection status](docs/images/library-overview.png)
+![Browse covers and see resource availability and collection status](docs/images/library-overview.en.png)
 
 ## Features
 
@@ -12,8 +12,18 @@ AnimeMachine is an anime library manager with Chinese, English, and Japanese int
 - **Collection management**: identify existing media, compare Torrent releases with local files, and create plans to fill gaps. Organize folders by work and series.
 - **Title search**: filter by year, format, studio, theme, or collection status, and search by Chinese, English, or Japanese names.
 - **Series relationships**: view prequels, sequels, movies, and side stories in the relationship graph.
-- **Playback and subtitles**: select a starting episode, send a season playlist to VLC, PotPlayer, or another player, and manage external subtitles.
+- **Playback and subtitles**: send playlists to VLC, PotPlayer, or another player, keep episode records per account, and continue this season’s TV titles together. PotPlayer can save playback positions and resume automatically. External subtitles are supported.
 - **Service connections**: connect existing qBittorrent, Ani-RSS, or NAS media folders. The interface supports Chinese, English, Japanese, and light or dark themes.
+
+![Release radar: seasonal updates, subscriptions, and continue watching](docs/images/release-radar.en.png)
+
+## Watch this week's episodes in one playlist
+
+Click **Continue watching** in Release radar to combine episodes from multiple TV titles. Each title starts with the last episode you played and continues to its latest playable episode. With the PotPlayer extension installed, playback also resumes from the saved position.
+
+![Actual playback in PotPlayer, with several seasonal titles in the playlist sidebar](docs/images/potplayer-weekly.en.png)
+
+Title details and the radar share your viewing records, which you can correct at any time. See [Continue watching and playback](docs/guide.en.md#daily-use) for the steps.
 
 ## Quick start
 

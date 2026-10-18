@@ -202,7 +202,7 @@ class ReleaseContractTests(unittest.TestCase):
         fourth = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", third)
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", fourth)
-        self.assertIn("wushuo894/ani-rss:v3.2.39", fourth)
+        self.assertIn("wushuo894/ani-rss:v3.2.51", fourth)
         self.assertNotIn(":latest", third + fourth)
         advanced = (root / "torrent-collector.advanced.env.example").read_text(encoding="utf-8")
         self.assertIn("TORRENT_COLLECTOR_HISTORY_ENABLED", advanced)

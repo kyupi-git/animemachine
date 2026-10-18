@@ -305,7 +305,7 @@ def _validate(data: Any) -> dict[str, Any]:
     for key, default in (("start", "00:00"), ("end", "08:00")):
         if not isinstance(sleep.get(key, default), str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", sleep.get(key, default)):
             raise ConfigError(f"library.sleep.{key} must be HH:MM")
-    if sleep.get("start", "00:00") == sleep.get("end", "08:00"):
+    if sleep.get("enabled", False) and sleep.get("start", "00:00") == sleep.get("end", "08:00"):
         raise ConfigError("library.sleep start and end must differ")
     download_client = data["components"].get("downloadClient")
     if not isinstance(download_client, dict):

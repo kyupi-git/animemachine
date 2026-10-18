@@ -23,6 +23,25 @@ DB = Path(__file__).resolve().parents[1] / "fixtures" / "anime-catalog.sqlite3"
 
 
 class CatalogTests(unittest.TestCase):
+    def test_live_wal_catalog_publication_keeps_readers_and_later_writes_consistent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'catalog.sqlite3'
+            with contextlib.redirect_stdout(None):
+                catalog.write_database(path, [], {'name': 'old.zip'})
+            with contextlib.closing(sqlite3.connect(path)) as reader:
+                reader.execute('PRAGMA journal_mode=WAL')
+                reader.execute("UPDATE metadata SET value='before' WHERE key='built_at'")
+                reader.commit()
+                with contextlib.redirect_stdout(None):
+                    catalog.write_database(path, [], {'name': 'new.zip'})
+                self.assertEqual('new.zip', reader.execute("SELECT value FROM metadata WHERE key='archive_name'").fetchone()[0])
+                reader.execute("UPDATE metadata SET value='after' WHERE key='built_at'")
+                reader.commit()
+                with contextlib.closing(sqlite3.connect(path)) as fresh:
+                    self.assertEqual('new.zip', fresh.execute("SELECT value FROM metadata WHERE key='archive_name'").fetchone()[0])
+                    self.assertEqual('after', fresh.execute("SELECT value FROM metadata WHERE key='built_at'").fetchone()[0])
+                    self.assertEqual('ok', fresh.execute('PRAGMA integrity_check').fetchone()[0])
+
     def test_legacy_serve_and_demo_use_current_web_defaults(self):
         parser = catalog.parser()
         serve = parser.parse_args(["serve"])
@@ -1460,7 +1479,9 @@ class CatalogTests(unittest.TestCase):
                 CREATE TABLE anime_work(
                     id INTEGER PRIMARY KEY,bgm_id INTEGER,title_ja TEXT,start_month TEXT,directory_date TEXT,
                     physical_role TEXT DEFAULT 'work',physical_owner_anime_id INTEGER
+                    ,original_language TEXT DEFAULT 'ja',media_code TEXT DEFAULT 'tv',summary TEXT
                 );
+                CREATE TABLE anime_title(anime_id INTEGER,language TEXT,title TEXT,title_type TEXT,source TEXT);
                 CREATE TABLE anime_relation(anime_id INTEGER,related_bgm_id INTEGER,relation_code TEXT);
                 CREATE TABLE anime_series_component(anime_id INTEGER,component_id INTEGER);
             """)

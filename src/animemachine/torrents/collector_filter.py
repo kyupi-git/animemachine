@@ -109,8 +109,9 @@ class FilterDecision:
 class CatalogMatcher:
     """Read-only exact matcher against AnimeMachine's Bangumi Archive catalog."""
 
-    def __init__(self, path: Path | None):
+    def __init__(self, path: Path | None, *, snapshot: bool = False):
         self.path = path
+        self._snapshot = snapshot
         self._generation: str | None = None
         self._by_title: dict[str, set[int]] = {}
         self._works: dict[int, tuple[int | None, str | None]] = {}
@@ -127,6 +128,8 @@ class CatalogMatcher:
         return "|".join(parts)
 
     def _refresh(self) -> str | None:
+        if self._snapshot and self._generation:
+            return self._generation
         path = self.path
         if not path or not path.is_file():
             self._generation = None

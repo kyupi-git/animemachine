@@ -46,7 +46,7 @@ class LibrarySleepTests(unittest.TestCase):
         self.assertFalse(sleep.sleeping(self.config))
 
     def test_invalid_schedules_are_rejected_without_changing_legacy_config(self):
-        for value in [None, [], {'enabled': 'yes'}, {'start': '24:00'}, {'end': '7:00'}, {'start': '08:00', 'end': '08:00'}]:
+        for value in [None, [], {'enabled': 'yes'}, {'start': '24:00'}, {'end': '7:00'}, {'enabled': True, 'start': '08:00', 'end': '08:00'}]:
             with self.subTest(value=value):
                 invalid = copy.deepcopy(self.config)
                 invalid['library']['sleep'] = value
@@ -54,6 +54,14 @@ class LibrarySleepTests(unittest.TestCase):
                     _validate(invalid)
         del self.config['library']['sleep']
         self.assertIs(self.config, _validate(self.config))
+
+    def test_disabled_schedule_does_not_block_other_settings(self):
+        self.config['library']['sleep'] = {'enabled': False, 'start': '08:00', 'end': '08:00'}
+        self.assertIs(self.config, _validate(self.config))
+        self.assertFalse(sleep.sleeping(self.config))
+        self.config['library']['sleep']['enabled'] = True
+        with self.assertRaises(ConfigError):
+            _validate(self.config)
 
     def test_sleep_overrides_cached_available_status_without_disk_access(self):
         with mock.patch.object(sleep, 'sleeping', return_value=False), mock.patch.object(status, 'probe_path', return_value=(status.AVAILABLE, '')):

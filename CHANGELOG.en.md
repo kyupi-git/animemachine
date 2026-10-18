@@ -5,6 +5,28 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.4.0
+
+0.4.0 adds Continue watching and per-title Torrent search, with faster startup and details, refined folder naming, and clearer maintenance actions. Existing settings, media, and cover caches carry over when you upgrade.
+
+### Added and improved
+
+- Improved Release radar: add row-height covers before titles and combine this season's subscribed TV titles and TV titles with media into one playlist, starting with each title's last played episode and continuing to its latest playable episode.
+- Improved viewing records: title details and the radar share account-based records, with starting-episode correction, reset, undo, and an optional 64-bit PotPlayer extension that saves playback positions and resumes five seconds earlier. Copied and downloaded playlists retain title and episode names. Playback also works without the extension.
+- Improved resource discovery: with qBittorrent configured, search for Torrents from title details, follow progress, and use the existing release selection, plan preview, and download confirmation flow.
+- Improved loading and layout: skip repeated full-catalog index calculations and display title details before loading playback files, prefetch adjacent pages, and reserve connections for navigation; align card tops and bottoms, hide “Not started,” highlight unwatched episodes per account, align radar controls, refine narrow layouts, and replace the home icon.
+- Improved folder maintenance: add a read-only change preview, standardize punctuation in new folder titles, use available Japanese edition titles, and place explicitly linked companion shorts under their main titles.
+- Improved documentation: add illustrated connection, subscription, playback, and viewing-record steps in three languages, with actual multi-title playback on the project home page.
+
+### Fixed
+
+- Fixed subscription folder creation being labeled as a move in history.
+- Fixed scanning one Torrent folder incorrectly marking resources in other folders as missing.
+- Fixed missed releases caused by Mikan search changes and Chinese brackets, added trusted alternate sources, and prevented background metadata repair and repeated relation calculations from delaying resource mapping.
+- Fixed titles remaining in the downloading state after a qBittorrent task was removed, preventing another release from being selected; known media and submitted download records are retained across rescans and restarts.
+- Fixed initial catalog publication failing on an open database or mixing old and new data.
+- Fixed stale search and playback results reopening closed views or launching an earlier request. Prevent duplicate playback requests, reject malformed request bodies, disable stale subtitle selections during searches, and allow settings to save while quiet hours are off.
+
 ## 0.3.4
 
 0.3.4 improves update ordering, adds local library quiet hours and Ani-RSS subscription controls, and retains existing settings, media, and cover caches when upgrading.

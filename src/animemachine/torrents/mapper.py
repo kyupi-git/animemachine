@@ -45,6 +45,11 @@ def target_relative(path: str, top: str | None, child_dir: str | None) -> str:
 
 
 def relation_component(meta: sqlite3.Connection, anime_id: int) -> list[sqlite3.Row]:
+    if meta.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_series_component'").fetchone():
+        component = meta.execute("SELECT component_id FROM anime_series_component WHERE anime_id=?", (anime_id,)).fetchone()
+        if component:
+            return list(meta.execute("""SELECT w.* FROM anime_work w JOIN anime_series_component c ON c.anime_id=w.id
+                WHERE c.component_id=? ORDER BY w.start_month,w.id""", (component[0],)))
     pending = [anime_id]; seen: set[int] = set()
     while pending:
         current = pending.pop()
@@ -78,7 +83,7 @@ def work_target(anime: sqlite3.Row, component: list[sqlite3.Row], aliases_by_id:
     existing = path_index.resolve(date_code(anime["start_month"]), str(anime["title_ja"]), aliases,
                                   reject_ambiguous=True)
     title = library_layout.compound_title_from_evidence(
-        str(anime["title_ja"]), aliases, observed, existing["title"] if existing else None)
+        str(dict(anime).get("directory_title") or anime["title_ja"]), aliases, observed, existing["title"] if existing else None)
     work_dir = library_layout.format_work_directory(config["naming"]["workTemplate"],
                                                     date=date_code(anime["start_month"]), title=title)
     series_path = None
@@ -412,7 +417,7 @@ def remap_one_work(metadata_db: Path, runtime_db: Path, config: dict[str, Any], 
     with contextlib.closing(sqlite3.connect(metadata_db)) as meta:
         aliases = [str(row[0]) for row in meta.execute(
             "SELECT title FROM anime_title WHERE anime_id=?", (int(anime_id),))]
-    wanted = {norm(value) for value in aliases if len(norm(value)) >= 3}
+    wanted = {norm(value) for value in aliases if len(norm(value)) >= 2}
     hashes: set[str] = set()
     examined = 0
     with contextlib.closing(sqlite3.connect(runtime_db)) as runtime:

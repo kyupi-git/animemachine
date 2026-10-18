@@ -55,6 +55,9 @@ let config = {},
   catalogStats = {},
   startupState = null;
 const performanceReported = new Set();
+const catalogPages = new Map();
+let catalogPageRevision = 0, catalogPrefetchTimer;
+function invalidateCatalogPages() { catalogPages.clear(); catalogPageRevision++; }
 const renderedContents = new WeakMap();
 let authSession = null,
   csrfToken = "";
@@ -320,7 +323,7 @@ const i18n = {
     excludedScope: "作品范围不符",
     excludedManifest: "文件映射不符",
     excludedPolicy: "策略不符",
-    searchPoolNow: "重新搜索本地资源",
+    searchPoolNow: "检索 Torrent", torrentSearchPartial: "部分来源暂不可用，可稍后重试。", torrentSearchFailed: "检索未完成，请检查网络后重试。", torrentSearchProgress: "已查询 {done} / {total} 个来源 · 找到 {found} 项",
     searchAniRss: "通过 Ani-RSS 查询资源",
     aniRssManaged: "Ani-RSS 已订阅",
     aniRssResources: "Ani-RSS 资源可用",
@@ -396,9 +399,15 @@ const i18n = {
     submissionDisabled: "当前部署未启用实际提交",
     sortBy: "排序",
     recentEpisodeSort: "新作追更",
+    catchup: "一键继续观看", catchupEmpty: "本季度暂无可继续观看的 TV 集数。", catchupPreparing: "正在整理可播放集数…",
+    catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "从上次播放的那一集开始；媒体访问会自动记录，可随时修改。",
+    viewingResume: "续看：第 {episode} 话", viewingNew: "未开始", viewingEdit: "修改续看集数",
+    viewingEpisode: "下次从这一集开始（包含本集）", viewingClear: "设为未开始", viewingUndo: "撤销",
+    viewingSaved: "已修改", viewingConflict: "记录已在其它设备更新，请重新打开后修改。",
+    potplayerEnhanced: "启用扩展，记忆播放进度", potplayerInstall: "安装扩展", potplayerHint: "仅 PotPlayer 需要。安装扩展后可记录位置并续播；未安装时正常播放，只记录集数。", viewingPosition: "播放位置（时:分:秒）",
     radar: "新作雷达",
     radarPrevious: "上季度", radarCurrent: "本季度", radarNext: "下季度",
-    radarTitleColumn: "标题", radarMediaType: "媒介类型", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间",
+    viewingUnavailable: "观看记录暂不可用", radarUnwatched: "有新集待看", radarTitleColumn: "标题", radarMediaType: "媒介类型", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间",
     radarStart: "开播时间", radarBdRelease: "BD", radarResourceRelease: "资源", radarSearch: "检索本季度资源", radarSearchProgress: "已检索 {done} / {total} · 失败 {failed}",
     episodeUpdated: "第{episode}话",
     radarSubscription: "订阅状态", radarSubscribed: "已订阅", radarPaused: "已暂停",
@@ -535,6 +544,7 @@ const i18n = {
     errorConnection: "连接失败，请检查服务地址、服务状态及网络后重试。",
     errorTimeout: "请求超时，请检查网络后重试。",
     errorResponse: "服务返回了无法读取的数据，请稍后重试。",
+    errorReservedSpace: "下载后预计剩余 {available} TiB，低于预留的 {reserve} TiB。请在“设置 → 常规 → 自动化与容量”核对预留空间。",
     errorArchiveName: "底包文件名无效，请选择原名未改动的官方底包。",
     errorArchiveCurrent: "这不是当前官方底包，请下载最新底包后重试。",
     errorArchiveIntegrity: "底包不完整或校验不符，请重新下载官方底包。",
@@ -661,6 +671,12 @@ const i18n = {
     historyHint: "查看文件移动、改名和移除记录，恢复可撤销的操作。",
     noHistory: "暂无用户内容变更记录。",
     historyMove: "移动",
+    historyCreate: "建立目录", historyOther: "目录操作",
+    layoutPreview: "目录调整预览", layoutPreviewHint: "核对作品命名、日语版标题与附属短篇归属。", layoutPreviewExport: "下载预览",
+    layoutPreviewCurrent: "当前目录", layoutPreviewProposed: "建议目录", layoutPreviewReason: "原因", layoutPreviewName: "命名规范",
+    layoutPreviewSupplement: "附属短篇", layoutPreviewOwner: "主作品目录待确认", layoutPreviewConflict: "目标已存在，需核对内容",
+    layoutPreviewDone: "已检查 {examined} 个目录 · {count} 项建议", layoutPreviewUnavailable: "请连接本地库后重试。",
+    torrentSearchBusy: "正在处理其它检索，请稍后重试。", torrentRequiresQbt: "请先在设置中连接 qBittorrent。",
     historyRename: "重命名",
     historyRemove: "可恢复移除",
     historyRestored: "已恢复",
@@ -934,7 +950,7 @@ const i18n = {
     excludedScope: "Work scope mismatch",
     excludedManifest: "File mapping mismatch",
     excludedPolicy: "Policy mismatch",
-    searchPoolNow: "Search local resources again",
+    searchPoolNow: "Search Torrents", torrentSearchPartial: "Some sources are unavailable. Try again later.", torrentSearchFailed: "Search did not complete. Check your connection and retry.", torrentSearchProgress: "Checked {done} / {total} sources · Found {found}",
     searchAniRss: "Search via Ani-RSS",
     aniRssManaged: "Ani-RSS subscribed",
     aniRssResources: "Ani-RSS resources available",
@@ -1010,9 +1026,15 @@ const i18n = {
     submissionDisabled: "Live submission is disabled",
     sortBy: "Sort",
     recentEpisodeSort: "New Episode Follow-up",
+    catchup: "Continue watching", catchupEmpty: "No playable TV episodes to continue this season.", catchupPreparing: "Preparing playable episodes…",
+    catchupCount: "{works} titles · {episodes} episodes", catchupHint: "Includes your last played episode. Media access updates your record; you can correct it anytime.",
+    viewingResume: "Continue: Ep {episode}", viewingNew: "Not started", viewingEdit: "Change starting episode",
+    viewingEpisode: "Next time, start here (including this episode)", viewingClear: "Mark as not started", viewingUndo: "Undo",
+    viewingSaved: "Updated", viewingConflict: "This record changed on another device. Reopen it to make your change.",
+    potplayerEnhanced: "Enable extension to save progress", potplayerInstall: "Install extension", potplayerHint: "PotPlayer only. Install the extension to save positions and resume. Without it, playback works and records episodes only.", viewingPosition: "Position (hours:minutes:seconds)",
     radar: "Release radar",
     radarPrevious: "Previous season", radarCurrent: "Current season", radarNext: "Next season",
-    radarTitleColumn: "Title", radarMediaType: "Media type", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated",
+    viewingUnavailable: "Viewing records are unavailable", radarUnwatched: "New episodes to watch", radarTitleColumn: "Title", radarMediaType: "Media type", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated",
     radarStart: "Premiere date", radarBdRelease: "BD", radarResourceRelease: "Release", radarSearch: "Search this season's releases", radarSearchProgress: "Checked {done} / {total} · Failed {failed}",
     episodeUpdated: "Ep. {episode}",
     radarSubscription: "Subscription", radarSubscribed: "Subscribed", radarPaused: "Paused",
@@ -1149,6 +1171,7 @@ const i18n = {
     errorConnection: "Connection failed. Check the service address, service status and network, then retry.",
     errorTimeout: "Request timed out. Check the network and retry.",
     errorResponse: "The service returned unreadable data. Retry shortly.",
+    errorReservedSpace: "This download would leave {available} TiB, below the {reserve} TiB reserve. Review reserved space under Settings → General → Automation & capacity.",
     errorArchiveName: "Invalid archive filename. Select an official archive with its original filename.",
     errorArchiveCurrent: "This is not the current official archive. Download the latest archive and retry.",
     errorArchiveIntegrity: "The archive is incomplete or fails verification. Download the official archive again.",
@@ -1277,6 +1300,12 @@ const i18n = {
     historyHint: "Review file moves, renames and removals, and restore reversible changes.",
     noHistory: "No user-content changes yet.",
     historyMove: "Move",
+    historyCreate: "Create folder", historyOther: "Folder operation",
+    layoutPreview: "Preview folder changes", layoutPreviewHint: "Review names, Japanese edition titles and companion shorts.", layoutPreviewExport: "Download preview",
+    layoutPreviewCurrent: "Current folder", layoutPreviewProposed: "Proposed folder", layoutPreviewReason: "Reason", layoutPreviewName: "Naming format",
+    layoutPreviewSupplement: "Companion short", layoutPreviewOwner: "Main title folder needs review", layoutPreviewConflict: "Destination exists; review its contents",
+    layoutPreviewDone: "Checked {examined} folders · {count} proposals", layoutPreviewUnavailable: "Connect the local library and try again.",
+    torrentSearchBusy: "Other searches are running. Please try again shortly.", torrentRequiresQbt: "Connect qBittorrent in Settings first.",
     historyRename: "Rename",
     historyRemove: "Recoverable removal",
     historyRestored: "Restored",
@@ -1548,7 +1577,7 @@ const i18n = {
     excludedScope: "作品範囲不一致",
     excludedManifest: "ファイル対応不一致",
     excludedPolicy: "ポリシー不一致",
-    searchPoolNow: "ローカルリソースを再検索",
+    searchPoolNow: "Torrent を検索", torrentSearchPartial: "一部の検索先を利用できません。後でもう一度お試しください。", torrentSearchFailed: "検索を完了できませんでした。接続を確認して再試行してください。", torrentSearchProgress: "検索済み {done} / {total} 件 · {found} 件の候補",
     searchAniRss: "Ani-RSS でリソースを検索",
     aniRssManaged: "Ani-RSS 購読中",
     aniRssResources: "Ani-RSS リソース利用可",
@@ -1624,9 +1653,15 @@ const i18n = {
     submissionDisabled: "実送信は無効",
     sortBy: "並び順",
     recentEpisodeSort: "新作追従",
+    catchup: "まとめて続きを再生", catchupEmpty: "このシーズンには続けて再生できる TV の話数がありません。", catchupPreparing: "再生できる話数を確認中…",
+    catchupCount: "{works} 作品 · {episodes} 話", catchupHint: "前回再生した話から始めます。メディアへのアクセスを自動記録し、後から修正できます。",
+    viewingResume: "続き：第 {episode} 話", viewingNew: "未再生", viewingEdit: "再開する話数を変更",
+    viewingEpisode: "次回はこの話から再生（この話を含む）", viewingClear: "未再生に戻す", viewingUndo: "元に戻す",
+    viewingSaved: "変更しました", viewingConflict: "別の端末で記録が更新されました。開き直して変更してください。",
+    potplayerEnhanced: "拡張を有効にして再生位置を記録", potplayerInstall: "拡張を導入", potplayerHint: "PotPlayer 専用です。拡張を導入すると再生位置から再開できます。未導入でも通常どおり再生でき、話数のみ記録します。", viewingPosition: "再生位置（時:分:秒）",
     radar: "新作レーダー",
     radarPrevious: "前シーズン", radarCurrent: "今シーズン", radarNext: "次シーズン",
-    radarTitleColumn: "タイトル", radarMediaType: "メディア種別", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時",
+    viewingUnavailable: "視聴記録を読み込めません", radarUnwatched: "未視聴の新しい話があります", radarTitleColumn: "タイトル", radarMediaType: "メディア種別", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時",
     radarStart: "放送開始日", radarBdRelease: "BD", radarResourceRelease: "配布", radarSearch: "今シーズンのリリースを検索", radarSearchProgress: "検索済み {done} / {total} · 失敗 {failed}",
     episodeUpdated: "第{episode}話",
     radarSubscription: "購読状態", radarSubscribed: "購読中", radarPaused: "一時停止中",
@@ -1763,6 +1798,7 @@ const i18n = {
     errorConnection: "接続に失敗しました。サービスのアドレス、稼働状態、ネットワークを確認して再試行してください。",
     errorTimeout: "要求がタイムアウトしました。ネットワークを確認して再試行してください。",
     errorResponse: "サービスの応答を読み取れません。しばらくして再試行してください。",
+    errorReservedSpace: "ダウンロード後の空き容量 {available} TiB は、予約容量 {reserve} TiB 未満です。「設定 → 一般 → 自動化と容量」で確認してください。",
     errorArchiveName: "アーカイブ名が無効です。元のファイル名の公式アーカイブを選択してください。",
     errorArchiveCurrent: "現在の公式アーカイブではありません。最新版をダウンロードして再試行してください。",
     errorArchiveIntegrity: "アーカイブが不完全、または検証に失敗しました。公式アーカイブを再ダウンロードしてください。",
@@ -1891,6 +1927,12 @@ const i18n = {
     historyHint: "ファイルの移動、名前変更、削除の履歴を確認し、元に戻せる操作を復元します。",
     noHistory: "ユーザーコンテンツの変更履歴はありません。",
     historyMove: "移動",
+    historyCreate: "フォルダー作成", historyOther: "フォルダー操作",
+    layoutPreview: "フォルダー変更のプレビュー", layoutPreviewHint: "名前、日本語版タイトル、付属短編の対応を確認します。", layoutPreviewExport: "プレビューを保存",
+    layoutPreviewCurrent: "現在のフォルダー", layoutPreviewProposed: "変更案", layoutPreviewReason: "理由", layoutPreviewName: "命名形式",
+    layoutPreviewSupplement: "付属短編", layoutPreviewOwner: "本編のフォルダーを要確認", layoutPreviewConflict: "移動先が存在します。内容を確認してください",
+    layoutPreviewDone: "{examined} フォルダーを確認 · {count} 件の変更案", layoutPreviewUnavailable: "ローカルライブラリを接続して再試行してください。",
+    torrentSearchBusy: "別の検索を実行中です。しばらくしてから再試行してください。", torrentRequiresQbt: "先に設定で qBittorrent を接続してください。",
     historyRename: "名称変更",
     historyRemove: "復元可能な削除",
     historyRestored: "復元済み",
@@ -2144,7 +2186,13 @@ const priorityValueLabel = (value) => ({
 }[value]?.[li()] || value);
 function localizedError(message, status = 0) {
   if (String(message || "").includes("local_library_sleeping")) return t("librarySleeping");
-  const value = String(message || ""), mappings = [
+  const value = String(message || "");
+  const capacity = value.match(/insufficient free space: submission would leave ([\d.]+) TiB; minimum reserve is ([\d.]+) TiB/);
+  if (capacity) return t("errorReservedSpace").replace("{available}", capacity[1]).replace("{reserve}", capacity[2]);
+  const mappings = [
+    [/torrent_search_busy/, "torrentSearchBusy"],
+    [/qbittorrent_not_configured/, "torrentRequiresQbt"],
+    [/local_library_unavailable/, "layoutPreviewUnavailable"],
     [/^invalid_credentials$/, "errorCredentials"],
     [/^administrator_required$|^forbidden$/, "errorPermission"],
     [/^connection_failed$|Failed to fetch|NetworkError|Load failed/, "errorConnection"],
@@ -2204,6 +2252,8 @@ const api = async (url, opt = {}) => {
       responseError.status = r.status;
       throw responseError;
     }
+    if (!["GET", "HEAD", "OPTIONS"].includes(method) && !/^\/api\/(playback|viewing|diagnostics)(\/|$)/.test(url))
+      invalidateCatalogPages();
     return b;
   },
   languageBase = (value) =>
@@ -2524,6 +2574,8 @@ function params() {
   return p;
 }
 async function search({ background = false } = {}) {
+  clearTimeout(catalogPrefetchTimer);
+  if (background && searchController) { catalogRefreshPending = true; return; }
   if (background && topModalDialog()) {
     catalogRefreshPending = true;
     return;
@@ -2532,17 +2584,36 @@ async function search({ background = false } = {}) {
   const controller = new AbortController();
   searchController = controller;
   results.setAttribute("aria-busy", "true");
+  if (!background) $("prevPage").disabled = $("nextPage").disabled = true;
   if (!items.length) {
     results.innerHTML = `<div class="empty">${t("loading")}</div>`;
     renderedResultsMarkup = "";
   }
   try {
-    const d = await api(`/api/anime?${params()}`, { signal: controller.signal });
+    const query = params(), key = query.toString(), cached = catalogPages.get(key);
+    const revision = catalogPageRevision;
+    const d = !background && cached && cached.expires > Date.now()
+      ? await cached.promise : await api(`/api/anime?${query}`, { signal: controller.signal });
     if (searchController !== controller) return;
+    if (revision === catalogPageRevision) catalogPages.set(key, { expires: Date.now() + 20000, promise: Promise.resolve(d) });
+    while (catalogPages.size > 6) catalogPages.delete(catalogPages.keys().next().value);
     items = d.items;
     total = d.total;
     searchExpanded = Boolean(d.searchExpanded);
     render();
+    clearTimeout(catalogPrefetchTimer);
+    if (!background && pageSize !== "all" && (page + 1) * Number(pageSize) < total) {
+      catalogPrefetchTimer = setTimeout(() => {
+        if (topModalDialog() || catalogPageRevision !== revision) return;
+        const next = new URLSearchParams(query); next.set("offset", String((page + 1) * Number(pageSize)));
+        const nextKey = next.toString(), existing = catalogPages.get(nextKey);
+        if (existing && existing.expires > Date.now()) return;
+        const promise = api(`/api/anime?${next}`, { timeoutMs: 10000 });
+        const entry = { expires: Date.now() + 20000, promise };
+        catalogPages.set(nextKey, entry);
+        promise.catch(() => { if (catalogPages.get(nextKey) === entry) catalogPages.delete(nextKey); });
+      }, 250);
+    }
   } catch (e) {
     if (e.name === "AbortError") return;
     if (topModalDialog()) { catalogRefreshPending = true; return; }
@@ -2553,6 +2624,8 @@ async function search({ background = false } = {}) {
     if (searchController === controller) {
       searchController = null;
       results.removeAttribute("aria-busy");
+      $("prevPage").disabled = !page;
+      $("nextPage").disabled = pageSize === "all" || (page + 1) * Number(pageSize) >= total;
     }
   }
 }
@@ -2659,7 +2732,14 @@ function bind() {
 }
 function patchRenderedContent(current, next) {
   const markup = next.innerHTML;
-  if ((renderedContents.get(current) ?? current.innerHTML) !== markup) current.innerHTML = markup;
+  if ((renderedContents.get(current) ?? current.innerHTML) !== markup) {
+    const posters = [...current.querySelectorAll("img[data-cover]")];
+    current.innerHTML = markup;
+    for (const poster of posters) {
+      const replacement = current.querySelector(`img[data-cover="${poster.dataset.cover}"]`);
+      if (replacement) replacement.replaceWith(poster); else releaseCoverElement(poster);
+    }
+  }
   renderedContents.set(current, markup);
 }
 function releaseCoverElement(target) {
@@ -2733,7 +2813,7 @@ function render() {
     markup = items
       .map(
         (x, index) =>
-          `${dividerBefore(index)}<article class="card ${imagesEnabled ? "with-cover" : ""}" data-id="${x.id}" ${imagesEnabled ? `data-cover="${x.id}"` : ""}><div class="card-content"><div class="badges">${sourceBadge(x)}${stateBadge(x)}${completeBadge(x)}</div><div class="card-date-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span>${selector(x)}</div><h3>${esc(preferred(x))}</h3>${secondaryTitle(x) ? `<p class="cn">${esc(secondaryTitle(x))}</p>` : ""}<div class="chips">${String(
+          `${dividerBefore(index)}<article class="card ${imagesEnabled ? "with-cover" : ""}" data-id="${x.id}" ${imagesEnabled ? `data-cover="${x.id}"` : ""}><div class="card-content"><div class="badges">${sourceBadge(x)}${stateBadge(x)}${completeBadge(x)}</div><div class="card-date-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span>${selector(x)}</div><div class="card-main"><h3>${esc(preferred(x))}</h3>${secondaryTitle(x) ? `<p class="cn">${esc(secondaryTitle(x))}</p>` : ""}<div class="chips">${String(
             x.tags || "",
           )
             .split(" / ")
@@ -2741,7 +2821,7 @@ function render() {
             .map((y) => `<span class="chip">${esc(label("theme", y))}</span>`)
             .join(
               "",
-            )}</div><div class="meta">${x.studios?.length ? esc(x.studios.join(" × ")) : t("pending")}</div><div class="card-footer">${relationButton(x)}${episodeUpdate(x)}</div></div></article>`,
+            )}</div><div class="meta">${x.studios?.length ? esc(x.studios.join(" × ")) : t("pending")}</div></div><div class="card-footer">${relationButton(x)}${episodeUpdate(x)}</div></div></article>`,
       )
       .join("");
   if (markup !== renderedResultsMarkup) {
@@ -2788,6 +2868,7 @@ function applyCoverBlob(target, blob, batch = coverBatch) {
   const url = URL.createObjectURL(blob);
   batch?.objectUrls?.set(url, target);
   target.dataset.coverObjectUrl = url;
+  if (target.tagName === "IMG") target.src = url;
   target.style.setProperty("--cover", `url('${url}')`);
 }
 async function reloadCoverImage(button) {
@@ -2842,7 +2923,8 @@ function queueCoverElement(target, batch = coverBatch, priority = false) {
   pumpCoverLoads(batch);
 }
 function pumpCoverLoads(batch) {
-  while (coverBatch === batch && batch.active < 12 && batch.queue.length) {
+  // Leave browser connections available for navigation and other JSON requests.
+  while (coverBatch === batch && batch.active < 4 && batch.queue.length) {
     const target = batch.queue.shift();
     if (!target.isConnected) continue;
     const modal = topModalDialog();
@@ -5041,18 +5123,173 @@ function localizedSummary(x) {
 }
 
 function playbackHtml(state) {
+  if (state?.loading) return `<section class="playback-panel">${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<p class="muted" role="status">${esc(t("radarLoading"))}</p></section>`;
+  if (state?.viewing) updateViewing(state.viewing);
   if (!state?.available)
-    return `<section class="playback-panel unavailable"><p class="muted">${t("noPlayableMedia")}</p></section>`;
-  const platform = navigator.userAgent || "",
-    episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join("");
-  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions"><button type="button" class="tool dark-tool player-action" data-player="copy" data-icon="copy">${t("copyPlaylist")}</button><button type="button" class="tool dark-tool player-action" data-player="system" data-icon="download">${t("systemPlayer")}</button><button type="button" class="tool dark-tool player-action" data-player="vlc">${playerIcon("vlc")}<span>${t("openVlc")}</span></button>${/Windows/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="potplayer">${playerIcon("potplayer")}<span>${t("openPotPlayer")}</span></button>` : ""}${/(Macintosh|Mac OS X)/i.test(platform) ? `<button type="button" class="tool dark-tool player-action" data-player="iina">${playerIcon("iina")}<span>${t("openIina")}</span></button>` : ""}</div></section>`;
+    return `<section class="playback-panel unavailable">${state?.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<p class="muted">${esc(state?.error || t("noPlayableMedia"))}</p></section>`;
+  const episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join("");
+  return `<section class="playback-panel">${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions">${playerActionsHtml("data-player")}</div></section>`;
 }
+
+const viewingRecords = new Map();
+let viewingEditId = 0, viewingEditRevision = 0, viewingUndoRecord = null, viewingGeneration = 0;
+let catchupRequest = null;
+function viewingLabel(record) {
+  return record?.episode != null ? t("viewingResume").replace("{episode}", String(record.episode))
+    + (record.positionMs ? ` · ${positionText(record.positionMs)}` : "") : t("viewingNew");
+}
+function positionText(ms) {
+  const seconds = Math.max(0, Math.floor(Number(ms) / 1000));
+  return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(x => String(x).padStart(2, "0")).join(":");
+}
+function positionValue(text) {
+  if (!text.trim()) return 0;
+  if (!/^\d{1,3}:[0-5]\d:[0-5]\d$/.test(text.trim())) throw new Error(t("viewingPosition"));
+  return text.split(":").reduce((sum, part) => sum * 60 + Number(part), 0) * 1000;
+}
+function viewingButton(animeId, record, bgmId = record?.bgmId) {
+  return `<button type="button" class="text-button viewing-button" data-viewing="${animeId}" data-bgm-id="${Number(bgmId) || 0}" title="${esc(t("viewingEdit"))}">${esc(viewingLabel(record))}</button>`;
+}
+function updateViewing(record) {
+  viewingRecords.set(record.animeId, record);
+  document.querySelectorAll(`[data-viewing="${record.animeId}"]`).forEach((button) => { button.textContent = viewingLabel(record); });
+}
+async function openViewing(animeId, title = "", bgmId = 0) {
+  const generation = ++viewingGeneration;
+  viewingEditId = animeId; viewingUndoRecord = null;
+  $("viewingUndo").hidden = true;
+  $("viewingSave").disabled = $("viewingClear").disabled = true;
+  $("viewingWork").textContent = title;
+  $("viewingEpisode").value = "";
+  $("viewingEpisodes").replaceChildren();
+  $("viewingStatus").textContent = t("radarLoading");
+  showModalDialog($("viewingDialog"));
+  try {
+    const record = await api(`/api/anime/${animeId}/viewing`);
+    if (generation !== viewingGeneration || !$("viewingDialog").open) return;
+    if (bgmId && record.bgmId !== bgmId) throw new Error(t("viewingConflict"));
+    updateViewing(record);
+    viewingEditRevision = record.revision;
+    $("viewingEpisode").value = record.episode ?? "";
+    $("viewingPosition").value = positionText(record.positionMs || 0);
+    $("viewingStatus").textContent = "";
+    $("viewingSave").disabled = $("viewingClear").disabled = false;
+    $("viewingEpisode").focus();
+    // Suggestions are optional: an unavailable source must not block correction.
+    api(`/api/anime/${animeId}/playback`).then((state) => {
+      if (generation !== viewingGeneration || !$("viewingDialog").open) return;
+      $("viewingEpisodes").innerHTML = [...new Set((state.items || []).map((item) => item.episode).filter((value) => value != null))]
+        .map((value) => `<option value="${Number(value)}"></option>`).join("");
+    }).catch(() => {});
+  } catch (error) { $("viewingStatus").textContent = error.message; }
+}
+async function saveViewing(episode, undo = false, positionMs = 0) {
+  const generation = viewingGeneration;
+  $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = true;
+  try {
+    const record = await api(`/api/anime/${viewingEditId}/viewing`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ episode, positionMs, revision: viewingEditRevision, bgmId: viewingRecords.get(viewingEditId)?.bgmId }) });
+    updateViewing(record);
+    if (generation !== viewingGeneration) return;
+    if ($("radarDialog").open) radarRefreshPending = true;
+    viewingEditRevision = record.revision;
+    viewingUndoRecord = { episode: record.previousEpisode, positionMs: record.previousPositionMs };
+    $("viewingEpisode").value = record.episode ?? "";
+    $("viewingPosition").value = positionText(record.positionMs || 0);
+    $("viewingUndo").hidden = undo;
+    $("viewingStatus").textContent = t("viewingSaved");
+  } catch (error) {
+    $("viewingStatus").textContent = error.message.includes("viewing_conflict") ? t("viewingConflict") : error.message;
+  } finally {
+    if (generation === viewingGeneration) $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = false;
+  }
+}
+function potplayerOptionsHtml() {
+  let enabled = false;
+  try { enabled = localStorage.getItem("anm-potplayer-feedback") === "1"; } catch (_) {}
+  return `<label class="check" title="${esc(t("potplayerHint"))}"><input type="checkbox" data-potplayer-enhanced ${enabled ? "checked" : ""}>${esc(t("potplayerEnhanced"))}</label><a class="tool dark-tool extension-install" href="/api/playback/potplayer-extension.zip" download>${esc(t("potplayerInstall"))}</a>`;
+}
+function playerActionsHtml(attribute = "data-catchup-player") {
+  const buttons = [["copy", "copyPlaylist"], ["system", "systemPlayer"], ["vlc", "openVlc"]];
+  if (/Windows/i.test(navigator.userAgent)) buttons.push(["potplayer", "openPotPlayer"]);
+  if (/(Macintosh|Mac OS X)/i.test(navigator.userAgent)) buttons.push(["iina", "openIina"]);
+  return buttons.map(([kind, key]) => {
+    const icon = kind === "copy" ? ' data-icon="copy"' : kind === "system" ? ' data-icon="download"' : "";
+    const button = `<button type="button" class="tool dark-tool player-action" ${attribute}="${kind}"${icon}>${playerIcon(kind)}<span>${esc(t(key))}</span></button>`;
+    return kind === "potplayer" ? `<div class="potplayer-group">${button}<div class="potplayer-options">${potplayerOptionsHtml()}</div></div>` : button;
+  }).join("");
+}
+async function deliverPlayback(kind, handoff, button) {
+  if (kind === "copy") {
+    await copyPlainText(handoff.playlistUrl || handoff.url);
+    const previous = button.innerHTML;
+    button.textContent = t("copiedPlaylist");
+    setTimeout(() => { if (button.isConnected) button.innerHTML = previous; }, 1800);
+  } else if (kind === "system") {
+    const anchor = document.createElement("a"), url = new URL(handoff.playlistUrl || handoff.url);
+    url.searchParams.set("download", "1"); anchor.href = url.href; anchor.download = "AnimeMachine.m3u";
+    document.body.append(anchor); anchor.click(); anchor.remove();
+  } else {
+    if (!handoff.protocolUrl) throw new Error(t("playbackHandoffUnavailable"));
+    location.href = handoff.protocolUrl;
+  }
+}
+async function openCatchup() {
+  const season = radarSeasons()[radarSeason];
+  catchupRequest = { from: season.from, to: season.to, language, sort: radarSort, direction: radarDirection };
+  const request = catchupRequest;
+  $("catchupStatus").textContent = t("catchupPreparing");
+  $("catchupList").replaceChildren(); $("catchupPlayers").replaceChildren();
+  showModalDialog($("catchupDialog"));
+  try {
+    const state = await api("/api/playback/catchup", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...request, preview: true }) });
+    if (catchupRequest !== request || !$("catchupDialog").open) return;
+    $("catchupStatus").textContent = state.count ? t("catchupCount").replace("{works}", state.groups.length).replace("{episodes}", state.count) : t("catchupEmpty");
+    if (!state.count) return;
+    $("catchupList").innerHTML = `<ul class="catchup-list">${state.groups.map((group) => `<li><span>${esc(group.title)}</span><span class="muted">${group.episodes.map((ep) => esc(String(ep))).join(" · ")}</span>${viewingButton(group.animeId, { episode: group.episode, bgmId: group.bgmId, positionMs: group.positionMs })}</li>`).join("")}</ul><p class="muted">${esc(t("catchupHint"))}</p>`;
+    $("catchupPlayers").innerHTML = playerActionsHtml();
+  } catch (error) { if (catchupRequest === request) $("catchupStatus").textContent = error.message; }
+}
+document.addEventListener("click", async (event) => {
+  const edit = event.target.closest("[data-viewing]");
+  if (edit) {
+    event.stopPropagation();
+    const title = edit.closest("tr")?.querySelector("[data-detail]")?.textContent
+      || edit.closest("li")?.firstElementChild?.textContent || $("detail").querySelector("h2")?.textContent || "";
+    openViewing(Number(edit.dataset.viewing), title, Number(edit.dataset.bgmId)); return;
+  }
+  const button = event.target.closest("[data-catchup-player]");
+  if (!button || !catchupRequest) return;
+  const kind = button.dataset.catchupPlayer, request = catchupRequest;
+  const buttons = $("catchupPlayers").querySelectorAll("button");
+  buttons.forEach((item) => { item.disabled = true; });
+  $("catchupStatus").textContent = t("catchupPreparing");
+  try {
+    const handoff = await api("/api/playback/catchup", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...request, player: kind, enhanced: !!$("catchupPlayers").querySelector("[data-potplayer-enhanced]")?.checked }) });
+    if (catchupRequest !== request || !$("catchupDialog").open) return;
+    if (!handoff.count) { $("catchupStatus").textContent = t("catchupEmpty"); return; }
+    await deliverPlayback(kind, handoff, button);
+    $("catchupStatus").textContent = t("catchupCount").replace("{works}", handoff.groups.length).replace("{episodes}", handoff.count);
+  } catch (error) { if (catchupRequest === request && $("catchupDialog").open) $("catchupStatus").textContent = error.message; }
+  finally { buttons.forEach((item) => { item.disabled = false; }); }
+});
+document.addEventListener("change", (event) => {
+  if (event.target.matches("[data-potplayer-enhanced]")) {
+    try { localStorage.setItem("anm-potplayer-feedback", event.target.checked ? "1" : "0"); } catch (_) {}
+  }
+});
+$("viewingForm").onsubmit = (event) => { event.preventDefault(); try { saveViewing($("viewingEpisode").value === "" ? null : Number($("viewingEpisode").value), false, positionValue($("viewingPosition").value)); } catch(error) { $("viewingStatus").textContent = error.message; } };
+$("viewingClear").onclick = () => saveViewing(null);
+$("viewingUndo").onclick = () => { if (viewingUndoRecord) saveViewing(viewingUndoRecord.episode, true, viewingUndoRecord.positionMs); };
+$("radarCatchup").onclick = openCatchup;
 
 function playerIcon(kind) {
   if (kind === "vlc")
     return `<svg class="player-logo" viewBox="0 0 24 24" aria-hidden="true"><path fill="#f47b20" d="M12 2 6.2 18h11.6L12 2Z"/><path fill="#fff" d="m9.3 9 1-2.7h3.4l1 2.7H9.3Zm-1.6 4.3 1-2.7h6.6l1 2.7H7.7Z"/><path fill="#d35c0b" d="M4.8 18h14.4v3H4.8z"/></svg>`;
   if (kind === "potplayer")
-    return `<svg class="player-logo" viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="potplayer-gradient" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c56cff"/><stop offset="1" stop-color="#6557d9"/></linearGradient></defs><circle cx="12" cy="12" r="10" fill="url(#potplayer-gradient)"/><path fill="#fff" d="m10 7 7 5-7 5V7Z"/></svg>`;
+    return `<svg class="player-logo" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#9461e5"/><path fill="#fff" d="m10 7 7 5-7 5V7Z"/></svg>`;
   if (kind === "iina")
     return `<svg class="player-logo" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="4" fill="#56606c"/><path fill="#fff" d="m10 8 6 4-6 4V8Z"/></svg>`;
   return "";
@@ -5097,36 +5334,19 @@ async function copyPlainText(value) {
   if (!copied) throw new Error(t("copyPlaylist"));
 }
 
-async function handoffPlayback(kind, animeId, button) {
+async function handoffPlayback(kind, animeId, button, generation = detailGeneration) {
   const selectedEpisode = Math.max(1, Number($("playbackEpisode")?.value || 1)),
     payload = {
       player: kind,
       mode: "playlist",
       source: playbackSources.get(animeId) || "",
       start: selectedEpisode,
+      enhanced: !!$("detail").querySelector("[data-potplayer-enhanced]")?.checked,
     },
     handoff = await api(`/api/anime/${animeId}/playback/handoff`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
-  if (kind === "copy") {
-    await copyPlainText(handoff.playlistUrl || handoff.url);
-    const previous = button.textContent;
-    button.textContent = t("copiedPlaylist");
-    setTimeout(() => { button.textContent = previous; }, 1800);
-    return;
-  }
-  if (kind === "system") {
-    const anchor = document.createElement("a"), url = new URL(handoff.playlistUrl || handoff.url);
-    url.searchParams.set("download", "1");
-    anchor.href = url.href;
-    anchor.download = `AnimeMachine-${animeId}.m3u`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    return;
-  }
-  if (!handoff.protocolUrl) throw new Error(t("playbackHandoffUnavailable"));
-  location.href = handoff.protocolUrl;
+  if (generation === detailGeneration && detailDialog.open) await deliverPlayback(kind, handoff, button);
 }
 
 function aniSubscriptionMenu(subscription, animeId, disabled = false) {
@@ -5167,8 +5387,9 @@ detailDialog.addEventListener("close", () => { detailGeneration++; });
 async function showDetail(id) {
   detailDialog.dataset.animeId = String(id);
   const generation = ++detailGeneration;
-  if ($("detail").dataset.animeId !== String(id)) {
+  if ($("detail").dataset.animeId !== String(id) || $("detail").dataset.language !== language) {
     $("detail").dataset.animeId = String(id);
+    $("detail").dataset.language = language;
     $("detail").innerHTML = `<p class="detail-loading" role="status">${esc(t("radarLoading"))}</p>`;
   }
   showModalDialog(detailDialog);
@@ -5200,7 +5421,7 @@ async function showDetail(id) {
     }
   }
   const selectedPlaybackSource = playbackSources.get(id) || "",
-    playbackState = await api(`/api/anime/${id}/playback${selectedPlaybackSource ? `?source=${encodeURIComponent(selectedPlaybackSource)}` : ""}`).catch(() => ({ available: false, count: 0, items: [] })),
+    playbackState = { loading: true, viewing: x.viewing },
     visibleTitles = sameAsOriginalLanguage(x)
       ? [
           {
@@ -5286,7 +5507,7 @@ async function showDetail(id) {
       || aniResources.some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `ani-rss:${y.resourceId}`));
   if (generation !== detailGeneration) return;
   $("detail").innerHTML =
-    `<div class="detail-hero"><header class="detail-intro"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}${playbackHtml(playbackState)}<h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool">${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `<div class="detail-hero"><header class="detail-intro"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}<div id="detailPlayback">${playbackHtml(playbackState)}</div><h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
   $("detail")
     .querySelectorAll(`input[name="resource-${id}"]`)
@@ -5334,6 +5555,8 @@ async function showDetail(id) {
     let candidates = [];
     searchButton.onclick = async () => {
       searchButton.disabled = true;
+      applyButton.disabled = select.disabled = true;
+      candidates = [];
       state.textContent = t("searchPoolRunning");
       try {
         const result = await api(`/api/anime/${id}/subtitles/search`, {
@@ -5364,17 +5587,26 @@ async function showDetail(id) {
     $("searchWorkTorrents").onclick = async () => {
       const button = $("searchWorkTorrents"), status = $("searchWorkState");
       button.disabled = true; status.textContent = t("searchPoolRunning");
-      await api(`/api/anime/${id}/torrents/search`, { method: "POST" });
-      const poll = async () => {
-        const job = await api(`/api/anime/${id}/torrents/search`);
-        if (job.state === "running") { setTimeout(poll, 900); return; }
-        if (job.state === "failed") { status.textContent = job.error || t("failed"); button.disabled = false; return; }
-        const updated = await api(`/api/anime/${id}?language=${encodeURIComponent(language)}`);
-        status.textContent = updated.torrents?.length ? t("searchPoolDone") : t("searchPoolNone");
-        await search();
-        setTimeout(() => showDetail(id), 650);
-      };
-      setTimeout(poll, 700);
+      try {
+        await api(`/api/anime/${id}/torrents/search`, { method: "POST" });
+        const poll = async () => {
+          if (generation !== detailGeneration || !detailDialog.open) return;
+          try {
+            const job = await api(`/api/anime/${id}/torrents/search`);
+            if (generation !== detailGeneration || !detailDialog.open) return;
+            if (job.state === "running") {
+              status.textContent = job.sourcesTotal ? t("torrentSearchProgress").replace("{done}", job.sourcesDone || 0)
+                .replace("{total}", job.sourcesTotal).replace("{found}", job.found || 0) : t("searchPoolRunning");
+              setTimeout(poll, 1000); return;
+            }
+            if (job.state === "failed") { status.textContent = t("torrentSearchFailed"); button.disabled = false; return; }
+            await showDetail(id);
+            const message = job.sourcesFailed ? t("torrentSearchPartial") : job.saved ? t("searchPoolDone") : t("searchPoolNone");
+            if (Number(detailDialog.dataset.animeId) === id) $("searchWorkState").textContent = message;
+          } catch (error) { status.textContent = error.message; button.disabled = false; }
+        };
+        setTimeout(poll, 500);
+      } catch (error) { status.textContent = error.message; button.disabled = false; }
     };
   if ($("searchAniRss"))
     $("searchAniRss").onclick = async () => {
@@ -5383,13 +5615,15 @@ async function showDetail(id) {
       try {
         await api(`/api/anime/${id}/ani-rss/search`, { method: "POST" });
         const poll = async () => {
+          if (generation !== detailGeneration || !detailDialog.open) return;
           try {
             const job = await api(`/api/anime/${id}/ani-rss/search`);
+            if (generation !== detailGeneration || !detailDialog.open) return;
             if (job.state === "running") { setTimeout(poll, 900); return; }
             if (job.state === "failed") { status.textContent = job.error || t("failed"); button.disabled = false; return; }
             status.textContent = job.found ? t("searchPoolDone") : t("searchPoolNone");
             await search();
-            setTimeout(() => showDetail(id), 650);
+            setTimeout(() => { if (generation === detailGeneration && detailDialog.open) showDetail(id); }, 650);
           } catch (error) {
             status.textContent = error.message;
             button.disabled = false;
@@ -5421,9 +5655,21 @@ async function showDetail(id) {
       detailDialog.close();
       showRelationGraph(id);
     };
-  $("detail").querySelectorAll("[data-player]").forEach((button) => {
-    button.onclick = () => handoffPlayback(button.dataset.player, id, button).catch((error) => alert(error.message));
-  });
+  api(`/api/anime/${id}/playback${selectedPlaybackSource ? `?source=${encodeURIComponent(selectedPlaybackSource)}` : ""}`)
+    .then((state) => { if (generation === detailGeneration && detailDialog.open) renderDetailPlayback(state); })
+    .catch((error) => { if (generation === detailGeneration && detailDialog.open) renderDetailPlayback({ viewing: x.viewing, error: error.message }); });
+  function renderDetailPlayback(state) {
+    $("detailPlayback").innerHTML = playbackHtml(state);
+    $("detailPlayback").querySelectorAll("[data-player]").forEach((button) => {
+      button.onclick = async () => {
+        const buttons = $("detailPlayback").querySelectorAll("[data-player]");
+        buttons.forEach((item) => { item.disabled = true; });
+        try { await handoffPlayback(button.dataset.player, id, button); }
+        catch (error) { if (generation === detailGeneration && detailDialog.open) { $("detailPlayback").querySelector(".playback-error")?.remove(); const message = document.createElement("p"); message.className = "playback-error error"; message.textContent = error.message; $("detailPlayback").append(message); } }
+        finally { buttons.forEach((item) => { item.disabled = false; }); }
+      };
+    });
+  }
   showModalDialog(detailDialog);
   if (imagesEnabled) {
     covers();
@@ -5903,7 +6149,7 @@ async function saveSettings(e) {
     start: $("librarySleepStart").value || "00:00",
     end: $("librarySleepEnd").value || "08:00",
   };
-  if (nextConfig.library.sleep.start === nextConfig.library.sleep.end) throw new Error(t("librarySleepInvalid"));
+  if (nextConfig.library.sleep.enabled && nextConfig.library.sleep.start === nextConfig.library.sleep.end) throw new Error(t("librarySleepInvalid"));
   nextConfig.deployment.qbtLibraryRoot = $("qbtLibraryPath").value.trim();
   const externalSource = {
     ...(nextConfig.externalLibraries || [])[0],
@@ -6042,6 +6288,32 @@ async function importArchive(file) {
     $("archiveFile").value = "";
   }
 }
+let layoutPreviewGeneration = 0;
+$("previewLibraryLayout").onclick = async () => {
+  const generation = ++layoutPreviewGeneration;
+  $("layoutPreviewStatus").textContent = t("radarLoading");
+  $("layoutPreviewResults").replaceChildren(); $("layoutPreviewExport").hidden = true;
+  showModalDialog($("layoutPreviewDialog"));
+  try {
+    await api("/api/library/layout-preview", { method: "POST" });
+    while (generation === layoutPreviewGeneration && $("layoutPreviewDialog").open) {
+      const result = await api("/api/library/layout-preview");
+      if (result.state === "failed") throw new Error(localizedError(result.error));
+      if (result.state === "complete") {
+        $("layoutPreviewStatus").textContent = interpolate(t("layoutPreviewDone"), result);
+        $("layoutPreviewResults").innerHTML = result.items.length ? `<table class="data-table"><thead><tr><th>${esc(t("layoutPreviewCurrent"))}</th><th>${esc(t("layoutPreviewProposed"))}</th><th>${esc(t("layoutPreviewReason"))}</th></tr></thead><tbody>${result.items.slice(0, 200).map((item) => `<tr><td>${esc(item.current)}</td><td>${esc(item.proposed || "—")}</td><td>${esc(t(item.reason === "supplement" ? "layoutPreviewSupplement" : item.reason === "owner_review" ? "layoutPreviewOwner" : "layoutPreviewName"))}${item.conflict ? `<br><span class="error">${esc(t("layoutPreviewConflict"))}</span>` : ""}</td></tr>`).join("")}</tbody></table>` : "";
+        $("layoutPreviewExport").hidden = false;
+        $("layoutPreviewExport").onclick = () => {
+          const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: "application/json" }));
+          const anchor = document.createElement("a"); anchor.href = url; anchor.download = "AnimeMachine-folder-preview.json";
+          anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+  } catch (error) { if (generation === layoutPreviewGeneration) $("layoutPreviewStatus").textContent = error.message; }
+};
 const maintenanceTasks = new Set();
 function interpolate(template, values) {
   return template.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
@@ -6138,7 +6410,7 @@ async function loadHistory() {
     $("historyList").innerHTML = response.items.length
       ? response.items.map((item) => {
           const destination = item.operation === "remove" ? item.backupPath : item.targetPath;
-          const operation = item.state === "restored" ? t("historyRestored") : t({ move: "historyMove", rename: "historyRename", remove: "historyRemove" }[item.operation] || "historyMove");
+          const operation = item.state === "restored" ? t("historyRestored") : t({ move: "historyMove", rename: "historyRename", remove: "historyRemove", create_directory: "historyCreate" }[item.operation] || "historyOther");
           const restore = item.operation === "remove" && item.state === "applied"
             ? `<button type="button" class="text-button restore-history" data-icon="refresh" data-event="${item.eventId}">${t("restoreHistory")}</button>` : "";
           return `<div class="log"><time>${esc(new Intl.DateTimeFormat(localeForLanguage(), { dateStyle: "short", timeStyle: "medium" }).format(new Date(item.createdAt)))}</time><b>${esc(operation)}</b><span>${esc(item.sourcePath || "—")}</span><small>→ ${esc(destination || "—")} · ${esc(fmt(item.bytes || 0))} B</small>${restore}</div>`;
@@ -6541,6 +6813,7 @@ async function pollSyncSummary() {
     applyRecentEpisodeSortAvailability(aniState, { refresh: true });
     const generation = [aniState.successful_generation, aniState.last_success_at, aniState.last_release_update_at,
       aniState.release_progress_generation].join(":");
+    if (catalogChanged || (lastAniRssGeneration !== null && generation !== lastAniRssGeneration)) invalidateCatalogPages();
     if (catalogChanged || (lastAniRssGeneration !== null && generation !== lastAniRssGeneration &&
         ["recent_episode", "random"].includes(sort) && previousSort === sort)) search({ background: true }).catch(() => {});
     if (catalogChanged && $("radarDialog").open) loadRadar();
@@ -6588,30 +6861,7 @@ let radarQuarterKey = "", radarSubscribeGeneration = 0, radarRefreshPending = fa
 let radarSort = "", radarDirection = "asc";
 const radarPendingSubscriptions = new Set();
 const radarSubmittingSubscriptions = new Set();
-const radarSeenStorageKey = "anm-radar-seen-v1";
-let radarSeenUpdates = (() => {
-  try {
-    const value = JSON.parse(localStorage.getItem(radarSeenStorageKey) || "{}");
-    const entries = Array.isArray(value) ? value : Object.entries(value || {});
-    return new Map(entries.filter((entry) => Array.isArray(entry) && entry.length === 2
-      && typeof entry[0] === "string" && typeof entry[1] === "string").slice(-1000));
-  } catch (_) { return new Map(); }
-})();
-function radarUpdateToken(item) { return String(item?.last_episode_update_at || ""); }
-function radarSeenKey(item) { return String(item?.bgm_id || item?.id || ""); }
-function radarIsHighlighted(item) {
-  const token = radarUpdateToken(item), key = radarSeenKey(item);
-  return Boolean(key && token && radarSeenUpdates.get(key) !== token);
-}
-function markRadarSeen(seenKey, animeId, token) {
-  if (!seenKey || !token) return;
-  radarSeenUpdates.delete(String(seenKey));
-  radarSeenUpdates.set(String(seenKey), String(token));
-  if (radarSeenUpdates.size > 1000) radarSeenUpdates.delete(radarSeenUpdates.keys().next().value);
-  try { localStorage.setItem(radarSeenStorageKey, JSON.stringify([...radarSeenUpdates])); } catch (_) {}
-  const row = $("radarResults")?.querySelector(`tr[data-radar-id="${animeId}"]`);
-  row?.classList.remove("radar-highlight");
-}
+function radarIsHighlighted(item) { return item?.hasUnwatched === true; }
 function radarSeasons(now = new Date()) {
   const anchor = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
   const quarter = anchor.getFullYear() * 4 + Math.floor(anchor.getMonth() / 3);
@@ -6643,10 +6893,9 @@ function renderRadarTable(markup) {
     patchRenderedContent(current.tHead, next.tHead);
     reconcileKeyedChildren(current.tBodies[0], next.tBodies[0], "data-radar-id", (row, candidate) => {
       row.className = candidate.className;
-      row.dataset.radarUpdate = candidate.dataset.radarUpdate;
-      row.dataset.radarSeenKey = candidate.dataset.radarSeenKey;
       [...row.cells].forEach((cell, index) => {
         const nextCell = candidate.cells[index];
+        cell.className = nextCell.className;
         if (nextCell.dataset.label) cell.dataset.label = nextCell.dataset.label;
         patchRenderedContent(cell, nextCell);
       });
@@ -6675,6 +6924,11 @@ async function loadRadar() {
     return;
   }
   radarRefreshPending = false;
+  if ($("radarResults").dataset.language !== language) {
+    $("radarResults").replaceChildren();
+    renderedContents.delete($("radarResults"));
+    $("radarResults").dataset.language = language;
+  }
   radarController?.abort();
   const controller = new AbortController(), generation = ++radarGeneration;
   radarController = controller;
@@ -6720,11 +6974,14 @@ async function loadRadar() {
       start_to: season.to, limit: "all" });
     const [data, scan] = await Promise.all([
       api(`/api/anime?${query}`, { signal: controller.signal }),
-      api("/api/ani-rss/season-search", { signal: controller.signal }),
+      api("/api/ani-rss/season-search", { signal: controller.signal, timeoutMs: 5000 })
+        .catch((error) => ({ state: "unavailable", error: error.message })),
     ]);
     if (generation !== radarGeneration || !$("radarDialog").open) return;
+    data.items.forEach((item) => { if (item.viewing) updateViewing(item.viewing); });
     if (topModalDialog() !== $("radarDialog")) { radarRefreshPending = true; return; }
     const available = data.aniRssAvailable;
+    $("radarCatchup").disabled = config.playback?.enabled === false;
     $("radarSearch").disabled = !available || scan.state === "running";
     $("radarSync").disabled = !available || scan.state === "running";
     const searchLabel = $("radarSearch").querySelector("[data-i18n]");
@@ -6741,7 +6998,7 @@ async function loadRadar() {
       `${t(scan.state === "complete" ? "radarComplete" : scan.state === "running" ? "radarChecking" : scan.state === "interrupted" ? "radarInterrupted" : "failed")} · ${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "running" && scan.currentTitle ? ` · ${scan.currentTitle}` : ""}${scan.error ? ` · ${scan.error}` : ""}`;
     $("radarSearchStatus").title = $("radarSearchStatus").textContent;
     updateRadarSeasonCount($(`radarTab${radarSeason}`), season, data.total);
-    $("radarStatus").textContent = available ? "" : t("recentEpisodeRequiresAniRss");
+    $("radarStatus").textContent = data.viewingUnavailable ? t("viewingUnavailable") : available ? "" : t("recentEpisodeRequiresAniRss");
     if (scan.state === "running") radarTimer = setTimeout(loadRadar, 2000);
     renderRadarTable(data.items.length ? `<table class="data-table radar-table"><thead><tr>
       ${radarHeader("title", "radarTitleColumn")}${radarHeader("type", "radarMediaType", "radar-media")}${radarHeader("premiere", "radarStart", "radar-start")}${radarHeader("progress", "radarProgress")}${radarHeader("subscription", "radarSubscription")}${radarHeader("updated", "radarUpdated")}
@@ -6754,11 +7011,10 @@ async function loadRadar() {
           item.ani_rss_subscriptions.map((value) => aniSubscriptionMenu(value, item.id, !available)).join("") : state === "active" ?
           `<span class="radar-subscribed">${t("radarSubscribed")}</span>` : state === "paused" ? esc(t("radarPaused")) :
           `<button class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("radarSubscribe")}</button>`;
-        const updateToken = radarUpdateToken(item), seenKey = radarSeenKey(item);
-        return `<tr data-radar-id="${item.id}" data-radar-seen-key="${esc(seenKey)}" data-radar-update="${esc(updateToken)}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}"><td><button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button></td>
+        return `<tr data-radar-id="${item.id}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}" ${radarIsHighlighted(item) ? `title="${esc(t("radarUnwatched"))}"` : ""}><td class="radar-title-cell ${imagesEnabled ? "with-radar-cover" : ""}">${imagesEnabled ? `<img class="radar-cover" data-cover="${item.id}" alt="" decoding="async" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='600'%3E%3Crect width='400' height='600' fill='%23e6e4de'/%3E%3C/svg%3E">` : ""}<button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button>${item.media_code === "tv" && item.viewing?.episode != null ? viewingButton(item.id, item.viewing, item.bgm_id) : ""}</td>
           <td class="radar-media" data-label="${esc(t("radarMediaType"))}">${esc(label("media", item.media_code))}</td>
           <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}${radarReleaseDate(item)}</td>
-          <td class="radar-progress" data-label="${esc(t("radarProgress"))}">${item.episode_progress?.current || "?"} / ${item.episode_progress?.total || "?"}</td>
+          <td class="radar-progress" data-label="${esc(t("radarProgress"))}">${item.episode_progress?.current ?? "?"} / ${item.episode_progress?.total ?? "?"}</td>
           <td data-label="${esc(t("radarSubscription"))}">${subscription}</td><td data-label="${esc(t("radarUpdated"))}">${stamp && Number.isFinite(stamp.getTime()) ? esc(stamp.toLocaleString(language)) : ""}</td></tr>`;
       }).join("")}</tbody></table>` : `<p class="empty">${t("radarEmpty")}</p>`);
     $("radarResults").querySelectorAll("[data-radar-sort]").forEach((button) => {
@@ -6769,9 +7025,12 @@ async function loadRadar() {
         loadRadar();
       };
     });
-    $("radarResults").querySelectorAll("tr[data-radar-id]").forEach((row) => {
-      row.onclick = () => markRadarSeen(row.dataset.radarSeenKey, Number(row.dataset.radarId), row.dataset.radarUpdate);
-    });
+    if (imagesEnabled) {
+      covers();
+      $("radarResults").querySelectorAll("img[data-cover]").forEach((target) => {
+        if (target.dataset.coverQueued !== "1") coverObserver?.observe(target);
+      });
+    }
     $("radarResults").querySelectorAll("[data-detail]").forEach((b) => {
       b.onclick = () => showDetail(Number(b.dataset.detail)).catch((error) => { $("radarStatus").textContent = error.message; });
     });

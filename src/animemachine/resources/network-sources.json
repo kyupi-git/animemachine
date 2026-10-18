@@ -10,7 +10,10 @@
     {"id":"bangumi-subject-cache-ani-rss","service":"bangumi_subject_cache","baseUrl":"https://bgm-cache.wushuo.top","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
     {"id":"bangumi-image-official","service":"bangumi_image","baseUrl":"https://lain.bgm.tv","trust":"official","credentials":"never","capabilities":["image"],"enabled":true},
     {"id":"bangumi-image-anibt","service":"bangumi_image","baseUrl":"https://bgmimg.anibt.net","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true},
-    {"id":"bangumi-image-pro","service":"bangumi_image","baseUrl":"https://lain.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true}
+    {"id":"bangumi-image-pro","service":"bangumi_image","baseUrl":"https://lain.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true},
+    {"id":"mikan-official","service":"mikan","baseUrl":"https://mikanani.me","trust":"official","credentials":"never","capabilities":["html","torrent"],"enabled":true},
+    {"id":"mikan-alternate","service":"mikan","baseUrl":"https://mikanime.tv","trust":"official","credentials":"never","capabilities":["html","torrent"],"enabled":true},
+    {"id":"mikan-sakiko","service":"mikan","baseUrl":"https://mikan.sakiko.de","trust":"community_mirror","credentials":"never","capabilities":["html","torrent"],"enabled":true}
   ],
   "archiveAssetProxies": ["https://gh-proxy.com/{url}", "https://ghfast.top/{url}"],
   "applicationUpdateProxies": ["https://gh-proxy.com/{url}", "https://ghfast.top/{url}"]

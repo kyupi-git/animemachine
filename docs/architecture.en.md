@@ -51,7 +51,7 @@ Connect existing media as an external read-only library to keep its current layo
 
 ## Collection, subscriptions, and playback
 
-**Collection** starts with the Torrent pool: identify a release, compare it with existing files, and prepare a download and folder plan. Once confirmed, the plan adds stopped tasks to qBittorrent. After you start the tasks and downloads finish, a media scan updates your collection status.
+**Collection** starts with the Torrent pool or an online search from title details: identify a release, compare it with existing files, and prepare a download and folder plan. Once confirmed, the plan adds stopped tasks to qBittorrent. After you start the tasks and downloads finish, a media scan updates your collection status.
 
 **Subscriptions** start in Release radar or Ani-RSS: search releases, choose a group, and add a subscription. Ani-RSS downloads new episodes; AnimeMachine syncs subscription and media progress into the library.
 
@@ -59,12 +59,16 @@ Connect existing media as an external read-only library to keep its current layo
 
 Collection status comes from media checks. Available resources, download tasks, and subscription progress each have their own records. Title details bring them together so you can follow a release through to its files.
 
+Viewing records live separately in application data and use account IDs and stable Bangumi IDs. Title details and Release radar share these records. Continue watching groups titles and includes each last played episode. Media access records episodes by default. The optional PotPlayer extension reports positions from within the player and resumes five seconds before the saved position. Copied and downloaded PotPlayer playlists use the same mechanism. Positions are associated with individual media files, so changing files does not reuse an unrelated position. Late events from older sessions cannot overwrite a manual correction.
+
 ## Background tasks
 
 - **Title data**: the first launch downloads and builds the catalog. Weekly Archive checks run on Thursday at 02:12, UTC+8. If there is no new archive, one follow-up runs 24 hours later, followed by the next weekly cycle.
 - **Covers**: works you are browsing come first, followed by recent and older titles. You can use the library while images are loading.
 - **Media and resources**: scheduled folder scans and service syncs update collection status, episodes, and subscriptions.
 - **Ongoing tasks**: progress and recent valid results are saved. Unfinished work resumes after a restart; remote tasks retry when connectivity returns.
+
+Remote metadata requests run outside the database maintenance lock. The title identity is checked again before writing; the lock is held only briefly while publishing results.
 
 Background work runs separately from page interactions. Diagnostics summarizes network, storage, image, and service status; Logs shows recent significant results.
 

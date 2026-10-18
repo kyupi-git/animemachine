@@ -76,6 +76,29 @@ def _local_episode_number(raw: Any, episode_count: int, episode_start: int | Non
     return value
 
 
+def playback_episode(db: sqlite3.Connection, anime_id: int, raw: Any,
+                     episode_count: int | None = None) -> float | None:
+    """Use the same verified work-local numbering for media and resource progress."""
+    if raw is None:
+        return None
+    value = float(raw)
+    if not math.isfinite(value):
+        return None
+    if episode_count and value <= episode_count:
+        return value
+    cursor = db.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,))
+    row = cursor.fetchone()
+    if row is None:
+        return value
+    work = dict(zip((field[0] for field in cursor.description), row))
+    count = _episode_number(work.get("episode_count"))
+    if not count or value <= count:
+        return value
+    start = _episode_start_number(db, anime_id, count, work.get("episode_start_number"))
+    normalized = _local_episode_number(value, count, start)
+    return float(normalized) + (value - int(value))
+
+
 def _episode_progress(db: sqlite3.Connection, anime_id: int, episode_count: Any,
                       episode_start: Any, currents: Iterable[Any], totals: Iterable[Any]) -> dict[str, int | None]:
     known_total = _episode_number(episode_count)

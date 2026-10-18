@@ -61,6 +61,62 @@ class RuntimeCatalogTests(unittest.TestCase):
             db.execute("UPDATE anime_work SET library_state='existing'")
             self.assertNotEqual(before, runtime_catalog._work_state_signal(db))
 
+    def test_scanner_refresh_preserves_submitted_jobs_paths_maps_and_media(self) -> None:
+        from animemachine.catalog.migrations import migrate
+        plan = runtime_catalog.create_plan(self.db_path, self.config, {"animeIds": [self.anime_id]})
+        runtime_catalog.finish_plan_submission(self.db_path, plan["planId"], success=True)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE runtime_work SET library_state='downloading'")
+            db.execute("UPDATE runtime_file_map SET target_relative_path='Chosen 01.mkv'")
+            db.execute("""INSERT INTO runtime_asset VALUES(1,?,?,1000,NULL,NULL,?,0,NULL,'current','{}',?)""",
+                       (str(self.target / 'Chosen 01.mkv'), str(self.target), self.info_hash, runtime_catalog.utcnow()))
+        source = Path(self.temp.name) / 'scanner.sqlite3'
+        with contextlib.closing(sqlite3.connect(source)) as db:
+            migrate(db)
+        result = runtime_catalog.sync_overlay(self.db_path, source)
+        self.assertEqual(1, result['submissions'])
+        self.assertEqual(1, result['mappedRuntimeWorks'])
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual(('downloading', 'managed_submission', str(self.target)), db.execute(
+                'SELECT library_state,origin,target_unc FROM runtime_work').fetchone())
+            self.assertEqual('Chosen 01.mkv', db.execute('SELECT target_relative_path FROM runtime_file_map').fetchone()[0])
+            self.assertEqual(str(self.target), db.execute('SELECT owner_path FROM runtime_asset').fetchone()[0])
+            self.assertEqual('submitted', db.execute('SELECT state FROM download_plan').fetchone()[0])
+        reused = runtime_catalog.sync_overlay(self.db_path, source)
+        self.assertEqual(1, reused['submissions'])
+        self.assertEqual(1, reused['snapshotReused'])
+
+    def test_completed_approved_additions_enter_cached_playback_inventory(self) -> None:
+        from animemachine.integrations import playback
+        plan = runtime_catalog.create_plan(self.db_path, self.config, {"animeIds": [self.anime_id]})
+        runtime_catalog.finish_plan_submission(self.db_path, plan['planId'], success=True)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            self.assertEqual(1, runtime_catalog.record_completed_media(db, self.info_hash))
+            self.assertEqual(0, runtime_catalog.record_completed_media(db, self.info_hash))
+        items = playback.collect_items(self.db_path, self.anime_id, self.config, cached_only=True)
+        self.assertEqual(1, len(items))
+        self.assertEqual(1, items[0].episode)
+        self.assertEqual(self.target / 'Episode 01.mkv', items[0].path)
+        with mock.patch.object(Path, 'stat', side_effect=AssertionError('inventory must not probe media')):
+            latest = playback.latest_cached_episodes(self.db_path, [self.anime_id], self.config)
+        self.assertEqual({self.anime_id: 1}, latest)
+
+    def test_managed_snapshot_reassigns_scanner_ids_and_rejects_identity_conflicts(self) -> None:
+        plan = runtime_catalog.create_plan(self.db_path, self.config, {"animeIds": [self.anime_id]})
+        runtime_catalog.finish_plan_submission(self.db_path, plan['planId'], success=True)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.row_factory = sqlite3.Row
+            saved = runtime_catalog._managed_snapshot(db)
+            db.execute("UPDATE runtime_work SET target_unc=target_unc||'-other',origin='catalog'")
+            runtime_catalog._restore_managed_snapshot(db, saved)
+            restored_id = db.execute('SELECT private_work_id FROM runtime_work WHERE target_unc=?', (str(self.target),)).fetchone()[0]
+            self.assertNotEqual(1, restored_id)
+            self.assertEqual(restored_id, db.execute('SELECT private_work_id FROM runtime_torrent_work').fetchone()[0])
+            other = db.execute('SELECT id FROM anime_work WHERE id<>? LIMIT 1', (self.anime_id,)).fetchone()[0]
+            db.execute('UPDATE runtime_work SET anime_id=? WHERE target_unc=?', (other, str(self.target)))
+            with self.assertRaisesRegex(RuntimeError, 'changed title identity'):
+                runtime_catalog._restore_managed_snapshot(db, saved)
+
     def test_overlay_failure_closes_both_database_connections(self) -> None:
         opened = []
         connect = sqlite3.connect

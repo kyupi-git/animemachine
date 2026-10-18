@@ -11,7 +11,7 @@
   <body>
     <header class="hero">
       <div class="hero-brand">
-        <h1 data-icon="play" data-i18n="catalog">AnimeMachine</h1>
+        <h1 data-icon="catalog" data-i18n="catalog">AnimeMachine</h1>
         <p class="eyebrow" data-i18n="catalogTagline">全自动动画收藏库</p>
       </div>
       <div class="hero-tools">
@@ -268,6 +268,7 @@
         <div class="radar-heading">
           <h2 id="radarTitle" data-i18n="radar">新作雷达</h2>
           <div class="radar-actions">
+            <button id="radarCatchup" class="text-button radar-button" type="button" data-icon="play" data-i18n="catchup">一键继续观看</button>
             <button id="radarSync" class="text-button radar-button" type="button" data-i18n-title="radarSync" data-i18n-aria-label="radarSync"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1a8 8 0 0 1 13.2 3.2M17.9 17.9A8 8 0 0 1 4.7 14.7"/></svg><span data-i18n="radarSyncShort">同步状态</span></button>
             <button id="radarSearch" class="text-button radar-button" type="button" data-i18n-title="radarSearch" data-i18n-aria-label="radarSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span data-i18n="radarSearchShort">检索资源</span></button>
             <button id="radarPlaceholders" class="text-button radar-button" type="button" data-admin-only data-i18n-title="createPlaceholders" data-i18n-aria-label="createPlaceholders"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3zM12 11v6M9 14h6"/></svg><span data-i18n="radarFoldersShort">建立目录</span></button>
@@ -284,6 +285,31 @@
           <div id="radarResults" class="table-wrap"></div>
         </div>
       </div>
+    </dialog>
+    <dialog id="catchupDialog" aria-labelledby="catchupTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <h2 id="catchupTitle" data-i18n="catchup">一键继续观看</h2>
+      <p id="catchupStatus" class="muted" role="status" aria-live="polite"></p>
+      <div id="catchupList"></div>
+      <div id="catchupPlayers" class="playback-actions"></div>
+    </dialog>
+    <dialog id="viewingDialog" aria-labelledby="viewingTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <form id="viewingForm">
+        <h2 id="viewingTitle" data-i18n="viewingEdit">修改续看集数</h2>
+        <p id="viewingWork"></p>
+        <label><span data-i18n="viewingEpisode">下次从这一集开始（包含本集）</span><input id="viewingEpisode" type="number" min="0" max="100000" step="any" list="viewingEpisodes" inputmode="decimal"><datalist id="viewingEpisodes"></datalist></label>
+        <label><span data-i18n="viewingPosition">播放位置（时:分:秒）</span><input id="viewingPosition" type="text" placeholder="00:00:00" pattern="[0-9]{1,3}:[0-5][0-9]:[0-5][0-9]" inputmode="numeric"></label>
+        <div class="playback-actions"><button id="viewingSave" class="primary" type="submit" data-i18n="save">保存</button><button id="viewingClear" class="tool dark-tool" type="button" data-i18n="viewingClear">设为未开始</button><button id="viewingUndo" class="text-button" type="button" data-i18n="viewingUndo" hidden>撤销</button></div>
+        <p id="viewingStatus" class="muted" role="status" aria-live="polite"></p>
+      </form>
+    </dialog>
+    <dialog id="layoutPreviewDialog" aria-labelledby="layoutPreviewTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <h2 id="layoutPreviewTitle" data-i18n="layoutPreview">目录调整预览</h2>
+      <p id="layoutPreviewStatus" class="muted" role="status" aria-live="polite"></p>
+      <div id="layoutPreviewResults" class="table-wrap"></div>
+      <button id="layoutPreviewExport" type="button" class="tool dark-tool" data-icon="download" data-i18n="layoutPreviewExport" hidden>下载预览</button>
     </dialog>
     <dialog id="radarSubscribeDialog" aria-labelledby="radarSubscribeTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
@@ -426,6 +452,7 @@
             <div class="maintenance-grid">
               <button id="createPlaceholders" data-icon="folder" type="button" class="maintenance-action"><b data-i18n="createPlaceholders">建立订阅目录</b><small data-i18n="createPlaceholdersHint">为已订阅作品建立占位目录，沿用本地库已有目录。</small></button>
               <button id="auditLibrary" data-icon="check" type="button" class="maintenance-action"><b data-i18n="auditLibrary">核验全部本地资源</b><small data-i18n="auditLibraryHint">分批核验文件，并在后台更新收藏完整度。</small></button>
+              <button id="previewLibraryLayout" data-icon="folder" type="button" class="maintenance-action"><b data-i18n="layoutPreview">目录调整预览</b><small data-i18n="layoutPreviewHint">核对作品命名、日语版标题与附属短篇归属。</small></button>
             </div>
             <div id="libraryMaintenanceStatus" class="maintenance-status muted" role="status" aria-live="polite"></div>
           </fieldset>

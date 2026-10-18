@@ -10,6 +10,7 @@ import contextlib
 import datetime as dt
 import hashlib
 import ipaddress
+import io
 import json
 import math
 import os
@@ -40,11 +41,12 @@ from typing import Any, Callable, Iterable
 from ..config.policy import ConfigStore, NON_GROUPING_RELATIONS, STRICT_SERIES_RELATIONS
 from ..config import credentials as credential_store
 from ..torrents import runtime as runtime_catalog
-from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss
+from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup
 from . import archive_update, relation_graph, metadata_repair
 from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
 from ..library import audit as library_audit, external as external_library, history as library_history, layout as library_layout, placeholders as library_placeholders
+from ..library import preview as library_preview
 from ..network import (connectivity as network_connectivity, diagnostics as network_diagnostics,
                        downloads as network_downloads, registry as network_registry,
                        sources as network_sources, tls as tls_support,
@@ -1624,7 +1626,7 @@ CREATE TABLE anime_work(
   start_month TEXT NOT NULL, directory_date TEXT NOT NULL, raw_date TEXT,
   episode_count INTEGER, episode_start_number INTEGER, source_type TEXT, source_code TEXT, original_language TEXT NOT NULL DEFAULT 'ja', country_code TEXT, studio TEXT,
   summary TEXT, source_url TEXT NOT NULL, fetched_at TEXT NOT NULL,
-  physical_role TEXT NOT NULL DEFAULT 'work', physical_owner_anime_id INTEGER
+  physical_role TEXT NOT NULL DEFAULT 'work', physical_owner_anime_id INTEGER, directory_title TEXT
 );
 CREATE TABLE anime_title(
   anime_id INTEGER NOT NULL REFERENCES anime_work(id) ON DELETE CASCADE,
@@ -1721,7 +1723,7 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                 ("sources", "Bangumi Archive" + ("; Wikidata labels/aliases" if uses_wikidata else "")),
                 ("license_notice", "Bangumi entries: CC BY-SA 3.0" + ("; Wikidata: CC0" if uses_wikidata else "")),
                 ("build_state", "enriching"),
-                ("feature_schema_version", "16"),
+                ("feature_schema_version", "17"),
                 ("release_event_source_version", RELEASE_EVENT_SOURCE_VERSION),
                 ("english_display_title_policy", "quality-v4")
             ]
@@ -1797,6 +1799,17 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
             if publish_path.stat().st_size != temp_path.stat().st_size:
                 raise OSError("catalog publish copy is incomplete")
         deadline = time.monotonic() + 30
+        if path.exists():
+            # The bootstrap shell is already served in WAL mode. Replacing its
+            # inode leaves live connections and WAL frames attached to a different
+            # database. Publish through SQLite so readers see one committed image.
+            def publish_progress(_status: int, _remaining: int, _total: int) -> None:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("catalog publication waited too long for active readers")
+            with contextlib.closing(sqlite3.connect(f"file:{publish_path.as_posix()}?mode=ro", uri=True)) as source_db:
+                with contextlib.closing(sqlite3.connect(path, timeout=30)) as target_db:
+                    source_db.backup(target_db, pages=512, progress=publish_progress, sleep=.05)
+            return
         while True:
             try:
                 os.replace(publish_path, path)
@@ -1923,6 +1936,19 @@ def localized_display_title(db: sqlite3.Connection, anime_id: int, language: str
 def migrate_catalog_features(db: sqlite3.Connection) -> None:
     """Add product UI indexes without rebuilding the immutable archive rows."""
     columns = {row[1] for row in db.execute("PRAGMA table_info(anime_work)")}
+    version = db.execute("SELECT value FROM metadata WHERE key='feature_schema_version'").fetchone()
+    # A naming-policy upgrade does not require re-deriving themes, studios,
+    # countries and the full relation graph for every existing work.
+    required = {"media_code", "physical_role", "episode_start_number", "original_language", "summary"}
+    policy = db.execute("SELECT value FROM metadata WHERE key='english_display_title_policy'").fetchone()
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if (version and version[0] == "16" and required <= columns
+            and policy and policy[0] == "quality-v4"
+            and {"anime_relation_edge", "anime_release_event"} <= tables):
+        with db:
+            rebuild_physical_layout(db)
+            db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('feature_schema_version','17')")
+        return
     with db:
         if "media_code" not in columns:
             db.execute("ALTER TABLE anime_work ADD COLUMN media_code TEXT")
@@ -2019,18 +2045,31 @@ def migrate_catalog_features(db: sqlite3.Connection) -> None:
         rebuild_studio_clusters(db)
         relation_graph.rebuild(db)
         rebuild_physical_layout(db)
-        db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('feature_schema_version','16')")
+        db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('feature_schema_version','17')")
+
+
+def rebuild_directory_titles(db: sqlite3.Connection) -> None:
+    """Keep the Archive primary intact; project Japanese edition titles for paths."""
+    if "directory_title" not in {row[1] for row in db.execute("PRAGMA table_info(anime_work)")}:
+        db.execute("ALTER TABLE anime_work ADD COLUMN directory_title TEXT")
+    db.execute("""UPDATE anime_work SET directory_title=CASE WHEN original_language<>'ja' THEN
+        COALESCE((SELECT title FROM anime_title WHERE anime_id=anime_work.id AND language='ja'
+            AND trim(title)<>'' ORDER BY CASE source WHEN 'bangumi-archive' THEN 0 ELSE 1 END,
+            CASE title_type WHEN 'primary' THEN 0 WHEN 'label' THEN 1 ELSE 2 END,rowid LIMIT 1),title_ja)
+        ELSE title_ja END""")
 
 
 def rebuild_physical_layout(db: sqlite3.Connection) -> None:
     """Materialize logical-subject to physical-library ownership."""
+    rebuild_directory_titles(db)
     db.execute("UPDATE anime_work SET physical_role='work',physical_owner_anime_id=NULL")
     works = {
         int(row[0]): {
             "id": int(row[0]), "bgm_id": int(row[1]), "title_ja": row[2],
             "start_month": row[3], "directory_date": row[4],
+            "media_code": row[5], "summary": row[6], "directory_title": row[7],
         }
-        for row in db.execute("SELECT id,bgm_id,title_ja,start_month,directory_date FROM anime_work")
+        for row in db.execute("SELECT id,bgm_id,title_ja,start_month,directory_date,media_code,summary,directory_title FROM anime_work")
     }
     bgm_to_id = {int(row["bgm_id"]): int(row["id"]) for row in works.values()}
     relations: dict[int, list[dict[str, Any]]] = {}
@@ -2043,6 +2082,13 @@ def rebuild_physical_layout(db: sqlite3.Connection) -> None:
         for anime_id, component_id in db.execute("SELECT anime_id,component_id FROM anime_series_component"):
             components.setdefault(int(component_id), []).append(works[int(anime_id)])
     component_by_anime = {int(row["id"]): rows for rows in components.values() for row in rows}
+    for anime_id, work in works.items():
+        if work["media_code"] in {"web", "ova", "short"} and library_layout.is_companion_description(work["summary"]):
+            direct = [bgm_to_id[int(edge["related_bgm_id"])] for edge in relations.get(anime_id, [])
+                      if edge["relation_code"] == "main_story" and int(edge["related_bgm_id"] or 0) in bgm_to_id]
+            if len(set(direct)) == 1 and direct[0] != anime_id:
+                work["physical_role"] = "supplement"
+                component_by_anime[anime_id] = [*component_by_anime.get(anime_id, []), works[direct[0]]]
     updates: list[tuple[str, int | None, int]] = []
     for anime_id, work in works.items():
         if library_layout.physical_role(work) != "supplement":
@@ -2113,7 +2159,7 @@ def ensure_catalog_features(db_path: Path) -> None:
         relation_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_relation_edge'").fetchone()
         release_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_release_event'").fetchone()
         return ("media_code" in columns and "physical_role" in columns and "episode_start_number" in columns
-                and bool(version and version[0] == "16")
+                and "directory_title" in columns and bool(version and version[0] == "17")
                 and bool(title_policy and title_policy[0] == "quality-v4")
                 and bool(relation_table) and bool(release_table))
 
@@ -4346,11 +4392,13 @@ class CatalogWarmup:
 
 
 _ADMIN_GET_PATHS = frozenset({
+    "/api/library/layout-preview",
     "/api/logs", "/api/history", "/api/archive/update", "/api/maintenance/status", "/api/auth/users",
     "/api/diagnostics/network", "/api/diagnostics/playback", "/api/images/preload", "/api/system/health",
     "/api/update/status",
 })
 _ADMIN_POST_PATHS = frozenset({
+    "/api/library/layout-preview",
     "/api/archive/update", "/api/archive/import", "/api/images/refresh", "/api/metadata/repair",
     "/api/catalog/reshuffle", "/api/ani-rss/sync", "/api/connections/test",
     "/api/connections/qbittorrent/credential", "/api/connections/ani-rss/credential",
@@ -4395,6 +4443,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         bootstrap_password=os.getenv("ANM_ADMIN_PASSWORD", ""),
     )
     maintenance_lock = threading.Lock()
+    layout_preview_state: dict[str, Any] = {"state": "idle"}
     maintenance: dict[str, dict[str, Any]] = {
         "images": {"state": "idle", "done": 0, "total": 0, "priorityDone": 0, "priorityTotal": 0, "failed": 0},
         "metadata": {"state": "idle", "processed": 0, "repaired": 0, "failed": 0},
@@ -4404,6 +4453,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         "aniRssSearch": {},
     }
     media_tokens = playback.MediaTokenRegistry()
+    viewing_store = viewing.Store(auth_store.path.parent / "viewing.sqlite3")
+    viewing_store.normalize_catalog_episodes(db_path)
     playlist_tokens = playback.PlaylistTokenRegistry()
     playback_diagnostics = playback.PlaybackDiagnostics()
     runtime_health_lock = threading.RLock()
@@ -4801,67 +4852,59 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
 
     def start_torrent_search(anime_id: int) -> bool:
         key = str(anime_id)
+        with contextlib.closing(sqlite3.connect(db_path)) as db:
+            row = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+            if row is None:
+                raise ValueError("anime not found")
+            bgm_id = int(row[0])
         with maintenance_lock:
-            prior = maintenance["torrentSearch"].get(key, {})
-            if prior.get("state") == "running":
+            if maintenance["torrentSearch"].get(key, {}).get("state") == "running":
                 return False
-            maintenance["torrentSearch"][key] = {"state": "running", "phase": "pool_discovery",
-                                                  "animeId": anime_id, "mapped": 0}
+            if sum(job.get("state") == "running" for job in maintenance["torrentSearch"].values()) >= 2:
+                return False
+            maintenance["torrentSearch"][key] = {"state": "running", "phase": "online_discovery",
+                                                  "animeId": anime_id, "bgmId": bgm_id, "mapped": 0}
+        directory = STATE_DIR / "torrent-search" / str(bgm_id)
+        progress_file = directory / "status.json"
         def update(stats: dict[str, int]) -> None:
             with maintenance_lock:
                 maintenance["torrentSearch"][key].update(phase="torrent_mapping", **stats)
-            write_sync_status("torrent_mapping", "running", {"animeId": anime_id, **stats})
         def worker() -> None:
             try:
+                current = config_store.read()
+                environment = os.environ.copy()
+                environment.update(REQUEST_TIMEOUT_SECONDS="8", HTTP_MAX_RETRIES="1",
+                                   TORRENT_COLLECTOR_CATALOG_PATH=str(db_path))
+                command = [sys.executable, "-m", "animemachine.torrents.search", "--db", str(db_path),
+                           "--anime-id", str(anime_id), "--out", str(directory), "--status", str(progress_file)]
+                progress_file.unlink(missing_ok=True)
+                completed = subprocess.run(command, capture_output=True, timeout=180, env=environment)
+                if completed.returncode:
+                    raise RuntimeError("torrent_search_failed")
+                discovery = json.loads(progress_file.read_text(encoding="utf-8"))
+                with maintenance_lock:
+                    maintenance["torrentSearch"][key].update(phase="torrent_mapping", **discovery)
                 with catalog_work_lock, DATABASE_MAINTENANCE_LOCK:
-                    current = config_store.read()
-                    torrent_pool = Path(str(current.get("deployment", {}).get("torrentPoolRoot") or TORRENT_POOL))
-                    with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as meta:
-                        effective_id = runtime_catalog.physical_anime_id(meta, anime_id)
-                        aliases = [str(row[0]) for row in meta.execute(
-                            "SELECT title FROM anime_title WHERE anime_id IN (?,?) ORDER BY length(title) DESC",
-                            (anime_id, effective_id))]
-                    pool_storage = status_for_path(torrent_pool, timeout=4.0)
-                    if pool_storage.state != AVAILABLE:
-                        with maintenance_lock:
-                            maintenance["torrentSearch"][key].update(
-                                state="unavailable", phase="pool_unavailable", storageState=pool_storage.state
-                            )
-                        write_sync_status("torrent_search", "unavailable",
-                                          {"animeId": anime_id, "storageState": pool_storage.state})
-                        log_event("WARNING", "torrent_pool_unavailable", animeId=anime_id, storageState=pool_storage.state)
-                        return
-                    queue = STATE_DIR / "review" / "unmapped-torrents.json"
-                    command = [sys.executable, "-m", "animemachine.torrents.scanner", str(torrent_pool), "--db", str(RUNTIME_DB),
-                               "--config", str(config_store.path), "--queue-output", str(queue),
-                               "--progress-file", str(SYNC_STATUS_FILE), "--workers", "2"]
-                    for alias in aliases[:12]:
-                        if len(torrent_mapper.norm(alias)) >= 3:
-                            command.extend(["--name-query", alias])
-                    completed = subprocess.run(command, text=True, capture_output=True, timeout=1800)
-                    if completed.returncode == 3:
-                        with maintenance_lock:
-                            maintenance["torrentSearch"][key].update(
-                                state="unavailable", phase="pool_unavailable", storageState="unavailable"
-                            )
-                        write_sync_status("torrent_search", "unavailable",
-                                          {"animeId": anime_id, "storageState": "unavailable"})
-                        log_event("WARNING", "torrent_pool_unavailable", animeId=anime_id, storageState="unavailable")
-                        return
+                    if playback.viewing_identities(db_path, [anime_id])[anime_id] != bgm_id:
+                        raise RuntimeError("Catalog identity changed; search again")
+                    with maintenance_lock:
+                        maintenance["torrentSearch"][key].update(phase="torrent_mapping", **discovery)
+                    command = [sys.executable, "-m", "animemachine.torrents.scanner", str(directory),
+                               "--db", str(RUNTIME_DB), "--config", str(config_store.path), "--workers", "2", "--limit", "1000",
+                               "--queue-output", str(STATE_DIR / "review" / "unmapped-torrents.json")]
+                    completed = subprocess.run(command, capture_output=True, timeout=120)
                     if completed.returncode not in {0, 2}:
-                        raise RuntimeError((completed.stderr or completed.stdout or "targeted pool scan failed")[-1000:])
-                    result = torrent_mapper.remap_one_work(db_path, RUNTIME_DB, current, effective_id, progress=update)
+                        raise RuntimeError("torrent_search_index_failed")
+                    result = torrent_mapper.remap_one_work(db_path, RUNTIME_DB, current, anime_id, progress=update)
                     overlay = runtime_catalog.sync_overlay(db_path, RUNTIME_DB)
                 with maintenance_lock:
                     maintenance["torrentSearch"][key].update(state="complete", phase="ready", **result,
-                                                                overlayTorrents=int(overlay.get("torrents", 0)))
-                write_sync_status("ready", "complete", {"animeId": anime_id, **result})
-                log_event("INFO", "torrent_search_complete", animeId=anime_id, **result)
+                        overlayTorrents=int(overlay.get("torrents", 0)), **discovery)
+                log_event("INFO", "torrent_search_complete", animeId=anime_id, saved=discovery["saved"], mapped=result["mapped"])
             except Exception as exc:
                 with maintenance_lock:
-                    maintenance["torrentSearch"][key].update(state="failed", error=f"{type(exc).__name__}: {exc}")
-                write_sync_status("torrent_search", "error", {"animeId": anime_id, "errorType": type(exc).__name__})
-                log_event("ERROR", "torrent_search_failed", animeId=anime_id, error=f"{type(exc).__name__}: {exc}")
+                    maintenance["torrentSearch"][key].update(state="failed", error=type(exc).__name__)
+                log_event("WARNING", "torrent_search_failed", animeId=anime_id, errorType=type(exc).__name__)
         threading.Thread(target=worker, daemon=True, name=f"anm-torrent-search-{anime_id}").start()
         return True
 
@@ -5225,6 +5268,16 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             self.playlist_response(resolved[0], anime_id, disposition)
 
+        def record_media_access(self, token: str) -> None:
+            try:
+                media_tokens.started(token, viewing_store)
+            except sqlite3.Error as exc:
+                # Watching records are optional to the media transfer itself.
+                # Retry on a later request, rather than breaking playback.
+                if not getattr(self, "viewing_warning", False):
+                    self.viewing_warning = True
+                    log_event("WARNING", "viewing_record_unavailable", error=type(exc).__name__)
+
         def media_response(self, token: str, *, head_only: bool = False) -> None:
             locator = media_tokens.resolve(token)
             if not locator:
@@ -5280,6 +5333,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         for chunk in response.iter_raw(1024 * 1024):
                             if chunk:
                                 self.wfile.write(chunk)
+                                self.record_media_access(token)
                                 sent += len(chunk)
                                 playback_diagnostics.transfer(token, len(chunk))
                         return
@@ -5325,6 +5379,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     for chunk in response.iter_raw(1024 * 1024):
                         if chunk:
                             self.wfile.write(chunk)
+                            self.record_media_access(token)
                             sent += len(chunk)
                             playback_diagnostics.transfer(token, len(chunk))
 
@@ -5435,6 +5490,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         if not chunk:
                             break
                         self.wfile.write(chunk)
+                        self.record_media_access(token)
                         remaining -= len(chunk)
                         playback_diagnostics.transfer(token, len(chunk))
                     playback_diagnostics.finish(token, "complete" if remaining == 0 else "incomplete")
@@ -5452,7 +5508,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 playback_diagnostics.finish(token, "error")
                 self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "media file unavailable")
 
-        def read_json(self) -> Any:
+        def read_json(self) -> dict[str, Any]:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError as exc:
@@ -5467,10 +5523,26 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 self.connection.settimeout(previous_timeout)
             if len(raw) != length:
                 raise ValueError("incomplete JSON request body")
-            return json.loads(raw.decode("utf-8"))
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("JSON object required")
+            return payload
 
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
+            item_match = re.fullmatch(r"/api/playback/item/([A-Za-z0-9_-]+)/episode\.anm", parsed.path)
+            if item_match:
+                token = item_match.group(1)
+                locator = media_tokens.resolve(token)
+                if locator is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                base = self.public_base_url(config_store.read())
+                self.json_response({"url": playback.media_url(base, token, locator),
+                                    "title": f"{locator.display_title or locator.name} [ANM:{token[:12]}]",
+                                    "resumeMs": media_tokens.resume_ms(token, viewing_store),
+                                    "eventUrl": f"{base}/api/playback/started/{token}"})
+                return
             if parsed.path == "/.well-known/appspecific/com.chrome.devtools.json":
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self.send_header("Cache-Control", "no-store")
@@ -5540,9 +5612,61 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if parsed.path == "/api/anime":
                 try:
                     mark_interactive()
-                    self.json_response(query_catalog(db_path, urllib.parse.parse_qs(parsed.query), config_store.read()))
+                    query = urllib.parse.parse_qs(parsed.query)
+                    cfg = config_store.read()
+                    payload = query_catalog(db_path, query, cfg)
+                    if query.get("radar") == ["1"]:
+                        try:
+                            records = {record["bgmId"]: record for record in viewing_store.snapshot(self.auth_session.user_id)}
+                            identities = {int(row["id"]): int(row["bgm_id"]) for row in payload["items"]}
+                            latest = playback.latest_cached_episodes(db_path, list(identities), cfg, expected_identities=identities)
+                        except sqlite3.Error:
+                            records, latest = {}, {}
+                            payload["viewingUnavailable"] = True
+                        for row in payload["items"]:
+                            record = records.get(int(row["bgm_id"]))
+                            row["viewing"] = {**record, "animeId": row["id"]} if record else None
+                            episode = latest.get(int(row["id"]))
+                            row["hasUnwatched"] = bool(episode is not None and (not record or record["episode"] is None or episode > record["episode"]))
+                    self.json_response(payload)
                 except (ValueError, sqlite3.Error) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/viewing":
+                records = {record["bgmId"]: record for record in viewing_store.snapshot(self.auth_session.user_id)}
+                with contextlib.closing(sqlite3.connect(db_path)) as db:
+                    mapped = []
+                    for bgm_id, record in records.items():
+                        row = db.execute("SELECT id FROM anime_work WHERE bgm_id=?", (bgm_id,)).fetchone()
+                        if row is not None:
+                            mapped.append({**record, "animeId": int(row[0])})
+                self.json_response({"items": mapped})
+                return
+            if parsed.path == "/api/playback/potplayer-extension.zip":
+                package = io.BytesIO()
+                folder = RESOURCES / "potplayer"
+                with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for name in ("MediaPlayParse - AnimeMachine.as", "anm_playback.dll", "anm_playback.c"):
+                        archive.write(folder / name, "Extension/Media/PlayParse/" + name)
+                    for name in ("README.txt", "LICENSE.txt", "build.json"):
+                        archive.write(folder / name, name)
+                body = package.getvalue()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", 'attachment; filename="AnimeMachine-PotPlayer.zip"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.write_body(body)
+                return
+            viewing_match = re.fullmatch(r"/api/anime/(\d+)/viewing", parsed.path)
+            if viewing_match:
+                anime_id = int(viewing_match.group(1))
+                try:
+                    bgm_id = playback.viewing_identities(db_path, [anime_id])[anime_id]
+                    self.json_response({**viewing_store.get(self.auth_session.user_id, bgm_id), "animeId": anime_id})
+                except ValueError:
+                    self.json_response({"error": "anime not found"}, HTTPStatus.NOT_FOUND)
                 return
             if parsed.path == "/api/options":
                 self.json_response(catalog_options(db_path))
@@ -5574,6 +5698,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 except (ValueError, sqlite3.Error) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
+            if parsed.path == "/api/library/layout-preview":
+                with maintenance_lock:
+                    self.json_response(dict(layout_preview_state))
+                return
             if parsed.path == "/api/watches":
                 params = urllib.parse.parse_qs(parsed.query)
                 cfg = config_store.read()
@@ -5591,7 +5719,14 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if torrent_search_match:
                 key = torrent_search_match.group(1)
                 with maintenance_lock:
-                    self.json_response(dict(maintenance["torrentSearch"].get(key, {"state": "idle", "animeId": int(key)})))
+                    payload = dict(maintenance["torrentSearch"].get(key, {"state": "idle", "animeId": int(key)}))
+                if payload.get("state") == "running" and payload.get("phase") == "online_discovery" and payload.get("bgmId"):
+                    try:
+                        progress = json.loads((STATE_DIR / "torrent-search" / str(payload["bgmId"]) / "status.json").read_text(encoding="utf-8"))
+                        payload.update({key: progress[key] for key in ("sourcesDone", "sourcesTotal", "found", "saved", "failed") if key in progress})
+                    except (OSError, ValueError):
+                        pass
+                self.json_response(payload)
                 return
             ani_rss_search_match = re.fullmatch(r"/api/anime/(\d+)/ani-rss/search", parsed.path)
             if ani_rss_search_match:
@@ -5613,6 +5748,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 language = (urllib.parse.parse_qs(parsed.query).get("language") or [cfg.get("ui", {}).get("language", "en")])[0]
                 cfg = {**cfg, "ui": {**cfg.get("ui", {}), "language": language}}
                 detail = catalog_detail(db_path, int(match.group(1)), cfg)
+                if detail:
+                    detail["viewing"] = {**viewing_store.get(self.auth_session.user_id, int(detail["bgm_id"])), "animeId": detail["id"]}
                 self.json_response(detail or {"error": "not found"}, 200 if detail else 404)
                 return
             graph_match = re.fullmatch(r"/api/anime/(\d+)/relations/graph", parsed.path)
@@ -5636,6 +5773,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     remote_source = source.startswith("ani-rss:") or bool(entries and all(item.origin == "ani-rss" for item in entries))
                     self.json_response({
                         "available": bool(entries), "count": len(entries),
+                        "viewing": {**viewing_store.get(self.auth_session.user_id, playback.viewing_identities(db_path, [anime_id])[anime_id]), "animeId": anime_id},
                         "sourceType": "ani-rss" if remote_source else "local",
                         "aniRssMediaPathState": playback.ani_rss_media_path_state(cfg) if remote_source else "not_applicable",
                         "items": [
@@ -5676,7 +5814,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     source = (params.get("source") or [""])[0]
                     disposition = "attachment" if (params.get("download") or [""])[0] in {"1", "true"} else "inline"
                     body, _ = playback.playlist_payload(db_path, int(playlist_match.group(1)), cfg, media_tokens,
-                                                        self.public_base_url(cfg), start=start, source=source)
+                                                        self.public_base_url(cfg), start=start, source=source, force_http=True,
+                                                        viewing_store=viewing_store, user_id=self.auth_session.user_id)
                     self.playlist_response(body, int(playlist_match.group(1)), disposition)
                 except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -5843,6 +5982,36 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
 
         def do_POST(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
+            started_match = re.fullmatch(r"/api/playback/started/([A-Za-z0-9_-]+)", parsed.path)
+            if started_match:
+                # The opaque media capability authorizes only its captured account,
+                # work and episode, so external players need no cookies or API key.
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict):
+                        raise ValueError("JSON object required")
+                    token = started_match.group(1)
+                    if media_tokens.resolve(token) is None:
+                        self.json_response({"error": "playback_expired"}, HTTPStatus.NOT_FOUND)
+                        return
+                    if request.get("claim") is True:
+                        self.json_response({"claimed": media_tokens.claim(token)})
+                    else:
+                        event = request.get("event")
+                        if type(event) is not int or not 1 <= event <= 1000000000:
+                            raise ValueError("invalid playback event")
+                        position = request.get("positionMs")
+                        duration = request.get("durationMs", 0)
+                        instance = request.get("instance", "")
+                        if not isinstance(instance, str) or (instance and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", instance)):
+                            raise ValueError("invalid playback instance")
+                        if position is not None:
+                            viewing.validate_position(position, duration)
+                        self.json_response({"recorded": media_tokens.started(token, viewing_store, native_event=event,
+                                            position_ms=position, duration_ms=duration, instance=instance)})
+                except (ValueError, TypeError, sqlite3.Error) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if parsed.path == "/api/auth/login":
                 try:
                     client = str(self.client_address[0])
@@ -5883,6 +6052,60 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if requires_admin("POST", parsed.path) and self.auth_session.role != "admin":
                 self.json_response({"error": "administrator_required"}, HTTPStatus.FORBIDDEN)
+                return
+            viewing_match = re.fullmatch(r"/api/anime/(\d+)/viewing", parsed.path)
+            if viewing_match:
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict) or type(request.get("revision")) is not int:
+                        raise ValueError("viewing revision is required")
+                    anime_id = int(viewing_match.group(1))
+                    bgm_id = playback.viewing_identities(db_path, [anime_id])[anime_id]
+                    if request.get("bgmId") != bgm_id:
+                        raise viewing.Conflict("viewing_conflict")
+                    self.json_response({**viewing_store.correct(self.auth_session.user_id, bgm_id,
+                                        request.get("episode"), request["revision"], request.get("positionMs", 0)), "animeId": anime_id})
+                except viewing.Conflict as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.CONFLICT)
+                except (ValueError, TypeError, sqlite3.Error) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/playback/catchup":
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict):
+                        raise ValueError("JSON object required")
+                    cfg = config_store.read()
+                    if cfg.get("playback", {}).get("enabled", True) is not True:
+                        raise ValueError("playback is disabled")
+                    params = catchup.season_params(request)
+                    cfg = {**cfg, "ui": {**cfg.get("ui", {}), "language": params["language"][0]}}
+                    rows = query_catalog(db_path, params, cfg)["items"]
+                    items, owners, groups = catchup.queue(db_path, rows, cfg, viewing_store, self.auth_session.user_id)
+                    if not items:
+                        self.json_response({"count": 0, "groups": []})
+                        return
+                    if request.get("preview") is True:
+                        self.json_response({"count": len(items), "groups": groups})
+                        return
+                    items, owners, groups = catchup.validate(items, owners, groups, cfg)
+                    if not items:
+                        self.json_response({"count": 0, "groups": []})
+                        return
+                    base = self.public_base_url(cfg)
+                    body, _ = playback.playlist_payload(db_path, 0, cfg, media_tokens, base, force_http=True,
+                        items=items, anime_ids=owners, viewing_store=viewing_store, user_id=self.auth_session.user_id,
+                        enhanced=request.get("enhanced") is True and request.get("player") in {"potplayer", "copy", "system"})
+                    idle, maximum = playback.token_policy(cfg)
+                    token = playlist_tokens.issue(body, 0, idle, maximum)
+                    target = f"{base}/api/playback/playlist/{token}/AnimeMachine-0.m3u"
+                    result = {"url": target, "playlistUrl": target, "count": len(items), "groups": groups}
+                    player = str(request.get("player") or "system")
+                    if player in {"potplayer", "vlc", "iina"}:
+                        result["protocolUrl"] = playback.player_protocol_url(player, target)
+                    self.json_response(result)
+                except (ValueError, TypeError, RuntimeError, OSError, sqlite3.Error) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/diagnostics/performance":
                 try:
@@ -5975,7 +6198,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     if mode == "playlist":
                         start = int(request.get("start") or 1)
                         body, items = playback.playlist_payload(db_path, anime_id, cfg, media_tokens, base_url,
-                                                                start=start, source=source, force_http=True)
+                            start=start, source=source, force_http=True, viewing_store=viewing_store,
+                            user_id=self.auth_session.user_id,
+                            enhanced=player in {"potplayer", "copy", "system"} and request.get("enhanced") is True)
                         idle, maximum = playback.token_policy(cfg)
                         token = playlist_tokens.issue(body, anime_id, idle, maximum)
                         target = f"{base_url.rstrip('/')}/api/playback/playlist/{token}/AnimeMachine-{anime_id}.m3u"
@@ -5986,7 +6211,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         episode = float(episode_value) if episode_value is not None else None
                         index = int(index_value) if index_value is not None else None
                         target, item = playback.episode_media(db_path, anime_id, cfg, media_tokens, base_url,
-                                                              source=source, episode=episode, index=index)
+                            source=source, episode=episode, index=index, viewing_store=viewing_store,
+                            user_id=self.auth_session.user_id)
                         result.update({"url": target, "episode": item.episode, "title": item.title})
                     if player in {"vlc", "potplayer"}:
                         result["protocolUrl"] = playback.player_protocol_url(player, target)
@@ -6072,11 +6298,23 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             torrent_search_match = re.fullmatch(r"/api/anime/(\d+)/torrents/search", parsed.path)
             if torrent_search_match:
+                key_file = os.getenv("ANM_QBT_API_KEY_FILE", "").strip()
+                if not (config_store.read().get("components", {}).get("downloadClient", {}).get("endpoint")
+                        and (os.getenv("ANM_QBT_API_KEY", "").strip() or (key_file and Path(key_file).is_file()))):
+                    self.json_response({"error": "qbittorrent_not_configured"}, HTTPStatus.BAD_REQUEST)
+                    return
                 anime_id = int(torrent_search_match.group(1))
-                started = start_torrent_search(anime_id)
+                try:
+                    started = start_torrent_search(anime_id)
+                except (ValueError, sqlite3.Error):
+                    self.json_response({"error": "anime not found"}, HTTPStatus.NOT_FOUND)
+                    return
                 with maintenance_lock:
                     payload = dict(maintenance["torrentSearch"].get(str(anime_id), {}))
-                self.json_response({"started": started, **payload}, HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
+                if not started and payload.get("state") != "running":
+                    self.json_response({"error": "torrent_search_busy"}, HTTPStatus.CONFLICT)
+                else:
+                    self.json_response({"started": started, **payload}, HTTPStatus.ACCEPTED)
                 return
             audit_match = re.fullmatch(r"/api/anime/(\d+)/library/audit", parsed.path)
             if audit_match:
@@ -6163,10 +6401,16 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/images/refresh":
-                request = self.read_json()
-                ids = [int(value) for value in request.get("priorityAnimeIds", []) if str(value).isdigit()]
-                started = start_image_refresh(ids)
-                self.json_response({"started": started, **maintenance["images"]}, HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
+                try:
+                    request = self.read_json()
+                    values = request.get("priorityAnimeIds", [])
+                    if not isinstance(values, list):
+                        raise ValueError("priorityAnimeIds must be a list")
+                    ids = [int(value) for value in values if str(value).isdigit()]
+                    started = start_image_refresh(ids)
+                    self.json_response({"started": started, **maintenance["images"]}, HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
+                except (ValueError, TypeError) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/metadata/repair":
                 started = start_metadata_repair()
@@ -6304,6 +6548,24 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     return
                 started = start_library_audit()
                 self.json_response({"started": started}, HTTPStatus.ACCEPTED if started else HTTPStatus.CONFLICT)
+                return
+            if parsed.path == "/api/library/layout-preview":
+                with maintenance_lock:
+                    started = layout_preview_state.get("state") != "running"
+                    if started:
+                        layout_preview_state.clear()
+                        layout_preview_state.update(state="running")
+                if started:
+                    def preview_worker() -> None:
+                        try:
+                            result = library_preview.inspect(db_path, config_store.read())
+                            with maintenance_lock:
+                                layout_preview_state.update(state="complete", **result)
+                        except (ValueError, OSError, sqlite3.Error) as exc:
+                            with maintenance_lock:
+                                layout_preview_state.update(state="failed", error=str(exc) if isinstance(exc, StorageSleepingError) else "local_library_unavailable")
+                    threading.Thread(target=preview_worker, daemon=True, name="anm-layout-preview").start()
+                self.json_response({"started": started}, HTTPStatus.ACCEPTED)
                 return
             restore_match = re.fullmatch(r"/api/history/(\d+)/restore", parsed.path)
             if restore_match:
@@ -6622,11 +6884,11 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
     startup_started_monotonic = time.monotonic()
     if not db_path.exists():
         raise FileNotFoundError(f"database not found: {db_path}; run build first")
+    ensure_catalog_features(db_path)
     with contextlib.closing(sqlite3.connect(db_path, timeout=120)) as db, db:
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA synchronous=NORMAL")
         db.execute("PRAGMA busy_timeout=120000")
-        migrate_catalog_features(db)
         runtime_catalog.migrate_overlay(db)
         library_history.migrate(db)
         ani_rss.migrate(db)

@@ -18,6 +18,8 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable
 
 from . import ani_rss
+from . import viewing
+from ..catalog.episodes import playback_episode
 from ..storage import AVAILABLE, status_for_path
 from ..storage import path_policy
 from ..storage.sleep import require_awake, sleeping_path
@@ -27,7 +29,7 @@ SUBTITLE_SUFFIXES = {".ass", ".ssa", ".srt", ".vtt", ".sup", ".sub"}
 BONUS = re.compile(
     r"(?i)(?:^|[/\\\s._\-\[\](){}])(?:ncop|nced|op(?:ening)?|ed(?:ing)?|cm|pv|menu|preview|trailer|"
     r"promotional|sp|mini(?:ature)?(?:[ ._-]+character)?[ ._-]+anime|picture[ ._-]+drama|"
-    r"short[ ._-]+anime|映像特典|予告|特典映像|番宣|ミニアニメ|ピクチャードラマ)"
+    r"short[ ._-]+anime|series[ ._-]+extras|映像特典|予告|特典映像|番宣|ミニアニメ|ピクチャードラマ)"
     r"(?:\d{1,3})?(?:[/\\\s._\-\[\](){}]|$)"
 )
 EPISODE_PATTERNS = (
@@ -48,6 +50,7 @@ class MediaLocator:
     size: int = 0
     remote_id: str = ""
     subtitle_anime_id: int | None = None
+    display_title: str = ""
 
     @classmethod
     def local(cls, path: Path, size: int = 0) -> "MediaLocator":
@@ -65,6 +68,7 @@ class PlaybackItem:
     episode: float | None
     bytes: int
     origin: str
+    bgm_id: int | None = None
 
     @property
     def path(self) -> Path:
@@ -75,6 +79,16 @@ class PlaybackItem:
     @property
     def name(self) -> str:
         return self.locator.name
+
+
+@dataclasses.dataclass(frozen=True)
+class ViewingBinding:
+    user_id: int
+    bgm_id: int
+    episode: float
+    epoch: int
+    order: int
+    media_key: str = ""
 
 
 class PlaybackDiagnostics:
@@ -145,6 +159,11 @@ class PlaybackDiagnostics:
             self._items.pop(token, None)
 
 
+def media_identity(locator: MediaLocator) -> str:
+    name = str(locator.local_path) if locator.source_type == "local" else locator.remote_filename
+    return hashlib.sha256(f"{locator.source_type}:{name}:{locator.size}".encode()).hexdigest()
+
+
 class MediaTokenRegistry:
     """Opaque sliding-idle sessions; one active episode renews the whole queue."""
 
@@ -153,7 +172,8 @@ class MediaTokenRegistry:
         self._sessions: dict[str, dict[str, Any]] = {}
         self._tokens: dict[str, str] = {}
 
-    def issue_many(self, locators: list[MediaLocator], idle_seconds: int, maximum_seconds: int) -> list[str]:
+    def issue_many(self, locators: list[MediaLocator], idle_seconds: int, maximum_seconds: int,
+                   bindings: list[ViewingBinding | None] | None = None) -> list[str]:
         self.prune()
         now = time.time()
         session_id = secrets.token_urlsafe(18)
@@ -164,9 +184,66 @@ class MediaTokenRegistry:
                 "expires": now + idle_seconds,
                 "hardExpires": now + maximum_seconds,
                 "locators": dict(zip(tokens, locators)),
+                "viewing": dict(zip(tokens, bindings or [None] * len(tokens))),
+                "events": {}, "native": set(), "nativeOrder": {}, "nativeInstances": {},
             }
             self._tokens.update((token, session_id) for token in tokens)
         return tokens
+
+    def claim(self, token: str) -> bool:
+        if self.resolve(token) is None:
+            return False
+        with self._lock:
+            session = self._sessions.get(self._tokens.get(token, ""))
+            if not session or not session["viewing"].get(token):
+                return False
+            session["native"].add(token)
+            return True
+
+    def resume_ms(self, token: str, store: viewing.Store) -> int:
+        if self.resolve(token) is None:
+            return 0
+        with self._lock:
+            session = self._sessions.get(self._tokens.get(token, ""))
+            binding = session["viewing"].get(token) if session else None
+        if binding is None:
+            return 0
+        anchor = store.get(binding.user_id, binding.bgm_id)
+        if (anchor["epoch"] != binding.epoch or anchor["episode"] != binding.episode
+                or (anchor["mediaKey"] and anchor["mediaKey"] != binding.media_key)):
+            return 0
+        return max(0, int(anchor["positionMs"]) - 5000)
+
+    def started(self, token: str, store: viewing.Store, *, native_event: int | None = None,
+                position_ms: int | None = None, duration_ms: int = 0, instance: str = "") -> bool:
+        if self.resolve(token) is None:
+            return False
+        with self._lock:
+            session = self._sessions.get(self._tokens.get(token, ""))
+            if not session:
+                return False
+            binding = session["viewing"].get(token)
+            if binding is None or (native_event is None and token in session["native"]):
+                return False
+            event = native_event if native_event is not None else 0
+            event_key = (token, instance)
+            order_key = (binding.bgm_id, instance)
+            if event <= session["events"].get(event_key, -1):
+                return False
+            if native_event is not None and event <= session["nativeOrder"].get(order_key, -1):
+                return False
+            order = binding.order
+            if instance:
+                if len(session["nativeInstances"]) >= 64 and instance not in session["nativeInstances"]:
+                    return False
+                order = max(order, session["nativeInstances"].setdefault(instance, time.time_ns()))
+            changed = store.started(binding.user_id, binding.bgm_id, binding.episode, binding.epoch,
+                                    order, "potplayer" if native_event is not None else "media",
+                                    position_ms=position_ms, duration_ms=duration_ms, media_key=binding.media_key)
+            session["events"][event_key] = event
+            if native_event is not None:
+                session["nativeOrder"][order_key] = event
+            return changed
 
     def resolve(self, token: str) -> MediaLocator | None:
         with self._lock:
@@ -342,12 +419,12 @@ def _existing_rows(db: sqlite3.Connection, anime_id: int, expected_count: int | 
             LEFT JOIN runtime_torrent_file f ON f.info_hash=a.source_info_hash AND f.file_index=a.source_file_index
             WHERE w.anime_id=? ORDER BY a.final_path""", (anime_id,)):
             path = Path(str(row[0]))
-            yield path, int(row[1] or 0), _episode(path, expected_count=expected_count), "managed", str(row[4] or "") or None
+            yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, expected_count=expected_count), expected_count), "managed", str(row[4] or "") or None
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_media_file'").fetchone():
         for row in db.execute("""SELECT absolute_path,size,episode_number FROM external_media_file
                                   WHERE anime_id=? AND match_state='verified' ORDER BY absolute_path""", (anime_id,)):
             path = Path(str(row[0]))
-            yield path, int(row[1] or 0), _episode(path, float(row[2]) if row[2] is not None else None, expected_count), "external", "main_video"
+            yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, float(row[2]) if row[2] is not None else None, expected_count), expected_count), "external", "main_video"
 
 
 def _scan_preexisting(db: sqlite3.Connection, anime_id: int, config: dict[str, Any], known: set[str], expected_count: int | None) -> Iterable[tuple[Path, int, float | None, str, str | None]]:
@@ -370,20 +447,69 @@ def _scan_preexisting(db: sqlite3.Connection, anime_id: int, config: dict[str, A
                 size = path.stat().st_size
             except OSError:
                 continue
-            yield path, size, _episode(path, expected_count=expected_count), "preexisting", "main_video"
+            yield path, size, playback_episode(db, anime_id, _episode(path, expected_count=expected_count), expected_count), "preexisting", "main_video"
 
 
-def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, source: str = "") -> list[PlaybackItem]:
+def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str, Any], *,
+                           expected_identities: dict[int, int] | None = None) -> dict[int, float]:
+    """Batch-read known episode numbers without network or media filesystem I/O."""
+    latest: dict[int, float] = {}
+    if not anime_ids:
+        return latest
+    remote_available = ani_rss.state_available(ani_rss.state(db_path, config))
+    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for offset in range(0, len(anime_ids), 400):
+            chunk = anime_ids[offset:offset + 400]
+            marks = ','.join('?' for _ in chunk)
+            if expected_identities is not None:
+                chunk = [int(row[0]) for row in db.execute(f"SELECT id,bgm_id FROM anime_work WHERE id IN ({marks})", chunk)
+                         if expected_identities.get(int(row[0])) == int(row[1])]
+                if not chunk:
+                    continue
+                marks = ','.join('?' for _ in chunk)
+            rows = []
+            if {'runtime_asset', 'runtime_work'} <= tables:
+                rows.extend(db.execute(f"""SELECT w.anime_id,a.final_path,NULL,k.episode_count
+                    FROM runtime_asset a JOIN runtime_work w ON w.target_unc=a.owner_path
+                    JOIN anime_work k ON k.id=w.anime_id WHERE w.anime_id IN ({marks})""", chunk))
+            if 'external_media_file' in tables:
+                rows.extend(db.execute(f"""SELECT m.anime_id,m.absolute_path,m.episode_number,k.episode_count
+                    FROM external_media_file m JOIN anime_work k ON k.id=m.anime_id
+                    WHERE m.match_state='verified' AND m.anime_id IN ({marks})""", chunk))
+            for anime_id, filename, hint, expected in rows:
+                path = Path(filename)
+                if sleeping_path(path, config) or not _is_main_video(path):
+                    continue
+                episode = playback_episode(db, anime_id, _episode(path, hint, expected), expected)
+                if episode is not None:
+                    latest[anime_id] = max(latest.get(anime_id, episode), episode)
+            if remote_available and {'ani_rss_media', 'ani_rss_subscription'} <= tables:
+                for anime_id, episode, name in db.execute(f"""SELECT m.anime_id,m.episode,m.name
+                    FROM ani_rss_media m JOIN ani_rss_subscription s ON s.remote_id=m.remote_id
+                    WHERE s.deleted_at IS NULL AND s.anime_id=m.anime_id AND m.episode IS NOT NULL
+                    AND m.anime_id IN ({marks})""", chunk):
+                    if _is_main_video(Path(name)):
+                        episode = playback_episode(db, anime_id, episode)
+                        latest[anime_id] = max(latest.get(anime_id, episode), episode)
+    return latest
+
+
+def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, source: str = "",
+                  cached_only: bool = False) -> list[PlaybackItem]:
     """Return a deterministic main-feature queue without opening media payloads."""
     if source.startswith("ani-rss:"):
         remote_id = source.split(":", 1)[1].strip()
         if not remote_id:
             raise ValueError("Ani-RSS playback source is invalid")
+        bgm_id = viewing_identities(db_path, [anime_id])[anime_id]
         remote_items = ani_rss.playback_items(db_path, anime_id, config, remote_id)
+        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+            remote_items = [dataclasses.replace(item, episode=playback_episode(db, anime_id, item.episode)) for item in remote_items]
         items = [PlaybackItem(
             MediaLocator.remote(item.filename, item.name, item.extension, item.size, remote_id),
             (f"{_episode_label(item.episode)} · " if item.episode is not None else "") + item.title,
-            item.episode, item.size, "ani-rss",
+            item.episode, item.size, "ani-rss", bgm_id,
         ) for item in remote_items]
         items.sort(key=lambda item: (item.episode is None, item.episode or 0, _natural(item.name)))
         return items
@@ -391,17 +517,26 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
     source_root = authorize_media_path(Path(source), config) if source else None
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
-        work = db.execute("SELECT title_ja,episode_count FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+        work = db.execute("SELECT bgm_id,title_ja,episode_count FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if not work:
             raise ValueError("anime not found")
         expected_count = int(work["episode_count"]) if work["episode_count"] is not None else None
         rows = list(_existing_rows(db, anime_id, expected_count))
         rows = [row for row in rows if not sleeping_path(row[0], config)]
-        known = {_path_key(row[0]) for row in rows}
-        rows.extend(_scan_preexisting(db, anime_id, config, known, expected_count))
+        if not cached_only:
+            known = {_path_key(row[0]) for row in rows}
+            rows.extend(_scan_preexisting(db, anime_id, config, known, expected_count))
     items: list[PlaybackItem] = []
     seen: set[tuple[str, int]] = set()
     for path, recorded_size, episode, origin, file_kind in rows:
+        if cached_only:
+            # Inventory is only a candidate. Opening the token still authorizes and
+            # validates the file against the current roots and sleep schedule.
+            if _is_main_video(path, file_kind):
+                prefix = f"{_episode_label(episode)} · " if episode is not None else ""
+                items.append(PlaybackItem(MediaLocator.local(path, recorded_size), prefix + path.stem,
+                                          episode, recorded_size, origin, int(work["bgm_id"])))
+            continue
         try:
             path = authorize_media_path(path, config)
         except path_policy.PathAuthorizationError:
@@ -421,7 +556,7 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
             continue
         seen.add(identity)
         prefix = f"{_episode_label(episode)} · " if episode is not None else ""
-        items.append(PlaybackItem(MediaLocator.local(path, actual_size), prefix + path.stem, episode, actual_size, origin))
+        items.append(PlaybackItem(MediaLocator.local(path, actual_size), prefix + path.stem, episode, actual_size, origin, int(work["bgm_id"])))
     items = _default_main_queue(items)
     items.sort(key=lambda item: (item.episode is None, item.episode or 0, _natural(item.name)))
     return items
@@ -501,9 +636,24 @@ def _m3u_text(value: str) -> str:
     return re.sub(r"[\r\n]+", " ", str(value or "")).strip()
 
 
+def viewing_identities(db_path: Path, anime_ids: list[int]) -> dict[int, int]:
+    if not anime_ids:
+        return {}
+    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+        result = {}
+        for anime_id in set(anime_ids):
+            row = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (anime_id,)).fetchone()
+            if row is None:
+                raise ValueError("anime not found")
+            result[anime_id] = int(row[0])
+        return result
+
+
 def playlist_payload(db_path: Path, anime_id: int, config: dict[str, Any], registry: MediaTokenRegistry,
                      public_base_url: str, *, start: int = 1, source: str = "", force_http: bool = False,
-                     items: list[PlaybackItem] | None = None) -> tuple[bytes, list[PlaybackItem]]:
+                     items: list[PlaybackItem] | None = None, anime_ids: list[int] | None = None,
+                     viewing_store: viewing.Store | None = None, user_id: int = 0,
+                     enhanced: bool = False) -> tuple[bytes, list[PlaybackItem]]:
     queue = list(items) if items is not None else collect_items(db_path, anime_id, config, source=source)
     if not queue:
         raise ValueError("no playable media")
@@ -511,30 +661,51 @@ def playlist_payload(db_path: Path, anime_id: int, config: dict[str, Any], regis
         raise ValueError("start is outside the playable media range")
     if start > 1:
         queue = queue[start - 1:] + queue[:start - 1]
+        if anime_ids is not None:
+            anime_ids = anime_ids[start - 1:] + anime_ids[:start - 1]
+    owners = anime_ids if anime_ids is not None else [anime_id] * len(queue)
+    if len(owners) != len(queue):
+        raise ValueError("playlist ownership mismatch")
     idle, maximum = token_policy(config)
     policy = config.get("playback", {})
     mappings = policy.get("directPathMappings", []) if policy.get("preferDirectPaths", True) and not force_http else []
     lines = ["#EXTM3U", "#PLAYLIST:AnimeMachine"]
     subtitle_directories: dict[str, list[Path]] = {}
-    subtitles = [_subtitle_for(item, anime_id, subtitle_directories) for item in queue]
+    subtitles = []
+    for index, item in enumerate(queue):
+        if item.locator.source_type == "local":
+            authorize_media_path(item.path, config)
+        subtitles.append(_subtitle_for(item, owners[index], subtitle_directories))
     mapped = [(_mapped_path(item.path, mappings) if item.locator.source_type == "local" else None) for item in queue]
     mapped_subtitles = [_mapped_path(path, mappings) if path else None for path in subtitles]
     token_locators: list[MediaLocator] = []
+    bindings: list[ViewingBinding | None] = []
+    order = time.time_ns()
+    identities = {owner: item.bgm_id for owner, item in zip(owners, queue) if item.bgm_id is not None}
+    if viewing_store:
+        identities.update(viewing_identities(db_path, [owner for owner in set(owners) if owner not in identities]))
+    anchors = {owner: viewing_store.get(user_id, identities[owner]) for owner in set(owners)} if viewing_store else {}
     media_token_indexes: list[int] = []
     subtitle_token_indexes: list[int] = []
     for index, item in enumerate(queue):
         if not mapped[index]:
-            token_locators.append(item.locator); media_token_indexes.append(index)
+            token_locators.append(dataclasses.replace(item.locator, display_title=_m3u_text(item.title))); media_token_indexes.append(index)
+            bindings.append(ViewingBinding(user_id, identities[owners[index]], item.episode,
+                            anchors[owners[index]]["epoch"], order, media_identity(item.locator))
+                            if viewing_store and item.episode is not None else None)
     for index, path in enumerate(subtitles):
         if path and not mapped_subtitles[index]:
             token_locators.append(dataclasses.replace(
-                MediaLocator.local(path, path.stat().st_size), subtitle_anime_id=anime_id))
+                MediaLocator.local(path, path.stat().st_size), subtitle_anime_id=owners[index]))
+            bindings.append(None)
             subtitle_token_indexes.append(index)
-    issued = iter(registry.issue_many(token_locators, idle, maximum)) if token_locators else iter(())
+    issued = iter(registry.issue_many(token_locators, idle, maximum, bindings)) if token_locators else iter(())
     media_tokens = {index: next(issued) for index in media_token_indexes}
     subtitle_tokens = {index: next(issued) for index in subtitle_token_indexes}
     for index, item in enumerate(queue):
         location = mapped[index] or media_url(public_base_url, media_tokens[index], item.locator)
+        if enhanced and not mapped[index]:
+            location += "?anm=1"
         subtitle = subtitles[index]
         subtitle_location = mapped_subtitles[index]
         if subtitle and not subtitle_location:
@@ -547,7 +718,8 @@ def playlist_payload(db_path: Path, anime_id: int, config: dict[str, Any], regis
 
 
 def episode_media(db_path: Path, anime_id: int, config: dict[str, Any], registry: MediaTokenRegistry,
-                  public_base_url: str, *, source: str, episode: float | None = None, index: int | None = None) -> tuple[str, PlaybackItem]:
+                  public_base_url: str, *, source: str, episode: float | None = None, index: int | None = None,
+                  viewing_store: viewing.Store | None = None, user_id: int = 0) -> tuple[str, PlaybackItem]:
     items = collect_items(db_path, anime_id, config, source=source)
     selected: PlaybackItem | None = None
     if episode is not None:
@@ -557,7 +729,10 @@ def episode_media(db_path: Path, anime_id: int, config: dict[str, Any], registry
     if selected is None:
         raise ValueError("requested episode is not playable")
     idle, maximum = token_policy(config)
-    token = registry.issue_many([selected.locator], idle, maximum)[0]
+    bgm_id = selected.bgm_id or (viewing_identities(db_path, [anime_id])[anime_id] if viewing_store else anime_id)
+    binding = (ViewingBinding(user_id, bgm_id, selected.episode, viewing_store.get(user_id, bgm_id)["epoch"], time.time_ns(), media_identity(selected.locator))
+               if viewing_store and selected.episode is not None else None)
+    token = registry.issue_many([selected.locator], idle, maximum, [binding])[0]
     return media_url(public_base_url, token, selected.locator), selected
 
 

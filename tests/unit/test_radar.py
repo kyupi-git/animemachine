@@ -283,7 +283,8 @@ for (language of ['zh-Hans', 'en', 'ja']) {
         script = """const assert = require('node:assert/strict');
 let stats = {record_count:5, archive_name:'same.zip', archive_digest:'first', built_at:'same-time'};
 let ani = {successful_generation:1}, startupState = null, lastAniRssGeneration = null, sort = 'random';
-let searches = [], radarLoads = 0;
+let searches = [], radarLoads = 0, invalidations = 0;
+const invalidateCatalogPages = () => {invalidations++;};
 let options = {};
 const filters = {era:{value:'2026'}, studio:{value:'Unsubmitted selection'}};
 const fill = (id) => { if (filters[id]) filters[id].value = ''; };
@@ -299,6 +300,7 @@ const setTimeout = () => 1, clearTimeout = () => {};
 (async () => {
   await pollSyncSummary();
   assert.equal(searches.length, 0);
+  assert.equal(invalidations, 0);
   stats.archive_digest = 'second';
   await pollSyncSummary();
   assert.deepEqual(searches, [{background:true}]);
@@ -314,6 +316,7 @@ const setTimeout = () => 1, clearTimeout = () => {};
   ani.successful_generation = 2;
   await pollSyncSummary();
   assert.equal(searches.length, 3);
+  assert.equal(invalidations, 3);
 })().catch(error => {console.error(error);process.exitCode=1;});
 """
         subprocess.run([shutil.which("node") or "node", "-e", script], check=True, capture_output=True, text=True)
@@ -747,29 +750,18 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
         self.assertEqual(expected, [row[1][:2] for row in actual])
         self.assertEqual(["2025-12", "2026-02"], actual[1][1][2:])
 
-    def test_seen_history_keeps_recent_clicks_even_for_small_numeric_ids(self):
+    def test_radar_highlights_account_unwatched_media_instead_of_click_history(self):
         source = (ROOT / "src/animemachine/web/static/app.js").read_text(encoding="utf-8")
-        start = source.index('const radarSeenStorageKey =')
+        start = source.index('function radarIsHighlighted(')
         fragment = source[start:source.index('function radarSeasons(', start)]
-        script = """
-const assert = require('node:assert/strict');
-let stored = JSON.stringify({'2': 'old'});
-const localStorage = {getItem: () => stored, setItem: (key, value) => { stored = value; }};
-const $ = () => null;
-""" + fragment + """
-assert.equal(radarIsHighlighted({bgm_id: 2, last_episode_update_at: 'old'}), false);
-for (let id = 1000; id < 2000; id++) markRadarSeen(String(id), id, 'new');
-markRadarSeen('2', 2, 'new');
-assert.equal(radarIsHighlighted({bgm_id: 2, last_episode_update_at: 'new'}), false);
-assert.equal(radarIsHighlighted({bgm_id: 2, last_episode_update_at: 'later'}), true);
-const restored = new Map(JSON.parse(stored));
-assert.equal(restored.size, 1000);
-assert.equal(restored.get('2'), 'new');
-localStorage.setItem = () => { throw new Error('storage unavailable'); };
-markRadarSeen('3', 3, 'new');
-assert.equal(radarIsHighlighted({bgm_id: 3, last_episode_update_at: 'new'}), false);
+        script = "const assert = require('node:assert/strict');\n" + fragment + """
+assert.equal(radarIsHighlighted({last_episode_update_at: 'new'}), false);
+assert.equal(radarIsHighlighted({hasUnwatched: false, subscription_state: 'active'}), false);
+assert.equal(radarIsHighlighted({hasUnwatched: true}), true);
+assert.equal(radarIsHighlighted({hasUnwatched: 'true'}), false);
 """
         subprocess.run([shutil.which("node"), "-e", script], check=True, capture_output=True, text=True)
+        self.assertNotIn('markRadarSeen(', source)
 
     def test_subscription_management_is_available_before_first_media_arrives(self):
         source = (ROOT / "src/animemachine/web/static/app.js").read_text(encoding="utf-8")

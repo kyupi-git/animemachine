@@ -113,13 +113,15 @@ class LibraryLayoutTests(unittest.TestCase):
 
     def test_physical_directory_component_is_portable_and_readable(self) -> None:
         self.assertEqual(
-            "『2025_04』『華Doll＊-Reinterpretation of Flowering-』",
+            "『2025_04』『華Doll＊－Reinterpretation of Flowering－』",
             library_layout.format_work_directory(
                 "『{date}』『{title}』", date="2025_04",
                 title="華Doll*-Reinterpretation of Flowering-",
             ),
         )
         self.assertEqual("A／B：C？", library_layout.portable_directory_component("A/B:C?"))
+        self.assertEqual("『2022_01』『CUE！』", library_layout.format_work_directory(
+            "『{date}』『{title}』", date="2022_01", title="CUE!"))
 
 
 if __name__ == "__main__":

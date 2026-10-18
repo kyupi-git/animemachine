@@ -1,0 +1,15 @@
+{
+  "compiler": "Zig 0.14.1",
+  "flags": [
+    "-target",
+    "x86_64-windows-gnu",
+    "-shared",
+    "-O2",
+    "-s",
+    "-Wall",
+    "-Wextra",
+    "-Werror"
+  ],
+  "sourceSha256": "f817306b465864bc26bc5e32a00f7bb84e4ceabe933bef3e59b004c789503875",
+  "dllSha256": "ffd04707dbb24346567bd3225db472c2b905995825f4c5cdfc37ed2b7e079d6e"
+}

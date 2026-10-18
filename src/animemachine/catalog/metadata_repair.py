@@ -28,7 +28,7 @@ def enqueue(db_path: Path) -> int:
           WHERE metadata_repair_queue.state='complete'""", (stamp,))
         return db.total_changes - before
 
-def run_batch(db_path: Path, config: dict[str, Any]) -> dict[str, int]:
+def run_batch(db_path: Path, config: dict[str, Any], *, operation_lock: Any = None) -> dict[str, int]:
     policy = config.get("metadata", {}).get("onlineRepair", {})
     if not policy.get("enabled", False): return {"processed": 0, "repaired": 0, "failed": 0}
     network = config.get("metadata", {}).get("network", {})
@@ -43,15 +43,22 @@ def run_batch(db_path: Path, config: dict[str, Any]) -> dict[str, int]:
         db.row_factory = sqlite3.Row; db.executescript(SCHEMA)
         rows = db.execute("""SELECT q.*,w.bgm_id FROM metadata_repair_queue q JOIN anime_work w ON w.id=q.anime_id
           WHERE q.state IN ('pending','retry') AND q.attempts<8 ORDER BY q.attempts,q.updated_at LIMIT ?""", (limit,)).fetchall()
-        for row in rows:
-            result["processed"] += 1; stamp = utcnow()
-            try:
-                payload, _ = network_sources.fetch_json(
-                    [f"{str(base).rstrip('/')}/v0/subjects/{int(row['bgm_id'])}" for base in endpoints],
-                    timeout=float(network.get("probeTimeoutSeconds", 12)),
-                    cooldown=int(network.get("failureCooldownSeconds", 900)))
-                date = str(payload.get("date") or "")[:7] or None
-                with db:
+    for row in rows:
+        result["processed"] += 1; stamp = utcnow()
+        try:
+            # Remote work must not hold the Catalog replacement lock. Open a
+            # fresh connection only when publishing, and recheck stable identity.
+            payload, _ = network_sources.fetch_json(
+                [f"{str(base).rstrip('/')}/v0/subjects/{int(row['bgm_id'])}" for base in endpoints],
+                timeout=float(network.get("probeTimeoutSeconds", 12)),
+                cooldown=int(network.get("failureCooldownSeconds", 900)))
+            date = str(payload.get("date") or "")[:7] or None
+            with operation_lock or contextlib.nullcontext():
+                with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db, db:
+                    current = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (row["anime_id"],)).fetchone()
+                    if not current or current[0] != row["bgm_id"]:
+                        continue
+                    db.executescript(SCHEMA)
                     db.execute("INSERT OR REPLACE INTO metadata_evidence VALUES(?,?,?,?)",
                                (row["anime_id"], "bangumi", json.dumps(payload, ensure_ascii=False), stamp))
                     db.execute("""UPDATE anime_work SET summary=CASE WHEN summary IS NULL OR summary='' THEN ? ELSE summary END,
@@ -60,11 +67,16 @@ def run_batch(db_path: Path, config: dict[str, Any]) -> dict[str, int]:
                       (payload.get("summary"), date, payload.get("eps"), row["anime_id"]))
                     db.execute("UPDATE metadata_repair_queue SET state='complete',attempts=attempts+1,last_error=NULL,updated_at=? WHERE anime_id=?",
                                (stamp, row["anime_id"]))
-                result["repaired"] += 1
-            except Exception as exc:
-                with db:
+            result["repaired"] += 1
+        except Exception as exc:
+            with operation_lock or contextlib.nullcontext():
+                with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db, db:
+                    current = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (row["anime_id"],)).fetchone()
+                    if not current or current[0] != row["bgm_id"]:
+                        continue
+                    db.executescript(SCHEMA)
                     db.execute("UPDATE metadata_repair_queue SET state='retry',attempts=attempts+1,last_error=?,updated_at=? WHERE anime_id=?",
                                (f"{type(exc).__name__}: {exc}"[:500], stamp, row["anime_id"]))
-                result["failed"] += 1
-            time.sleep(max(0.2, float(config.get("runtime", {}).get("metadataRequestDelaySeconds", 1.2))))
+            result["failed"] += 1
+        time.sleep(max(0.2, float(config.get("runtime", {}).get("metadataRequestDelaySeconds", 1.2))))
     return result

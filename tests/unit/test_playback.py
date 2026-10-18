@@ -105,9 +105,9 @@ class PlaybackTokenTests(unittest.TestCase):
             (second / "Show - 02.mkv").write_bytes(b"b")
             db_path = root / "catalog.sqlite3"
             with contextlib.closing(sqlite3.connect(db_path)) as db, db:
-                db.execute("CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,episode_count INTEGER)")
+                db.execute("CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,episode_count INTEGER,bgm_id INTEGER)")
                 db.execute("CREATE TABLE runtime_work(anime_id INTEGER,target_unc TEXT,library_state TEXT)")
-                db.execute("INSERT INTO anime_work VALUES(1,'Show',2)")
+                db.execute("INSERT INTO anime_work VALUES(1,'Show',2,100)")
                 db.executemany("INSERT INTO runtime_work VALUES(1,?,'existing')", [(str(first),), (str(second),)])
             config = {"deployment": {"libraryUncRoot": str(root)}, "externalLibraries": []}
             items = playback.collect_items(db_path, 1, config, source=str(second))

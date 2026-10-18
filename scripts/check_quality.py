@@ -31,17 +31,20 @@ def main() -> int:
             "scripts/check_quality.py",
         ]
     )
-    run(
-        [
-            sys.executable,
-            "-m",
-            "mypy",
-            "--strict",
-            "scripts/build_info.py",
-            "scripts/check_docs.py",
-            "scripts/check_quality.py",
-        ]
-    )
+    with tempfile.TemporaryDirectory(prefix="anm-mypy-") as cache:
+        run(
+            [
+                sys.executable,
+                "-m",
+                "mypy",
+                "--strict",
+                "--cache-dir",
+                cache,
+                "scripts/build_info.py",
+                "scripts/check_docs.py",
+                "scripts/check_quality.py",
+            ]
+        )
     with tempfile.TemporaryDirectory(prefix="anm-quality-") as raw:
         env = os.environ.copy()
         env["ANM_STATE_DIR"] = str(Path(raw) / "state")

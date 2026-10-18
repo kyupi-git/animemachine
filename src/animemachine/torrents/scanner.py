@@ -221,7 +221,13 @@ def main():
     publish_progress(a.progress_file,"pool_reconcile",stats)
     if scan_complete and not a.limit and not targeted:
         for r in db.execute("SELECT source_path FROM torrent_source WHERE presence_state!='missing'"):
-            if _source_identity(r["source_path"]) not in seen:
+            source_path = _source_identity(os.path.abspath(str(r["source_path"])))
+            root_identity = _source_identity(str(root))
+            try:
+                inside = os.path.commonpath((source_path, root_identity)) == root_identity
+            except ValueError:
+                inside = False
+            if inside and _source_identity(r["source_path"]) not in seen:
                 db.execute("UPDATE torrent_source SET presence_state='missing',last_seen_at=? WHERE source_path=?",(stamp,r["source_path"])); stats["missing"]+=1
         # A hash remains usable while any indexed copy is present.  Mark only
         # fully vanished torrent assets unavailable and touch indexed_at only
@@ -256,6 +262,7 @@ def main():
     if a.queue_output: a.queue_output.parent.mkdir(parents=True,exist_ok=True); a.queue_output.write_text(text,encoding="utf-8")
     else: print(text,end="")
     publish_progress(a.progress_file,"pool_complete",out["stats"],complete=True)
+    db.close()
     if not scan_complete:
         return 3
     return 2 if stats["errors"] else 0

@@ -94,9 +94,11 @@ Configure media folders under **Settings → Connections**:
 
 In Docker, enter the paths visible inside the container. The default collection is `/Library`; existing media uses `/External`. See the [folder diagram](#folders) for an example.
 
+![Local library settings: choose the folder and optional daily quiet hours](images/library-settings.en.png)
+
 Save the configuration, open a title's details, and check that identified media can be played. For seasonal subscriptions, add one subscription using the next section and check the synchronization result. After verifying playback or a subscription, add further titles.
 
-![Title details with metadata, episode progress, and available media](images/work-detail.png)
+![Title details with metadata, episode progress, and available media](images/work-detail.en.png)
 
 <a id="daily-use"></a>
 
@@ -107,6 +109,8 @@ Save the configuration, open a title's details, and check that identified media 
 Switch between cards and a table on the home page. Filter by year, month, format, studio, theme, resource source, or collection status. Search accepts Chinese, Traditional Chinese, English, and Japanese names.
 
 A card's resource and subscription labels describe available releases or subscriptions. Its collection label describes your media holdings. Open details to see individual episodes and files. Use “New Episode Follow-up” to follow updates or “Random” to pick something to watch.
+
+![Browse titles with filters, cover cards, subscriptions, and collection status](images/library-overview.en.png)
 
 ### Release radar and subscriptions
 
@@ -119,6 +123,12 @@ A card's resource and subscription labels describe available releases or subscri
 3. Click **Subscribe** for a title, choose a release or group, and confirm.
 4. Ani-RSS handles downloading. You can close the window and keep browsing during submission. Subscription status and media progress sync back automatically.
 
+![Release radar: seasonal updates, subscriptions, and continue watching](images/release-radar.en.png)
+
+Choose a subtitle group in the subscription window, then click **Enable subscription**. The radar changes to **Subscribed** once the request completes.
+
+![Add a subscription: select a release group and confirm](images/subscribe-release.en.png)
+
 Releases excluded by your language, subgroup, or quality preferences show the reason. To use one, select it in title details, click **Subscribe anyway / Download anyway**, then review and submit the task preview. The radar subscription window also offers **Subscribe anyway**. This applies only to your current selection and does not change your settings.
 
 Films with a BD release this season also appear in the radar, with the BD date below the premiere date. When no explicit BD date is available, the search also checks films that premiered within the past year. Their earliest resource publication reported by Ani-RSS determines the season and appears as a “Release” date.
@@ -127,7 +137,27 @@ The latest count in “Latest / total episodes” prioritizes Ani-RSS resource a
 
 Open the Subscribed or Paused menu to pause, resume, or unsubscribe. Unsubscribing keeps downloaded files; deleting the subscription and files has a separate confirmation. New subscriptions move forward within their group, subject to the home page date filters.
 
+The radar shows progress beside titles you have watched. Pale green marks playable new episodes for subscribed titles or titles with media. Playing the latest episode or correcting your record updates the highlight; opening title details does not clear it.
+
+### Continue watching
+
+Choose a season in **Release radar**, click **Continue watching**, review the episodes and open a player. The playlist includes playable episodes of subscribed TV titles or TV titles already in your media library. Titles follow the radar order. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode.
+
+![Continue watching: review playable episodes and saved positions](images/continue-watching.en.png)
+
+Records belong to your account and are shared by title details and the radar. Click **Continue: Ep X** to change the starting episode or position, mark a title as not started, or undo a change. Opening a playlist does not update the record. By default, video access records episodes; you can correct entries as needed. With sign-in disabled, all devices share one record.
+
+![Correct a viewing record by setting the starting episode and position](images/viewing-record.en.png)
+
+**PotPlayer**: click **Install extension** in the playback area. Close the player, merge the ZIP's `Extension` folder into its installation folder, then select **Enable extension to save progress** below the player button. The extension runs inside the 64-bit player and records the actual playback position. Playback resumes five seconds before the last position, or from the beginning if it was under five seconds. Direct launch, copied URLs, and downloaded playlists all work. Without the extension, playlists still play normally and record viewing by episode.
+
+![Continuous playback in PotPlayer, with several seasonal titles in the sidebar](images/potplayer-weekly.en.png)
+
+**VLC**: the PotPlayer extension is not needed. AnimeMachine records episodes by default. Resume positions saved locally by VLC are managed by VLC separately from your AnimeMachine account.
+
 ### Fill gaps and download
+
+With qBittorrent connected, click **Search Torrents** in title details, follow the search progress, and choose a release. Search uses the built-in collector and the existing plan preview and download confirmation flow.
 
 Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. Its options are in the [collector configuration example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example).
 
@@ -146,6 +176,8 @@ After connecting a writable library and saving the settings, click **Folders** i
 
 The same action is available under **Settings → General → Library**, alongside **Verify all local resources**. Both run in the background and show progress and results. Completeness is assessed against the files currently present.
 
+Under **Settings → General → Preview folder changes**, review naming, Japanese edition titles, and companion shorts for registered folders, then download the results. The preview only reads existing folders.
+
 ### Set local library quiet hours
 
 Storage checks are read-only. Write permissions are confirmed by actual operations such as creating folders or organizing files.
@@ -160,15 +192,15 @@ Keep configuration, databases, and logs on another disk as well. For Docker, upd
 
 Click **Relationship graph** on a card or in details to explore prequels, sequels, movies, and side stories. Drag, zoom, use fullscreen, filter relationship types, or export an image.
 
-![Explore related works in a series](images/relationship-graph.png)
+![Explore related works in a series](images/relationship-graph.en.png)
 
 ### Playback and subtitles
 
 Open title details, choose a media source and starting episode, then select VLC, PotPlayer, or your system player. IINA is also available on macOS. Use **Copy playlist** to open the whole season in another player.
 
-![Choose a starting episode and open an external player](images/playback.png)
+![Choose a starting episode and open an external player](images/playback.en.png)
 
-Install the player on the device you watch from. For playback on another device, set an AnimeMachine address that device can reach under **Settings → Connections → External player handoff**, such as `http://nas.example:8787`. If the player can access your media share directly, add an SMB / NFS path mapping.
+Keep AnimeMachine running during playback. Generate a new playlist after restarting it. Install the player on the device you watch from. For playback on another device, set an AnimeMachine address that device can reach under **Settings → Connections → External player handoff**, such as `http://nas.example:8787`. If the player can access your media share directly, add an SMB / NFS path mapping.
 
 Use embedded subtitles, subtitles alongside your media, or import subtitle files and archives in title details. For online search, enter your ASSRT or OpenSubtitles credentials under **Settings → Connections → Subtitle sources**, then search and select a match.
 
@@ -184,10 +216,14 @@ Find the API Key under **Settings → Security** in Ani-RSS. Copy it into **Sett
 
 | Setting | What to enter |
 | --- | --- |
-| Service address | An Ani-RSS address reachable from AnimeMachine, such as `http://localhost:7789` for a local installation |
+| Service address | An Ani-RSS address reachable from AnimeMachine, such as `http://192.168.1.10:7789` for an instance on a NAS |
 | API Key | The key copied from Ani-RSS |
 | Mode | “Prefer Ani-RSS” is the usual choice |
 | Media path | The Ani-RSS download folder readable by AnimeMachine; leave it empty when using only the remote API |
+
+Inside Docker, `localhost` refers to the container itself. Use `http://ani-rss:7789` within the same Compose stack, or the computer or NAS address for an existing service.
+
+![Connect Ani-RSS: enter your service address and API key](images/connect-ani-rss.en.png)
 
 Save, then click **Test connection**. Resources, subscriptions, and media status sync automatically after a successful connection. The full Compose stack configures these connections for you.
 
@@ -265,6 +301,7 @@ To restore, put these files back in their corresponding locations and start with
 | Titles appear without covers | Covers load in the background. Keep browsing and check progress in Diagnostics. |
 | Existing anime is missing | Check that AnimeMachine's host can read the media folder. In Docker, check the mount and the corresponding container path, such as `/External`. |
 | Episode counts or subscriptions are stale | Test the Ani-RSS connection, click **Sync** in Release radar, and check that subscription in Ani-RSS. |
+| Not enough reserved disk space | Check the minimum free space in Settings → General → Automation and capacity, then check the disk’s available space. |
 | qBittorrent tasks have not started | Check that the plan was submitted, then start its stopped tasks in qBittorrent. |
 | The player did not open | Install the player and allow your browser to open external apps. You can also copy the playlist and open it in the player. |
 | Playback fails on a phone or another computer | Set an address reachable from that device under External player handoff, and check that it can open AnimeMachine. |

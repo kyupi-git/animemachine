@@ -50,6 +50,9 @@ WINDOWS_UNSAFE_TRANSLATION = str.maketrans({
     "<": "＜", ">": "＞", ":": "：", '"': "＂", "/": "／",
     "\\": "＼", "|": "｜", "?": "？", "*": "＊",
 })
+TITLE_PUNCTUATION_TRANSLATION = str.maketrans({
+    char: chr(ord(char) + 0xFEE0) for char in "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+})
 
 
 def compact(value: str | None) -> str:
@@ -72,11 +75,17 @@ def portable_directory_component(value: str) -> str:
 
 
 def format_work_directory(template: str, *, date: str, title: str) -> str:
-    return portable_directory_component(template.format(date=date, title=title))
+    return portable_directory_component(template.format(date=date, title=title.translate(TITLE_PUNCTUATION_TRANSLATION)))
 
 
 def format_series_directory(template: str, *, start: str, end: str, title: str) -> str:
-    return portable_directory_component(template.format(start=start, end=end, title=title))
+    return portable_directory_component(template.format(start=start, end=end, title=title.translate(TITLE_PUNCTUATION_TRANSLATION)))
+
+
+def is_companion_description(summary: str | None) -> bool:
+    """Require an explicit short-animation-after-the-main-program description."""
+    return bool(re.search(r"(?:本編|本篇|正片).{0,16}(?:終了後|放送後|播出后|播出後).{0,80}"
+                          r"(?:ショートアニメ|短篇动画|短篇動畫)", summary or "", re.DOTALL))
 
 
 def is_supplement_title(title: str | None) -> bool:
