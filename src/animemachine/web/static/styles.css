@@ -1237,7 +1237,7 @@ details summary {
   margin-left: auto;
 }
 .playback-panel {
-  padding: 14px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: color-mix(in srgb, var(--paper) 92%, var(--accent));
@@ -1250,9 +1250,14 @@ details summary {
 #detail .summary-text { margin: 8px 0; }
 .playback-actions {
   display: flex;
-  align-items: flex-start;
   flex-wrap: wrap;
-  gap: 9px;
+  align-items: center;
+  gap: 7px;
+}
+.playback-panel .playback-actions, #catchupPlayers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
 }
 .no-torrent { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .no-torrent p { flex: 1 1 100%; margin: 0; }
@@ -2578,7 +2583,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .radar-table .subscription-menu > summary,
 .radar-table [data-subscribe], .radar-table .radar-subscribed { padding: 4px 0; line-height: 20px; min-height: 28px; box-sizing: border-box; }
 .radar-table .viewing-button { margin-left: 10px; padding: 2px 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
-.playback-panel > .viewing-button { margin-bottom: 8px; }
+.playback-panel.unavailable { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 #catchupDialog { width: min(760px, calc(100vw - 32px)); }
 #viewingDialog { width: min(460px, calc(100vw - 32px)); }
 #layoutPreviewDialog { width: min(1100px, calc(100vw - 32px)); padding: 24px; box-sizing: border-box; }
@@ -2589,23 +2594,23 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 #catchupDialog, #viewingDialog { padding: 24px; box-sizing: border-box; }
 #catchupDialog > .close, #viewingDialog > .close { position: absolute; top: 14px; right: 14px; margin: 0; }
 #catchupDialog h2, #viewingDialog h2 { margin: 0 40px 12px 0; }
-.potplayer-options > a { color: var(--green); }
+.query-loading { display: inline-flex; align-items: center; gap: 6px; margin-inline-start: 10px; font-size: 12px; }
+.query-loading[hidden] { display: none; }
+.query-loading::before { content: ""; width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--green); border-radius: 50%; animation: query-spin 1s linear infinite; }
+@keyframes query-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .query-loading::before { animation: none; } }
 .catchup-list { list-style: none; padding: 0; max-height: 45vh; overflow-y: auto; }
 .catchup-list li { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(80px, 1fr) auto; gap: 8px 16px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: center; }
 .catchup-list li > * { min-width: 0; overflow-wrap: anywhere; }
-.potplayer-group { display: grid; grid-template-columns: auto auto; align-items: center; justify-items: start; gap: 6px 8px; max-width: 100%; }
-.potplayer-group > button { grid-column: 1; grid-row: 1; }
-.potplayer-options { display: contents; font-size: 12px; }
-.potplayer-options .extension-install { grid-column: 2; grid-row: 1; display: inline-flex; padding: 5px 9px; text-decoration: none; white-space: nowrap; font-size: 12px; }
-.potplayer-options .check { grid-column: 1 / -1; grid-row: 2; display: inline-flex; align-items: center; gap: 6px; margin: 0; }
-.potplayer-options input { flex-shrink: 0; }
-@media (max-width: 560px) {
-  .potplayer-group { grid-template-columns: minmax(0, 1fr); }
-  .potplayer-options .extension-install { grid-column: 1; grid-row: 3; }
-}
+.potplayer-group, .player-utilities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 7px; min-width: 0; }
+.player-utilities { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.potplayer-group .extension-install { display: inline-flex; align-items: center; justify-content: center; min-width: 0; padding: 7px 10px; text-align: center; text-decoration: none; color: var(--green); font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
+.playback-actions .player-action { min-width: 0; white-space: normal; }
+.playback-scope { align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; }
+.playback-scope select { flex: 1 1 220px; min-width: 0; width: auto; }
+.playback-scope .viewing-button { flex: 0 1 auto; margin: 0; white-space: normal; }
 @media (max-width: 600px) {
   #catchupDialog, #viewingDialog { padding: 18px; }
-  #catchupPlayers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #catchupPlayers button { min-width: 0; white-space: normal; text-align: center; justify-content: center; }
   .catchup-list li { grid-template-columns: minmax(0, 1fr) auto; }
   .catchup-list li > .muted { grid-column: 1; grid-row: 2; }
@@ -2614,7 +2619,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .subscription-menu-actions { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 190px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 6px 24px #0002; }
 .subscription-menu-actions .text-button { display: flex; width: 100%; padding: 8px 10px; text-align: left; white-space: normal; }
 .subscription-menu-actions .danger { color: #b33d37; }
-.detail-subtitle-tools { grid-template-columns: max-content minmax(0, 1fr) max-content; grid-template-areas: "label label label" "search candidates apply" "status status status"; }
+.detail-subtitle-tools { grid-template-columns: max-content max-content minmax(0, 1fr) max-content; grid-template-areas: "label search candidates apply" "status status status status"; align-items: center; }
 .detail-subtitle-tools > b { grid-area: label; }
 .detail-subtitle-tools .search-subtitles { grid-area: search; }
 .detail-subtitle-tools .subtitle-candidates { grid-area: candidates; }
@@ -2622,7 +2627,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .detail-subtitle-tools .subtitle-state { grid-area: status; }
 .detail-subtitle-tools .subtitle-state:empty { display: none; }
 @media (max-width: 720px) {
-  .detail-subtitle-tools { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "label label" "candidates candidates" "search apply" "status status"; }
+  .detail-subtitle-tools { grid-template-columns: minmax(0, 1fr) max-content; grid-template-areas: "label search" "candidates apply" "status status"; }
   .detail-subtitle-tools button { min-height: 36px; padding: 6px 8px; }
 }
 .plan-route-actions, .relation-export-actions { flex-wrap: wrap; gap: 8px; }

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fail source/release checks on runtime state, credentials, private paths or secrets."""
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +19,8 @@ SOURCE_PRIVATE_DIRS = {".local", ".anm-history", "archive", "audit", "state"}
 SOURCE_PRIVATE_FILES = {"AGENTS.md", "config.json"}
 SOURCE_PRIVATE_PREFIXES = {"deploy/private", "tools/private-library"}
 PRIVATE_LAUNCHER_PATTERNS = ("start-codex*.cmd", "resume-codex*.cmd")
-FORBIDDEN_NAMES = {"config.json", ".env", ".env.local"}
+OS_METADATA_NAMES = {"Thumbs.db", ".DS_Store", "desktop.ini"}
+FORBIDDEN_NAMES = {"config.json", ".env", ".env.local", *OS_METADATA_NAMES}
 ALLOWED_RUNTIME_FIXTURES = {"tests/fixtures/anime-catalog.sqlite3"}
 ALLOWED_SECRET_FIXTURES = {"tests/unit/test_anm_cli.py", "tests/unit/test_auth.py"}
 TEXT_SUFFIXES = {".py", ".md", ".json", ".toml", ".yml", ".yaml", ".ps1", ".cmd", ".sh", ".command", ".example", ".txt"}
@@ -52,7 +54,9 @@ def _filename_failures(relative: str) -> list[str]:
         failures.append(f"runtime state directory: {relative}")
     if _private_launcher(p.name):
         failures.append(f"private launcher: {relative}")
-    if (p.name in FORBIDDEN_NAMES or p.name.casefold().startswith("config.json.")) and relative != "config/config.example.json":
+    if (
+        p.name in FORBIDDEN_NAMES or p.name.casefold().startswith("config.json.")
+    ) and relative != "config/config.example.json":
         failures.append(f"private filename: {relative}")
     if p.suffix.casefold() in RUNTIME_SUFFIXES and relative not in ALLOWED_RUNTIME_FIXTURES:
         failures.append(f"runtime artifact: {relative}")
@@ -81,7 +85,11 @@ def _content_failures(relative: str, data: bytes) -> list[str]:
         return []
     failures: list[str] = []
     name = PurePosixPath(relative).name
-    if SECRET.search(text) and name not in {".env.example", ".env.local.example"} and relative not in ALLOWED_SECRET_FIXTURES:
+    if (
+        SECRET.search(text)
+        and name not in {".env.example", ".env.local.example"}
+        and relative not in ALLOWED_SECRET_FIXTURES
+    ):
         failures.append(f"possible secret: {relative}")
     if PRIVATE.search(text):
         failures.append(f"private path: {relative}")
@@ -94,11 +102,14 @@ def _directory_entries(root: Path) -> Iterable[tuple[str, bytes]]:
             continue
         relative = path.relative_to(root).as_posix()
         parts = PurePosixPath(relative).parts
-        if (any(part in SKIP_DIRS or part in SOURCE_PRIVATE_DIRS for part in parts)
-                or relative in SOURCE_PRIVATE_FILES or relative.casefold().startswith("config.json.")
-                or (len(parts) == 1 and _private_launcher(path.name))
-                or any(relative == prefix or relative.startswith(prefix + "/")
-                       for prefix in SOURCE_PRIVATE_PREFIXES)):
+        if (
+            path.name in OS_METADATA_NAMES
+            or any(part in SKIP_DIRS or part in SOURCE_PRIVATE_DIRS for part in parts)
+            or relative in SOURCE_PRIVATE_FILES
+            or relative.casefold().startswith("config.json.")
+            or (len(parts) == 1 and _private_launcher(path.name))
+            or any(relative == prefix or relative.startswith(prefix + "/") for prefix in SOURCE_PRIVATE_PREFIXES)
+        ):
             continue
         yield relative, path.read_bytes()
 

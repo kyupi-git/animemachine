@@ -33,7 +33,9 @@ cp "$root/scripts/windows/AnimeMachine.ps1" "$root/scripts/windows/AnimeMachine.
 cp "$root/scripts/windows/Clean-AnimeMachine.ps1" "$root/scripts/windows/Clean-AnimeMachine.cmd" "$release/"
 cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$release/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/" \;
-if [ -d "$root/docs/images" ]; then cp -R "$root/docs/images" "$release/docs/images"; fi
+if [ -d "$root/docs/images" ]; then
+    "$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$release/docs/images"
+fi
 cp "$root/VERSION" "$root/RELEASE_PYTHON_VERSION" "$release/"
 "$python_cmd" "$root/scripts/build_info.py" --output "$release/BUILD-INFO.json" --build-type "$platform-portable" --platform "$platform" --python-version "$("$python_cmd" -c 'import platform; print(platform.python_version())')"
 printf '%s\n' 'Place a verified Bangumi Archive dump-*.zip here, then start AnimeMachine.' > "$release/imports/README.txt"

@@ -11,10 +11,10 @@ Changes affecting everyday use, with the newest release first.
 
 ### Added and improved
 
-- Improved Release radar: add row-height covers before titles and combine this season's subscribed TV titles and TV titles with media into one playlist, starting with each title's last played episode and continuing to its latest playable episode.
-- Improved viewing records: title details and the radar share account-based records, with starting-episode correction, reset, undo, and an optional 64-bit PotPlayer extension that saves playback positions and resumes five seconds earlier. Copied and downloaded playlists retain title and episode names. Playback also works without the extension.
-- Improved resource discovery: with qBittorrent configured, search for Torrents from title details, follow progress, and use the existing release selection, plan preview, and download confirmation flow.
-- Improved loading and layout: skip repeated full-catalog index calculations and display title details before loading playback files, prefetch adjacent pages, and reserve connections for navigation; align card tops and bottoms, hide “Not started,” highlight unwatched episodes per account, align radar controls, refine narrow layouts, and replace the home icon.
+- Added one-click catch-up: combine this season's subscribed TV titles and TV titles with media into one playlist, starting with each title's last played episode and continuing to its latest playable episode.
+- Added viewing records: title details and the radar share account-based records, with starting-episode correction, reset, undo, and a 64-bit PotPlayer extension that automatically saves playback positions after installation and resumes five seconds earlier. Copied and downloaded playlists retain title and episode names. Playback also works without the extension.
+- Added per-title Torrent search: with qBittorrent configured, search for Torrents from title details, follow progress, and use the existing release selection, plan preview, and download confirmation flow.
+- Improved loading and layout: skip repeated full-catalog index calculations and display title details before loading playback files, filter by season before classifying titles, prefetch pages and seasons, display works independently of search status, avoid rebuilding resource preferences on display-language changes, and show loading feedback; align card tops and bottoms, hide “Not started,” highlight unwatched episodes per account, add row-height radar covers, align controls, refine narrow layouts, and replace the home icon.
 - Improved folder maintenance: add a read-only change preview, standardize punctuation in new folder titles, use available Japanese edition titles, and place explicitly linked companion shorts under their main titles.
 - Improved documentation: add illustrated connection, subscription, playback, and viewing-record steps in three languages, with actual multi-title playback on the project home page.
 

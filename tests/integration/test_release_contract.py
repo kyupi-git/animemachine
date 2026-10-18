@@ -12,6 +12,30 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_document_images_exclude_os_metadata_and_archives_reject_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "source"
+            destination = pathlib.Path(directory) / "copied"
+            source.mkdir()
+            (source / "nested").mkdir()
+            (source / "cover.png").write_bytes(b"image")
+            (source / "nested" / "mapping.svg").write_text("<svg/>", encoding="utf-8")
+            for name in ("Thumbs.db", ".DS_Store", "desktop.ini"):
+                (source / name).write_bytes(b"local metadata")
+                (source / "nested" / name).write_bytes(b"local metadata")
+            subprocess.run([sys.executable, str(ROOT / "scripts" / "copy_document_images.py"),
+                            str(source), str(destination)], check=True)
+            self.assertEqual({"cover.png", "nested/mapping.svg"}, {
+                path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()})
+            for name in ("Thumbs.db", ".DS_Store", "desktop.ini"):
+                with self.subTest(name=name):
+                    release = pathlib.Path(directory) / "release.zip"
+                    with zipfile.ZipFile(release, "w") as archive:
+                        archive.writestr("AnimeMachine-test/docs/images/" + name, b"local metadata")
+                    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_public_tree.py"), str(release)],
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(0, result.returncode)
+
     def test_artifacts_reject_local_installation_origins_in_package_metadata(self):
         scanner = ROOT / "scripts" / "check_public_tree.py"
         with tempfile.TemporaryDirectory() as directory:

@@ -149,7 +149,7 @@ Records belong to your account and are shared by title details and the radar. Cl
 
 ![Correct a viewing record by setting the starting episode and position](images/viewing-record.en.png)
 
-**PotPlayer**: click **Install extension** in the playback area. Close the player, merge the ZIP's `Extension` folder into its installation folder, then select **Enable extension to save progress** below the player button. The extension runs inside the 64-bit player and records the actual playback position. Playback resumes five seconds before the last position, or from the beginning if it was under five seconds. Direct launch, copied URLs, and downloaded playlists all work. Without the extension, playlists still play normally and record viewing by episode.
+**PotPlayer**: click **Install progress extension** in the playback area. Close the player, merge the ZIP's `Extension` folder into its installation folder, then restart the player. It takes effect automatically. The extension runs inside the 64-bit player and records the actual playback position. Playback resumes five seconds before the last position, or from the beginning if it was under five seconds. Direct launch, copied URLs, and downloaded playlists all work. Without the extension, playlists still play normally and record viewing by episode.
 
 ![Continuous playback in PotPlayer, with several seasonal titles in the sidebar](images/potplayer-weekly.en.png)
 

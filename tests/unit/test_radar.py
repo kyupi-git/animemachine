@@ -51,6 +51,28 @@ class RadarTests(unittest.TestCase):
         with mock.patch.object(ani_rss, "state", return_value=self.ready):
             return service.query_catalog(self.db_path, params, self.config)
 
+    def test_quarter_filters_precede_full_catalog_title_classification(self):
+        expected = self.query()["total"]
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            columns = [row[1] for row in db.execute("PRAGMA table_info(anime_work)")]
+            original = dict(zip(columns, db.execute("SELECT * FROM anime_work WHERE id=1").fetchone()))
+            for index in range(100, 250):
+                row = {**original, "id": index, "bgm_id": index, "start_month": "2000-01", "raw_date": "2000-01-01"}
+                db.execute(f"INSERT INTO anime_work({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
+                           [row[column] for column in columns])
+        for radar in (["1"], ["0"]):
+            with self.subTest(radar=radar), mock.patch.object(
+                    service, "title_origin_language", wraps=service.title_origin_language) as classify:
+                result = self.query(radar=radar)
+                self.assertEqual(expected, result["total"])
+                self.assertLess(classify.call_count, 100)
+
+    def test_display_language_does_not_change_shared_resource_policy(self):
+        for language in ("zh-Hans", "en", "ja"):
+            with self.subTest(language=language), mock.patch.object(ani_rss, "state", return_value=self.ready) as state:
+                service.query_catalog(self.db_path, {"language": [language], "limit": ["1"]}, self.config)
+                self.assertEqual(self.config, state.call_args.args[1])
+
     def test_radar_keeps_all_tv_before_movies_even_without_updates_or_connection(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("UPDATE anime_work SET media_code='movie', start_month='2026-08' WHERE id=1")

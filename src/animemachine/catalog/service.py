@@ -2207,7 +2207,6 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         has_ani_rss_action_table = bool(feature_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_action'").fetchone())
     config = config or ConfigStore(DEFAULT_CONFIG, EXAMPLE_CONFIG).read()
-    config = {**config, "ui": {**config.get("ui", {}), "language": (params.get("language") or [config.get("ui", {}).get("language", "en")])[0]}}
     ani_state = ani_rss.state(db_path, config)
     ani_connection_ready = ani_rss.state_available(ani_state)
     base_where = ["COALESCE(w.physical_role,'work') NOT IN ('supplement','supplement_review')"]
@@ -2243,8 +2242,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                      f"OR EXISTS(SELECT 1 FROM runtime_work rw WHERE rw.anime_id={owner_expr} AND rw.library_state='existing') "
                      f"OR EXISTS(SELECT 1 FROM external_media_file em WHERE em.anime_id={owner_expr} AND em.match_state='verified') "
                      "OR EXISTS(SELECT 1 FROM runtime_watch aw WHERE aw.anime_id=w.id AND aw.state='active')")
+    follow_filter = ""
     if requested_sort == "recent_episode" and not radar_mode and not q:
-        where.append(f"(({acquired_expr}) OR ((EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND fc.country_code='JP') "
+        follow_filter = (f"(({acquired_expr}) OR ((EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND fc.country_code='JP') "
                      "OR NOT EXISTS(SELECT 1 FROM anime_country fc WHERE fc.anime_id=w.id AND COALESCE(fc.country_code,'')<>'')) "
                      f"AND {translated_expr}))")
     if radar_mode:
@@ -2315,7 +2315,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         movie_start_range, movie_start_values = month_bounds("w.start_month")
         release_range, release_values = month_bounds("substr(re.release_date,1,7)")
         resource_range, resource_values = month_bounds(f"substr({movie_release_expr},1,7)")
-        hard_where.append(
+        hard_where.insert(0,
             f"((w.media_code<>'movie' AND ({tv_range})) OR "
             f"(w.media_code='movie' AND (({movie_start_range}) OR EXISTS("
             "SELECT 1 FROM anime_release_event re WHERE re.anime_id=w.id "
@@ -2563,6 +2563,10 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     elif not radar_mode and not q and requested_sort == "random":
         order = f"{subscription_order} DESC," + order
     order_values = [seed] if sort == "random" else []
+    # Apply inexpensive date/type restrictions before title-language callbacks.
+    # Otherwise a quarter with a few dozen works classifies the entire Archive.
+    if follow_filter:
+        where.append(follow_filter)
     predicate = " WHERE " + " AND ".join(base_where + hard_where + where)
     predicate_values = hard_values + values
     search_expanded = bool(q and len(where) > 1)
@@ -2786,7 +2790,7 @@ def catalog_options(db_path: Path) -> dict[str, Any]:
     return result
 
 
-def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any] | None:
+def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any], *, language: str | None = None) -> dict[str, Any] | None:
     """Return a normalized Archive relation graph enriched with local runtime state."""
     ensure_catalog_features(db_path)
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
@@ -2904,7 +2908,7 @@ def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any])
         if strict_nodes:
             series_root = library_layout.choose_franchise_root(strict_nodes)
             payload["seriesTitle"] = library_layout.strip_season_suffix(localized_display_title(
-                db, int(series_root["id"]), str(config.get("ui", {}).get("language") or "en"),
+                db, int(series_root["id"]), str(language or config.get("ui", {}).get("language") or "en"),
                 str(series_root.get("title_ja") or ""), str(series_root.get("original_language") or "ja"),
                 series_root.get("title_zh_hans"), series_root.get("title_en"),
             ))
@@ -2987,7 +2991,7 @@ def ranked_display_themes(theme_evidence: Iterable[dict[str, Any]], limit: int =
     return [code for code, _score, _rank in ranked[:max(0, limit)]]
 
 
-def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None = None, *, language: str | None = None) -> dict[str, Any] | None:
     ensure_catalog_features(db_path)
     config = config or ConfigStore(DEFAULT_CONFIG, EXAMPLE_CONFIG).read()
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
@@ -3012,7 +3016,7 @@ def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None =
             FROM anime_relation ar LEFT JOIN anime_work related ON related.bgm_id=ar.related_bgm_id
             WHERE ar.anime_id=? AND ar.relation_code<>'other'
             ORDER BY ar.relation_type,ar.related_title""", (anime_id,)))
-        ui_language = str(config.get("ui", {}).get("language") or "en")
+        ui_language = str(language or config.get("ui", {}).get("language") or "en")
         for relation in result["relations"]:
             related_anime_id = relation.get("related_anime_id")
             relation["related_display_title"] = (
@@ -5746,8 +5750,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 mark_interactive()
                 cfg = config_store.read()
                 language = (urllib.parse.parse_qs(parsed.query).get("language") or [cfg.get("ui", {}).get("language", "en")])[0]
-                cfg = {**cfg, "ui": {**cfg.get("ui", {}), "language": language}}
-                detail = catalog_detail(db_path, int(match.group(1)), cfg)
+                detail = catalog_detail(db_path, int(match.group(1)), cfg, language=language)
                 if detail:
                     detail["viewing"] = {**viewing_store.get(self.auth_session.user_id, int(detail["bgm_id"])), "animeId": detail["id"]}
                 self.json_response(detail or {"error": "not found"}, 200 if detail else 404)
@@ -5756,8 +5759,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if graph_match:
                 cfg = config_store.read()
                 language = (urllib.parse.parse_qs(parsed.query).get("language") or [cfg.get("ui", {}).get("language", "en")])[0]
-                cfg = {**cfg, "ui": {**cfg.get("ui", {}), "language": language}}
-                graph = catalog_relation_graph(db_path, int(graph_match.group(1)), cfg)
+                graph = catalog_relation_graph(db_path, int(graph_match.group(1)), cfg, language=language)
                 self.json_response(graph or {"error": "not found"}, 200 if graph else 404)
                 return
             playback_match = re.fullmatch(r"/api/anime/(\d+)/playback", parsed.path)
@@ -6079,9 +6081,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     if cfg.get("playback", {}).get("enabled", True) is not True:
                         raise ValueError("playback is disabled")
                     params = catchup.season_params(request)
-                    cfg = {**cfg, "ui": {**cfg.get("ui", {}), "language": params["language"][0]}}
                     rows = query_catalog(db_path, params, cfg)["items"]
-                    items, owners, groups = catchup.queue(db_path, rows, cfg, viewing_store, self.auth_session.user_id)
+                    items, owners, groups = catchup.queue(db_path, rows, cfg, viewing_store, self.auth_session.user_id,
+                                                        language=params["language"][0])
                     if not items:
                         self.json_response({"count": 0, "groups": []})
                         return

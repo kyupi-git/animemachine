@@ -82,7 +82,8 @@ try {
         Copy-Item -Destination (Join-Path $release 'docs')
     $images = Join-Path $root 'docs\images'
     if (Test-Path -LiteralPath $images -PathType Container) {
-        Copy-Item -LiteralPath $images -Destination (Join-Path $release 'docs\images') -Recurse
+        & $python (Join-Path $root 'scripts\copy_document_images.py') $images (Join-Path $release 'docs\images')
+        if ($LASTEXITCODE) { throw 'Unable to copy documentation images.' }
     }
     Copy-Item -LiteralPath (Join-Path $root 'VERSION') -Destination $release
     Copy-Item -LiteralPath (Join-Path $root 'RELEASE_PYTHON_VERSION') -Destination $release

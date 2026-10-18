@@ -356,7 +356,7 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('radarTitleColumn: "标题"', script)
         self.assertIn('radarMediaType: "媒介类型"', script)
         self.assertIn('radar: "1"', script)
-        radar_render = script[script.index('async function loadRadar()'):script.index('async function openRadarSubscription')]
+        radar_render = script[script.index('async function loadRadar('):script.index('async function openRadarSubscription')]
         self.assertNotIn('secondaryTitle(item)', radar_render)
         self.assertNotIn('localMonth(item.start_month)', radar_render)
         self.assertIn('label("media", item.media_code)', radar_render)

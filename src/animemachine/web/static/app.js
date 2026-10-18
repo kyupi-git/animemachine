@@ -58,6 +58,20 @@ const performanceReported = new Set();
 const catalogPages = new Map();
 let catalogPageRevision = 0, catalogPrefetchTimer;
 function invalidateCatalogPages() { catalogPages.clear(); catalogPageRevision++; }
+async function catalogPage(query, { signal, preferCache = false } = {}) {
+  const key = query.toString(), cached = catalogPages.get(key);
+  if (preferCache && cached && cached.expires > Date.now() && !cached.signal?.aborted) return cached.promise;
+  const revision = catalogPageRevision;
+  const entry = { expires: Date.now() + 30000, signal };
+  entry.promise = api(`/api/anime?${query}`, { signal, timeoutMs: 15000 });
+  catalogPages.set(key, entry);
+  while (catalogPages.size > 12) catalogPages.delete(catalogPages.keys().next().value);
+  entry.promise.then(() => {
+    entry.signal = undefined;
+    if (revision !== catalogPageRevision && catalogPages.get(key) === entry) catalogPages.delete(key);
+  }, () => { if (catalogPages.get(key) === entry) catalogPages.delete(key); });
+  return entry.promise;
+}
 const renderedContents = new WeakMap();
 let authSession = null,
   csrfToken = "";
@@ -79,6 +93,9 @@ function topModalDialog() {
 function showModalDialog(dialog) {
   if (!dialog || dialog.open) return;
   dialog.showModal();
+  for (let index = modalStack.length - 1; index >= 0; index--) {
+    if (modalStack[index] === dialog) modalStack.splice(index, 1);
+  }
   modalStack.push(dialog);
 }
 function canScrollVertically(element, deltaY) {
@@ -404,7 +421,7 @@ const i18n = {
     viewingResume: "续看：第 {episode} 话", viewingNew: "未开始", viewingEdit: "修改续看集数",
     viewingEpisode: "下次从这一集开始（包含本集）", viewingClear: "设为未开始", viewingUndo: "撤销",
     viewingSaved: "已修改", viewingConflict: "记录已在其它设备更新，请重新打开后修改。",
-    potplayerEnhanced: "启用扩展，记忆播放进度", potplayerInstall: "安装扩展", potplayerHint: "仅 PotPlayer 需要。安装扩展后可记录位置并续播；未安装时正常播放，只记录集数。", viewingPosition: "播放位置（时:分:秒）",
+    potplayerInstall: "安装扩展以记忆播放进度", potplayerHint: "仅 PotPlayer 需要。安装扩展后可记录位置并续播；未安装时正常播放，只记录集数。", viewingPosition: "播放位置（时:分:秒）",
     radar: "新作雷达",
     radarPrevious: "上季度", radarCurrent: "本季度", radarNext: "下季度",
     viewingUnavailable: "观看记录暂不可用", radarUnwatched: "有新集待看", radarTitleColumn: "标题", radarMediaType: "媒介类型", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间",
@@ -1031,7 +1048,7 @@ const i18n = {
     viewingResume: "Continue: Ep {episode}", viewingNew: "Not started", viewingEdit: "Change starting episode",
     viewingEpisode: "Next time, start here (including this episode)", viewingClear: "Mark as not started", viewingUndo: "Undo",
     viewingSaved: "Updated", viewingConflict: "This record changed on another device. Reopen it to make your change.",
-    potplayerEnhanced: "Enable extension to save progress", potplayerInstall: "Install extension", potplayerHint: "PotPlayer only. Install the extension to save positions and resume. Without it, playback works and records episodes only.", viewingPosition: "Position (hours:minutes:seconds)",
+    potplayerInstall: "Install progress extension", potplayerHint: "PotPlayer only. Install the extension to save positions and resume. Without it, playback works and records episodes only.", viewingPosition: "Position (hours:minutes:seconds)",
     radar: "Release radar",
     radarPrevious: "Previous season", radarCurrent: "Current season", radarNext: "Next season",
     viewingUnavailable: "Viewing records are unavailable", radarUnwatched: "New episodes to watch", radarTitleColumn: "Title", radarMediaType: "Media type", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated",
@@ -1658,7 +1675,7 @@ const i18n = {
     viewingResume: "続き：第 {episode} 話", viewingNew: "未再生", viewingEdit: "再開する話数を変更",
     viewingEpisode: "次回はこの話から再生（この話を含む）", viewingClear: "未再生に戻す", viewingUndo: "元に戻す",
     viewingSaved: "変更しました", viewingConflict: "別の端末で記録が更新されました。開き直して変更してください。",
-    potplayerEnhanced: "拡張を有効にして再生位置を記録", potplayerInstall: "拡張を導入", potplayerHint: "PotPlayer 専用です。拡張を導入すると再生位置から再開できます。未導入でも通常どおり再生でき、話数のみ記録します。", viewingPosition: "再生位置（時:分:秒）",
+    potplayerInstall: "再生位置を記録する拡張を導入", potplayerHint: "PotPlayer 専用です。拡張を導入すると再生位置から再開できます。未導入でも通常どおり再生でき、話数のみ記録します。", viewingPosition: "再生位置（時:分:秒）",
     radar: "新作レーダー",
     radarPrevious: "前シーズン", radarCurrent: "今シーズン", radarNext: "次シーズン",
     viewingUnavailable: "視聴記録を読み込めません", radarUnwatched: "未視聴の新しい話があります", radarTitleColumn: "タイトル", radarMediaType: "メディア種別", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時",
@@ -2584,19 +2601,15 @@ async function search({ background = false } = {}) {
   const controller = new AbortController();
   searchController = controller;
   results.setAttribute("aria-busy", "true");
-  if (!background) $("prevPage").disabled = $("nextPage").disabled = true;
+  if (!background) { $("prevPage").disabled = $("nextPage").disabled = true; $("catalogLoading").hidden = false; }
   if (!items.length) {
     results.innerHTML = `<div class="empty">${t("loading")}</div>`;
     renderedResultsMarkup = "";
   }
   try {
-    const query = params(), key = query.toString(), cached = catalogPages.get(key);
-    const revision = catalogPageRevision;
-    const d = !background && cached && cached.expires > Date.now()
-      ? await cached.promise : await api(`/api/anime?${query}`, { signal: controller.signal });
+    const query = params(), revision = catalogPageRevision;
+    const d = await catalogPage(query, { signal: controller.signal, preferCache: !background });
     if (searchController !== controller) return;
-    if (revision === catalogPageRevision) catalogPages.set(key, { expires: Date.now() + 20000, promise: Promise.resolve(d) });
-    while (catalogPages.size > 6) catalogPages.delete(catalogPages.keys().next().value);
     items = d.items;
     total = d.total;
     searchExpanded = Boolean(d.searchExpanded);
@@ -2608,10 +2621,7 @@ async function search({ background = false } = {}) {
         const next = new URLSearchParams(query); next.set("offset", String((page + 1) * Number(pageSize)));
         const nextKey = next.toString(), existing = catalogPages.get(nextKey);
         if (existing && existing.expires > Date.now()) return;
-        const promise = api(`/api/anime?${next}`, { timeoutMs: 10000 });
-        const entry = { expires: Date.now() + 20000, promise };
-        catalogPages.set(nextKey, entry);
-        promise.catch(() => { if (catalogPages.get(nextKey) === entry) catalogPages.delete(nextKey); });
+        catalogPage(next, { preferCache: true }).catch(() => {});
       }, 250);
     }
   } catch (e) {
@@ -2624,6 +2634,7 @@ async function search({ background = false } = {}) {
     if (searchController === controller) {
       searchController = null;
       results.removeAttribute("aria-busy");
+      $("catalogLoading").hidden = true;
       $("prevPage").disabled = !page;
       $("nextPage").disabled = pageSize === "all" || (page + 1) * Number(pageSize) >= total;
     }
@@ -5128,7 +5139,7 @@ function playbackHtml(state) {
   if (!state?.available)
     return `<section class="playback-panel unavailable">${state?.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<p class="muted">${esc(state?.error || t("noPlayableMedia"))}</p></section>`;
   const episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join("");
-  return `<section class="playback-panel">${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select></div><div class="playback-actions">${playerActionsHtml("data-player")}</div></section>`;
+  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select>${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}</div><div class="playback-actions">${playerActionsHtml("data-player")}</div></section>`;
 }
 
 const viewingRecords = new Map();
@@ -5151,6 +5162,8 @@ function viewingButton(animeId, record, bgmId = record?.bgmId) {
   return `<button type="button" class="text-button viewing-button" data-viewing="${animeId}" data-bgm-id="${Number(bgmId) || 0}" title="${esc(t("viewingEdit"))}">${esc(viewingLabel(record))}</button>`;
 }
 function updateViewing(record) {
+  const previous = viewingRecords.get(record.animeId);
+  if (previous && (previous.revision !== record.revision || previous.epoch !== record.epoch)) invalidateCatalogPages();
   viewingRecords.set(record.animeId, record);
   document.querySelectorAll(`[data-viewing="${record.animeId}"]`).forEach((button) => { button.textContent = viewingLabel(record); });
 }
@@ -5204,20 +5217,11 @@ async function saveViewing(episode, undo = false, positionMs = 0) {
     if (generation === viewingGeneration) $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = false;
   }
 }
-function potplayerOptionsHtml() {
-  let enabled = false;
-  try { enabled = localStorage.getItem("anm-potplayer-feedback") === "1"; } catch (_) {}
-  return `<label class="check" title="${esc(t("potplayerHint"))}"><input type="checkbox" data-potplayer-enhanced ${enabled ? "checked" : ""}>${esc(t("potplayerEnhanced"))}</label><a class="tool dark-tool extension-install" href="/api/playback/potplayer-extension.zip" download>${esc(t("potplayerInstall"))}</a>`;
-}
 function playerActionsHtml(attribute = "data-catchup-player") {
-  const buttons = [["copy", "copyPlaylist"], ["system", "systemPlayer"], ["vlc", "openVlc"]];
-  if (/Windows/i.test(navigator.userAgent)) buttons.push(["potplayer", "openPotPlayer"]);
-  if (/(Macintosh|Mac OS X)/i.test(navigator.userAgent)) buttons.push(["iina", "openIina"]);
-  return buttons.map(([kind, key]) => {
-    const icon = kind === "copy" ? ' data-icon="copy"' : kind === "system" ? ' data-icon="download"' : "";
-    const button = `<button type="button" class="tool dark-tool player-action" ${attribute}="${kind}"${icon}>${playerIcon(kind)}<span>${esc(t(key))}</span></button>`;
-    return kind === "potplayer" ? `<div class="potplayer-group">${button}<div class="potplayer-options">${potplayerOptionsHtml()}</div></div>` : button;
-  }).join("");
+  const button = (kind, key) => `<button type="button" class="tool dark-tool player-action" ${attribute}="${kind}"${kind === "copy" ? ' data-icon="copy"' : kind === "system" ? ' data-icon="download"' : ""}>${playerIcon(kind)}<span>${esc(t(key))}</span></button>`;
+  const windows = /Windows/i.test(navigator.userAgent), mac = /(Macintosh|Mac OS X)/i.test(navigator.userAgent);
+  const primary = windows ? `<div class="potplayer-group">${button("potplayer", "openPotPlayer")}<a class="tool dark-tool extension-install" href="/api/playback/potplayer-extension.zip" download title="${esc(t("potplayerHint"))}">${esc(t("potplayerInstall"))}</a></div>` : mac ? button("iina", "openIina") : "";
+  return `${primary}<div class="player-utilities">${button("vlc", "openVlc")}${button("copy", "copyPlaylist")}${button("system", "systemPlayer")}</div>`;
 }
 async function deliverPlayback(kind, handoff, button) {
   if (kind === "copy") {
@@ -5267,18 +5271,13 @@ document.addEventListener("click", async (event) => {
   $("catchupStatus").textContent = t("catchupPreparing");
   try {
     const handoff = await api("/api/playback/catchup", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, player: kind, enhanced: !!$("catchupPlayers").querySelector("[data-potplayer-enhanced]")?.checked }) });
+      body: JSON.stringify({ ...request, player: kind, enhanced: true }) });
     if (catchupRequest !== request || !$("catchupDialog").open) return;
     if (!handoff.count) { $("catchupStatus").textContent = t("catchupEmpty"); return; }
     await deliverPlayback(kind, handoff, button);
     $("catchupStatus").textContent = t("catchupCount").replace("{works}", handoff.groups.length).replace("{episodes}", handoff.count);
   } catch (error) { if (catchupRequest === request && $("catchupDialog").open) $("catchupStatus").textContent = error.message; }
   finally { buttons.forEach((item) => { item.disabled = false; }); }
-});
-document.addEventListener("change", (event) => {
-  if (event.target.matches("[data-potplayer-enhanced]")) {
-    try { localStorage.setItem("anm-potplayer-feedback", event.target.checked ? "1" : "0"); } catch (_) {}
-  }
 });
 $("viewingForm").onsubmit = (event) => { event.preventDefault(); try { saveViewing($("viewingEpisode").value === "" ? null : Number($("viewingEpisode").value), false, positionValue($("viewingPosition").value)); } catch(error) { $("viewingStatus").textContent = error.message; } };
 $("viewingClear").onclick = () => saveViewing(null);
@@ -5341,7 +5340,7 @@ async function handoffPlayback(kind, animeId, button, generation = detailGenerat
       mode: "playlist",
       source: playbackSources.get(animeId) || "",
       start: selectedEpisode,
-      enhanced: !!$("detail").querySelector("[data-potplayer-enhanced]")?.checked,
+      enhanced: true,
     },
     handoff = await api(`/api/anime/${animeId}/playback/handoff`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -5383,7 +5382,7 @@ function aniSubscriptionManagementHtml(subscription, animeId) {
 }
 
 let detailGeneration = 0;
-detailDialog.addEventListener("close", () => { detailGeneration++; });
+detailDialog.addEventListener("close", () => { if (!detailDialog.open) detailGeneration++; });
 async function showDetail(id) {
   detailDialog.dataset.animeId = String(id);
   const generation = ++detailGeneration;
@@ -6909,7 +6908,31 @@ function radarHeader(sortKey, labelKey, className = "") {
   const active = radarSort === sortKey;
   return `<th class="${className}" aria-sort="${active ? (radarDirection === "asc" ? "ascending" : "descending") : "none"}"><button class="radar-sort" type="button" data-radar-sort="${sortKey}">${esc(t(labelKey))}<span class="radar-sort-arrow" aria-hidden="true">${active ? (radarDirection === "asc" ? "↑" : "↓") : ""}</span></button></th>`;
 }
-async function loadRadar() {
+let lastRadarScan = { state: "idle" }, radarPrefetchTimer;
+function updateRadarScan(scan, available) {
+    $("radarCatchup").disabled = config.playback?.enabled === false;
+    $("radarSearch").disabled = !available || scan.state === "running";
+    $("radarSync").disabled = !available || scan.state === "running";
+    const searchLabel = $("radarSearch").querySelector("[data-i18n]");
+    searchLabel.dataset.i18n = scan.failed && scan.state !== "running" ? "radarRetryShort" : "radarSearchShort";
+    searchLabel.textContent = t(searchLabel.dataset.i18n);
+    $("radarSearch").title = t(scan.failed && scan.state !== "running" ? "radarRetry" : "radarSearch");
+    $("radarSearchProgress").hidden = scan.state !== "running";
+    if (scan.total && scan.phase !== "sync") {
+      $("radarSearchProgress").max = scan.total;
+      $("radarSearchProgress").value = scan.done || 0;
+    } else $("radarSearchProgress").removeAttribute("value");
+    $("radarSearchStatus").textContent = scan.state === "idle" ? "" :
+      scan.state === "running" && scan.phase === "sync" ? t("radarSyncing") :
+      `${t(scan.state === "complete" ? "radarComplete" : scan.state === "running" ? "radarChecking" : scan.state === "interrupted" ? "radarInterrupted" : "failed")} · ${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "running" && scan.currentTitle ? ` · ${scan.currentTitle}` : ""}${scan.error ? ` · ${scan.error}` : ""}`;
+    $("radarSearchStatus").title = $("radarSearchStatus").textContent;
+}
+function radarQuery(season) {
+  return new URLSearchParams({ sort: radarSort || "recent_episode", direction: radarDirection,
+    radar_grouped: radarSort ? "0" : "1", radar: "1", language, start_from: season.from,
+    start_to: season.to, limit: "all" });
+}
+async function loadRadar({ preferCache = false } = {}) {
   if ($("radarResults").querySelector(".subscription-menu[open]")) {
     clearTimeout(radarTimer);
     radarTimer = setTimeout(loadRadar, 2000);
@@ -6917,6 +6940,7 @@ async function loadRadar() {
   }
   if (!$("radarDialog").open) return;
   clearTimeout(radarTimer);
+  clearTimeout(radarPrefetchTimer);
   radarTimer = null;
   if (topModalDialog() !== $("radarDialog")) {
     radarRefreshPending = true;
@@ -6947,59 +6971,35 @@ async function loadRadar() {
   seasons.forEach((item, index) => updateRadarSeasonCount($(`radarTab${index}`), item, previousCounts[index]));
   $("radarPanel").setAttribute("aria-labelledby", `radarTab${radarSeason}`);
   $("radarTabs").querySelectorAll("button").forEach((button) => {
-    button.onclick = () => { radarSeason = Number(button.dataset.season); loadRadar(); };
+    button.onclick = () => { radarSeason = Number(button.dataset.season); loadRadar({ preferCache: true }); };
     button.onkeydown = (event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
       radarSeason = event.key === "Home" ? 0 : event.key === "End" ? 2 :
         (radarSeason + (event.key === "ArrowRight" ? 1 : 2)) % 3;
-      loadRadar(); $(`radarTab${radarSeason}`).focus();
+      loadRadar({ preferCache: true }); $(`radarTab${radarSeason}`).focus();
     };
   });
   const season = seasons[radarSeason];
-  // Count requests use the same view filters and do not delay the selected quarter.
-  seasons.forEach((item, index) => {
-    if (index === radarSeason) return;
-    const countQuery = new URLSearchParams({ radar: "1", language, start_from: item.from, start_to: item.to, limit: "1" });
-    api(`/api/anime?${countQuery}`, { signal: controller.signal }).then((data) => {
-      if (generation === radarGeneration && $("radarDialog").open && topModalDialog() === $("radarDialog"))
-        updateRadarSeasonCount($(`radarTab${index}`), item, data.total);
-    }).catch(() => {}); // Keep the previous count when this optional request fails.
-  });
-  if (!$("radarResults").firstElementChild) $("radarStatus").textContent = t("radarLoading");
+  $("radarStatus").textContent = t("radarLoading");
   $("radarResults").setAttribute("aria-busy", "true");
   try {
-    const query = new URLSearchParams({ sort: radarSort || "recent_episode", direction: radarDirection,
-      radar_grouped: radarSort ? "0" : "1", radar: "1", language, start_from: season.from,
-      start_to: season.to, limit: "all" });
-    const [data, scan] = await Promise.all([
-      api(`/api/anime?${query}`, { signal: controller.signal }),
-      api("/api/ani-rss/season-search", { signal: controller.signal, timeoutMs: 5000 })
-        .catch((error) => ({ state: "unavailable", error: error.message })),
-    ]);
+    const scanPromise = api("/api/ani-rss/season-search", { signal: controller.signal, timeoutMs: 5000 })
+      .catch((error) => ({ state: "unavailable", error: error.message }));
+    const data = await catalogPage(radarQuery(season), { signal: controller.signal, preferCache });
     if (generation !== radarGeneration || !$("radarDialog").open) return;
     data.items.forEach((item) => { if (item.viewing) updateViewing(item.viewing); });
     if (topModalDialog() !== $("radarDialog")) { radarRefreshPending = true; return; }
     const available = data.aniRssAvailable;
-    $("radarCatchup").disabled = config.playback?.enabled === false;
-    $("radarSearch").disabled = !available || scan.state === "running";
-    $("radarSync").disabled = !available || scan.state === "running";
-    const searchLabel = $("radarSearch").querySelector("[data-i18n]");
-    searchLabel.dataset.i18n = scan.failed && scan.state !== "running" ? "radarRetryShort" : "radarSearchShort";
-    searchLabel.textContent = t(searchLabel.dataset.i18n);
-    $("radarSearch").title = t(scan.failed && scan.state !== "running" ? "radarRetry" : "radarSearch");
-    $("radarSearchProgress").hidden = scan.state !== "running";
-    if (scan.total && scan.phase !== "sync") {
-      $("radarSearchProgress").max = scan.total;
-      $("radarSearchProgress").value = scan.done || 0;
-    } else $("radarSearchProgress").removeAttribute("value");
-    $("radarSearchStatus").textContent = scan.state === "idle" ? "" :
-      scan.state === "running" && scan.phase === "sync" ? t("radarSyncing") :
-      `${t(scan.state === "complete" ? "radarComplete" : scan.state === "running" ? "radarChecking" : scan.state === "interrupted" ? "radarInterrupted" : "failed")} · ${t("radarSearchProgress").replace("{done}", String(scan.done || 0)).replace("{total}", String(scan.total || 0)).replace("{failed}", String(scan.failed || 0))}${scan.state === "running" && scan.currentTitle ? ` · ${scan.currentTitle}` : ""}${scan.error ? ` · ${scan.error}` : ""}`;
-    $("radarSearchStatus").title = $("radarSearchStatus").textContent;
+    updateRadarScan(lastRadarScan, available);
+    scanPromise.then((scan) => {
+      if (generation !== radarGeneration || !$("radarDialog").open || topModalDialog() !== $("radarDialog")) return;
+      lastRadarScan = scan;
+      updateRadarScan(scan, available);
+      if (scan.state === "running") { clearTimeout(radarTimer); radarTimer = setTimeout(loadRadar, 2000); }
+    });
     updateRadarSeasonCount($(`radarTab${radarSeason}`), season, data.total);
     $("radarStatus").textContent = data.viewingUnavailable ? t("viewingUnavailable") : available ? "" : t("recentEpisodeRequiresAniRss");
-    if (scan.state === "running") radarTimer = setTimeout(loadRadar, 2000);
     renderRadarTable(data.items.length ? `<table class="data-table radar-table"><thead><tr>
       ${radarHeader("title", "radarTitleColumn")}${radarHeader("type", "radarMediaType", "radar-media")}${radarHeader("premiere", "radarStart", "radar-start")}${radarHeader("progress", "radarProgress")}${radarHeader("subscription", "radarSubscription")}${radarHeader("updated", "radarUpdated")}
       </tr></thead><tbody>${data.items.map((item) => {
@@ -7022,7 +7022,7 @@ async function loadRadar() {
         const column = button.dataset.radarSort;
         radarDirection = radarSort === column && radarDirection === "asc" ? "desc" : "asc";
         radarSort = column;
-        loadRadar();
+        loadRadar({ preferCache: true });
       };
     });
     if (imagesEnabled) {
@@ -7037,6 +7037,19 @@ async function loadRadar() {
     $("radarResults").querySelectorAll("[data-subscribe]").forEach((b) => {
       b.onclick = () => openRadarSubscription(Number(b.dataset.subscribe));
     });
+    const revision = catalogPageRevision;
+    radarPrefetchTimer = setTimeout(async () => {
+      for (let index = 0; index < seasons.length; index++) {
+        if (index === radarSeason) continue;
+        if (generation !== radarGeneration || revision !== catalogPageRevision || topModalDialog() !== $("radarDialog")) return;
+        try {
+          const data = await catalogPage(radarQuery(seasons[index]), { preferCache: true });
+          if (generation === radarGeneration && $("radarDialog").open)
+            updateRadarSeasonCount($(`radarTab${index}`), seasons[index], data.total);
+        } catch (_) {} // Optional prefetch never blocks the selected season.
+      }
+    }, 350);
+
   } catch (error) {
     if (generation === radarGeneration && !controller.signal.aborted) {
       $("radarStatus").textContent = `${t("failed")}: ${error.message}`;
@@ -7109,7 +7122,7 @@ async function openRadarSubscription(animeId) {
     if (active()) $("radarSubscribeStatus").textContent = error.message;
   }
 }
-$("radarButton").onclick = () => { radarSeason = 1; showModalDialog($("radarDialog")); loadRadar(); };
+$("radarButton").onclick = () => { radarSeason = 1; showModalDialog($("radarDialog")); loadRadar({ preferCache: true }); };
 async function startRadarSearch(synchronize = false) {
   $("radarSearch").disabled = true;
   $("radarSync").disabled = true;
@@ -7130,8 +7143,8 @@ async function startRadarSearch(synchronize = false) {
 }
 $("radarSearch").onclick = () => startRadarSearch();
 $("radarSync").onclick = () => startRadarSearch(true);
-$("radarDialog").addEventListener("close", () => { clearTimeout(radarTimer); radarController?.abort(); radarGeneration++; });
-$("radarSubscribeDialog").addEventListener("close", () => { radarSubscribeGeneration++; });
+$("radarDialog").addEventListener("close", () => { if (!$("radarDialog").open) { clearTimeout(radarTimer); radarController?.abort(); radarGeneration++; } });
+$("radarSubscribeDialog").addEventListener("close", () => { if (!$("radarSubscribeDialog").open) radarSubscribeGeneration++; });
 $("radarSubscribeForm").onsubmit = async (event) => {
   event.preventDefault();
   const button = $("radarSubscribeSubmit"), resource = $("radarResource").value;
@@ -7769,6 +7782,7 @@ document
   .forEach((b) => (b.onclick = () => b.closest("dialog").close()));
 document.querySelectorAll("dialog").forEach((dialog) => {
   dialog.addEventListener("close", () => {
+    if (dialog.open) return;
     for (let index = modalStack.length - 1; index >= 0; index -= 1) {
       if (modalStack[index] === dialog) modalStack.splice(index, 1);
     }

@@ -31,11 +31,12 @@ def season_params(request: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
-          store: viewing.Store, user_id: int) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
+          store: viewing.Store, user_id: int, *, language: str | None = None) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
     items: list[playback.PlaybackItem] = []
     owners: list[int] = []
     groups: list[dict[str, Any]] = []
     remote_available = ani_rss.state_available(ani_rss.state(db_path, config))
+    language = language or str(config.get("ui", {}).get("language") or "en")
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for row in rows:
@@ -63,8 +64,8 @@ def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
             selected.sort(key=lambda item: item.episode)
             if not selected:
                 continue
-            title = str(row.get("title_zh_hans_localized") if config.get("ui", {}).get("language") == "zh-Hans"
-                        else row.get("title_en_localized") if config.get("ui", {}).get("language") == "en"
+            title = str(row.get("title_zh_hans_localized") if language == "zh-Hans"
+                        else row.get("title_en_localized") if language == "en"
                         else row.get("title_ja_localized"))
             title = title if title and title != "None" else str(row.get("title_ja") or anime_id)
             items.extend(dataclasses.replace(item, title=f"{title} · {playback._episode_label(item.episode)}", bgm_id=int(row["bgm_id"]))

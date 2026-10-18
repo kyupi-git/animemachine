@@ -97,7 +97,14 @@ class RuntimeCatalogTests(unittest.TestCase):
         self.assertEqual(1, len(items))
         self.assertEqual(1, items[0].episode)
         self.assertEqual(self.target / 'Episode 01.mkv', items[0].path)
-        with mock.patch.object(Path, 'stat', side_effect=AssertionError('inventory must not probe media')):
+        original_stat = Path.stat
+
+        def stat_without_media(path, *args, **kwargs):
+            if path == self.target.parent or self.target.parent in path.parents:
+                raise AssertionError('inventory must not probe media')
+            return original_stat(path, *args, **kwargs)
+
+        with mock.patch.object(Path, 'stat', new=stat_without_media):
             latest = playback.latest_cached_episodes(self.db_path, [self.anime_id], self.config)
         self.assertEqual({self.anime_id: 1}, latest)
 
