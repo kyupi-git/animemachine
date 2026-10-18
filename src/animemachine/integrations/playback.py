@@ -324,7 +324,7 @@ def _episode(path: Path, fallback: float | None = None, expected_count: int | No
 
 
 def _episode_label(value: float) -> str:
-    if value.is_integer():
+    if float(value).is_integer():
         return f"Ep{int(value):02d}"
     return f"Ep{value:g}"
 

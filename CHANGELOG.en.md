@@ -26,6 +26,7 @@ Changes affecting everyday use, with the newest release first.
 - Fixed titles remaining in the downloading state after a qBittorrent task was removed, preventing another release from being selected; known media and submitted download records are retained across rescans and restarts.
 - Fixed initial catalog publication failing on an open database or mixing old and new data.
 - Fixed stale search and playback results reopening closed views or launching an earlier request. Prevent duplicate playback requests, reject malformed request bodies, disable stale subtitle selections during searches, and allow settings to save while quiet hours are off.
+- Fixed whole-episode playback labels failing on Python 3.11.
 
 ## 0.3.4
 

@@ -25,8 +25,9 @@ class PlaybackTokenTests(unittest.TestCase):
             self.assertIsNone(registry.resolve(first))
 
     def test_episode_labels_are_player_friendly(self) -> None:
-        self.assertEqual("Ep01", playback._episode_label(1.0))
-        self.assertEqual("Ep1.5", playback._episode_label(1.5))
+        for value, expected in ((0, "Ep00"), (1, "Ep01"), (1.0, "Ep01"), (1.5, "Ep1.5")):
+            with self.subTest(value=value):
+                self.assertEqual(expected, playback._episode_label(value))
 
     def test_bare_title_number_outside_known_run_is_not_an_episode(self) -> None:
         path = Path("靠死亡游戏混饭吃。 44 - CLOUDY BEACH.mkv")
