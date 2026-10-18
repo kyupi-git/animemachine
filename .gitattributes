@@ -1,6 +1,8 @@
 * text=auto
 *.sh text eol=lf
 *.py text eol=lf
+*.c text eol=lf
+*.as text eol=lf
 *.js text eol=lf
 *.css text eol=lf
 *.html text eol=lf
@@ -11,3 +13,4 @@
 *.png binary
 *.jpg binary
 *.zip binary
+*.dll binary
