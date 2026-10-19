@@ -37,11 +37,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Validate all Compose deployment modes
         run: |
-          for directory in deploy/compose/[0-9][0-9]-*; do
-            cp "$directory/.env.example" "$directory/.env"
-            docker compose --env-file "$directory/.env" -f "$directory/compose.yaml" config --quiet
-            rm "$directory/.env"
-          done
+          python scripts/check_compose.py
       - run: docker build --build-arg "ANM_VERSION=$(cat VERSION)" -f packaging/docker/Dockerfile -t animemachine:test .
       - run: docker run --rm -e ANM_CONFIG_PATH=/opt/animemachine/src/animemachine/resources/config.example.json animemachine:test validate-config
       - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -71,7 +67,7 @@ jobs:
           $expanded = Join-Path $env:RUNNER_TEMP 'animemachine-release-expanded'
           $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
           Expand-Archive -LiteralPath (Join-Path $output "AnimeMachine-$version-release-windows.zip") -DestinationPath $expanded
-          foreach ($name in @('AnimeMachine.cmd', 'AnimeMachine-Linux.sh', 'AnimeMachine-macOS.command')) {
+          foreach ($name in @('AnimeMachine.cmd', 'AnimeMachine.ps1', 'tools/maintenance/clean_runtime.py')) {
             if (-not (Test-Path -LiteralPath (Join-Path $expanded "AnimeMachine-$version/$name") -PathType Leaf)) { throw "Missing launcher: $name" }
           }
           & (Join-Path $expanded "AnimeMachine-$version/AnimeMachine.ps1") -CheckOnly
@@ -91,9 +87,12 @@ jobs:
           version=$(cat VERSION)
           archive=$(find dist -maxdepth 1 -name "AnimeMachine-$version-release-*.tar.gz" -print -quit)
           test -n "$archive"
-          for launcher in AnimeMachine.cmd AnimeMachine-Linux.sh AnimeMachine-macOS.command; do
-            tar -tzf "$archive" | grep -q "AnimeMachine-$version/$launcher"
-          done
+          case "$(uname -s)" in
+            Linux) launcher=AnimeMachine-Linux.sh ;;
+            Darwin) launcher=AnimeMachine-macOS.command ;;
+          esac
+          tar -tzf "$archive" | grep -q "AnimeMachine-$version/$launcher"
+          tar -tzf "$archive" | grep -q "AnimeMachine-$version/tools/maintenance/clean_runtime.py"
   security:
     runs-on: ubuntu-latest
     steps:

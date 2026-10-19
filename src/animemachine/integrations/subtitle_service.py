@@ -362,6 +362,9 @@ def _download(candidate: dict[str, Any], config: dict[str, Any], destination: Pa
 
 def apply(anime_id: int, target: str, candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     root = path_policy.authorize_existing(target, playback.configured_media_roots(config), config=config)
+    language = str(candidate.get("language") or "und")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}", language):
+        raise ValueError("invalid subtitle language")
     external_roots = [Path(str(x.get("path"))) for x in config.get("externalLibraries", []) if x.get("readOnly")]
     ani_rss_media = config.get("components", {}).get("aniRss", {}).get("mediaPath")
     if ani_rss_media:
@@ -385,10 +388,10 @@ def apply(anime_id: int, target: str, candidate: dict[str, Any], config: dict[st
         from ..storage.sleep import require_awake
         require_awake(output_root, config)
         output_root.mkdir(parents=True, exist_ok=True)
+        output_root = path_policy.authorize_existing(output_root, [state_root / "external"] if external else [root], config=config)
         ordered_files = sorted(files, key=lambda p: (_episode(p.name) is None, _episode(p.name) or 0, p.name.casefold()))
         used: set[Path] = set()
         planned: list[tuple[Path, Path, Path]] = []
-        language = str(candidate.get("language") or "und").replace("/", "-")
         for index, video in enumerate(videos):
             episode = _episode(video.name)
             source = next((p for p in ordered_files if p not in used and episode is not None and _episode(p.name) == episode), None)
@@ -415,6 +418,17 @@ def apply(anime_id: int, target: str, candidate: dict[str, Any], config: dict[st
         installed = []
         for video, source, destination in planned:
             require_awake(destination, config)
-            shutil.copy2(source, destination)
+            path_policy.authorize_existing(destination.parent, [output_root], config=config)
+            # Replace the directory entry rather than following an existing
+            # subtitle symlink/hard link to a file outside the selected work.
+            fd, raw = tempfile.mkstemp(prefix=".anm-subtitle-", dir=output_root)
+            staged = Path(raw)
+            try:
+                with os.fdopen(fd, "wb") as output, source.open("rb") as input_file:
+                    shutil.copyfileobj(input_file, output)
+                path_policy.authorize_existing(staged, [output_root], config=config)
+                staged.replace(destination)
+            finally:
+                staged.unlink(missing_ok=True)
             installed.append({"media": str(video), "subtitle": str(destination)})
     return {"installed": len(installed), "external": external, "items": installed}

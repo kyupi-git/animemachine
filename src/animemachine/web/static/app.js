@@ -59,7 +59,7 @@ const catalogPages = new Map();
 let catalogPageRevision = 0, catalogPrefetchTimer;
 function invalidateCatalogPages() { catalogPages.clear(); catalogPageRevision++; }
 async function catalogPage(query, { signal, preferCache = false } = {}) {
-  const key = query.toString(), cached = catalogPages.get(key);
+  const key = `${authSession?.username || ""}:${query.toString()}`, cached = catalogPages.get(key);
   if (preferCache && cached && cached.expires > Date.now() && !cached.signal?.aborted) return cached.promise;
   const revision = catalogPageRevision;
   const entry = { expires: Date.now() + 30000, signal };
@@ -322,7 +322,7 @@ const i18n = {
     external: "外部来源（只读）",
     selectedWorks: "部作品已选择",
     clear: "清空",
-    previewPlan: "开始下载",
+    previewPlan: "预览下载计划",
     enableSubscription: "启用订阅",
     subscriptionPlan: "订阅确认",
     mixedPlan: "订阅与下载",
@@ -418,6 +418,8 @@ const i18n = {
     recentEpisodeSort: "新作追更",
     catchup: "一键继续观看", catchupEmpty: "本季度暂无可继续观看的 TV 集数。", catchupPreparing: "正在整理可播放集数…",
     catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "从上次播放的那一集开始；媒体访问会自动记录，可随时修改。",
+    catchupSelectHint: "勾选要看的作品，拖动调整播放顺序。", catchupSelectRequired: "请先勾选要看的作品。", catchupSelectedCount: "已选择 {works} 部作品 · {episodes} 集",
+    catchupDrag: "拖动排序，也可使用上下方向键",
     viewingResume: "续看：第 {episode} 话", viewingNew: "未开始", viewingEdit: "修改续看集数",
     viewingEpisode: "下次从这一集开始（包含本集）", viewingClear: "设为未开始", viewingUndo: "撤销",
     viewingSaved: "已修改", viewingConflict: "记录已在其它设备更新，请重新打开后修改。",
@@ -447,7 +449,9 @@ const i18n = {
     sortType: "作品类型",
     reshuffle: "重新随机",
     perPage: "每页",
-    selectPage: "勾选本页可下载作品",
+    hideWork: "隐藏作品", hiddenWorks: "已隐藏作品", workHidden: "已隐藏", restoreWork: "还原显示", noHiddenWorks: "没有已隐藏作品。",
+    hiddenWorksHint: "隐藏仅影响当前账号的列表和一键继续观看，原订阅与下载保持不变。", findRecords: "搜索记录", resourcePickHint: "选择下方资源，再点击“预览下载计划”。", resourceUnmappedHint: "已取得资源，但尚未确认作品匹配；暂不能提交下载。",
+    resourceExcludedHint: "资源与当前偏好不符。可选择允许强行下载的资源，查看提示后继续。", logInfo: "信息", logWarning: "警告", logError: "错误", logAll: "全部记录", logProblems: "警告与错误", technicalDetails: "技术详情", historySource: "原位置", historyTarget: "目标位置", logTaskStatus: "后台任务状态", logTaskComplete: "后台任务已完成", logTaskFailed: "任务未完成",
     previous: "上一页",
     next: "下一页",
     priorityDimensions: "优选维度（从上到下）",
@@ -559,6 +563,9 @@ const i18n = {
     errorCredentials: "用户名或密码错误，请重新输入。",
     errorPermission: "需要管理员权限，请使用管理员账户。",
     errorConnection: "连接失败，请检查服务地址、服务状态及网络后重试。",
+    errorServiceEndpoint: "请填写完整的服务地址，例如 http://192.168.1.10:7789，不要附带账号、密码或网页参数。",
+    errorServiceRedirect: "服务地址发生跳转，请填写跳转后的最终地址，再测试连接。",
+    serviceCredentialsRequired: "请检查此服务的 API 密钥；更换地址后，请重新填写密钥再测试。",
     errorTimeout: "请求超时，请检查网络后重试。",
     errorResponse: "服务返回了无法读取的数据，请稍后重试。",
     errorReservedSpace: "下载后预计剩余 {available} TiB，低于预留的 {reserve} TiB。请在“设置 → 常规 → 自动化与容量”核对预留空间。",
@@ -685,7 +692,7 @@ const i18n = {
     searchSubtitlesShort: "查找", useSubtitleShort: "应用",
     subtitleEmbedded: "媒体已内嵌字幕", subtitleNotFound: "未找到可靠字幕", subtitleApplied: "字幕已保存",
     logsHint: "近期运行状态、警告和错误。",
-    historyHint: "查看文件移动、改名和移除记录，恢复可撤销的操作。",
+    historyHint: "查看文件建立、移动、改名和移除记录，恢复可撤销的操作。",
     noHistory: "暂无用户内容变更记录。",
     historyMove: "移动",
     historyCreate: "建立目录", historyOther: "目录操作",
@@ -949,7 +956,7 @@ const i18n = {
     external: "External source (read-only)",
     selectedWorks: "works selected",
     clear: "Clear",
-    previewPlan: "Start download",
+    previewPlan: "Preview download plan",
     enableSubscription: "Enable subscription",
     subscriptionPlan: "Subscription preview",
     mixedPlan: "Subscriptions and downloads",
@@ -1045,6 +1052,8 @@ const i18n = {
     recentEpisodeSort: "New Episode Follow-up",
     catchup: "Continue watching", catchupEmpty: "No playable TV episodes to continue this season.", catchupPreparing: "Preparing playable episodes…",
     catchupCount: "{works} titles · {episodes} episodes", catchupHint: "Includes your last played episode. Media access updates your record; you can correct it anytime.",
+    catchupSelectHint: "Select titles to watch and drag them into playback order.", catchupSelectRequired: "Select at least one title to watch.", catchupSelectedCount: "Selected: {works} titles · {episodes} episodes",
+    catchupDrag: "Drag to reorder, or use the up and down arrow keys",
     viewingResume: "Continue: Ep {episode}", viewingNew: "Not started", viewingEdit: "Change starting episode",
     viewingEpisode: "Next time, start here (including this episode)", viewingClear: "Mark as not started", viewingUndo: "Undo",
     viewingSaved: "Updated", viewingConflict: "This record changed on another device. Reopen it to make your change.",
@@ -1074,7 +1083,9 @@ const i18n = {
     sortType: "Format",
     reshuffle: "Reshuffle",
     perPage: "Per page",
-    selectPage: "Select downloadable works on this page",
+    hideWork: "Hide title", hiddenWorks: "Hidden titles", workHidden: "Hidden", restoreWork: "Show again", noHiddenWorks: "No hidden titles.",
+    hiddenWorksHint: "Hiding affects this account’s lists and Continue watching. Subscriptions and downloads remain unchanged.", findRecords: "Search records", resourcePickHint: "Select a release below, then choose Preview download plan.", resourceUnmappedHint: "Releases were saved, but their title match has not been confirmed. Downloads are not available yet.",
+    resourceExcludedHint: "These releases do not match your preferences. Select an overridable release and review its warning to continue.", logInfo: "Information", logWarning: "Warning", logError: "Error", logAll: "All records", logProblems: "Warnings and errors", technicalDetails: "Technical details", historySource: "From", historyTarget: "To", logTaskStatus: "Background task status", logTaskComplete: "Background task completed", logTaskFailed: "Task did not complete",
     previous: "Previous",
     next: "Next",
     priorityDimensions: "Ranking dimensions (top to bottom)",
@@ -1186,6 +1197,9 @@ const i18n = {
     errorCredentials: "Incorrect username or password. Try again.",
     errorPermission: "Administrator access is required. Sign in as an administrator.",
     errorConnection: "Connection failed. Check the service address, service status and network, then retry.",
+    errorServiceEndpoint: "Enter the full service address, such as http://192.168.1.10:7789, without a username, password or query parameters.",
+    errorServiceRedirect: "The service redirects to another address. Enter the final address and test again.",
+    serviceCredentialsRequired: "Check this service's API key. After changing the address, enter its key again and retest.",
     errorTimeout: "Request timed out. Check the network and retry.",
     errorResponse: "The service returned unreadable data. Retry shortly.",
     errorReservedSpace: "This download would leave {available} TiB, below the {reserve} TiB reserve. Review reserved space under Settings → General → Automation & capacity.",
@@ -1314,7 +1328,7 @@ const i18n = {
     logsHint: "Recent status messages, warnings and errors.",
     refresh: "Refresh",
     noLogs: "No important events yet.",
-    historyHint: "Review file moves, renames and removals, and restore reversible changes.",
+    historyHint: "Review folder creation, file moves, renames and removals, and restore reversible changes.",
     noHistory: "No user-content changes yet.",
     historyMove: "Move",
     historyCreate: "Create folder", historyOther: "Folder operation",
@@ -1576,7 +1590,7 @@ const i18n = {
     external: "外部ソース（読み取り専用）",
     selectedWorks: "作品を選択",
     clear: "クリア",
-    previewPlan: "ダウンロードを開始",
+    previewPlan: "ダウンロード計画を確認",
     enableSubscription: "購読を有効化",
     subscriptionPlan: "購読内容の確認",
     mixedPlan: "購読とダウンロード",
@@ -1672,6 +1686,8 @@ const i18n = {
     recentEpisodeSort: "新作追従",
     catchup: "まとめて続きを再生", catchupEmpty: "このシーズンには続けて再生できる TV の話数がありません。", catchupPreparing: "再生できる話数を確認中…",
     catchupCount: "{works} 作品 · {episodes} 話", catchupHint: "前回再生した話から始めます。メディアへのアクセスを自動記録し、後から修正できます。",
+    catchupSelectHint: "視聴する作品を選び、ドラッグして再生順を変更できます。", catchupSelectRequired: "視聴する作品を選択してください。", catchupSelectedCount: "選択中：{works} 作品 · {episodes} 話",
+    catchupDrag: "ドラッグ、または上下の方向キーで並べ替え",
     viewingResume: "続き：第 {episode} 話", viewingNew: "未再生", viewingEdit: "再開する話数を変更",
     viewingEpisode: "次回はこの話から再生（この話を含む）", viewingClear: "未再生に戻す", viewingUndo: "元に戻す",
     viewingSaved: "変更しました", viewingConflict: "別の端末で記録が更新されました。開き直して変更してください。",
@@ -1701,7 +1717,9 @@ const i18n = {
     sortType: "形式",
     reshuffle: "再シャッフル",
     perPage: "表示数",
-    selectPage: "このページの取得可能作品を選択",
+    hideWork: "作品を非表示", hiddenWorks: "非表示の作品", workHidden: "非表示", restoreWork: "再表示", noHiddenWorks: "非表示の作品はありません。",
+    hiddenWorksHint: "非表示は現在のアカウントの一覧とまとめて再生に適用されます。購読とダウンロードは継続します。", findRecords: "履歴を検索", resourcePickHint: "下のリリースを選び、「ダウンロード計画を確認」を押してください。", resourceUnmappedHint: "リリースは取得しましたが、作品との一致は未確認です。まだダウンロードを送信できません。",
+    resourceExcludedHint: "設定した条件に一致しません。強制取得が可能なリリースを選び、表示される内容を確認して続行できます。", logInfo: "情報", logWarning: "警告", logError: "エラー", logAll: "すべて", logProblems: "警告とエラー", technicalDetails: "技術情報", historySource: "移動元", historyTarget: "移動先", logTaskStatus: "バックグラウンド処理の状態", logTaskComplete: "バックグラウンド処理が完了", logTaskFailed: "処理を完了できませんでした",
     previous: "前へ",
     next: "次へ",
     priorityDimensions: "優先判定軸（上から下）",
@@ -1813,6 +1831,9 @@ const i18n = {
     errorCredentials: "ユーザー名またはパスワードが違います。再入力してください。",
     errorPermission: "管理者権限が必要です。管理者としてログインしてください。",
     errorConnection: "接続に失敗しました。サービスのアドレス、稼働状態、ネットワークを確認して再試行してください。",
+    errorServiceEndpoint: "http://192.168.1.10:7789 のようにサービスの完全なアドレスを入力してください。ユーザー名、パスワード、クエリパラメーターは含めないでください。",
+    errorServiceRedirect: "サービスが別のアドレスに転送されます。転送後のアドレスを入力し、再度テストしてください。",
+    serviceCredentialsRequired: "このサービスの API キーを確認してください。アドレスを変更した場合はキーを再入力してテストしてください。",
     errorTimeout: "要求がタイムアウトしました。ネットワークを確認して再試行してください。",
     errorResponse: "サービスの応答を読み取れません。しばらくして再試行してください。",
     errorReservedSpace: "ダウンロード後の空き容量 {available} TiB は、予約容量 {reserve} TiB 未満です。「設定 → 一般 → 自動化と容量」で確認してください。",
@@ -1941,7 +1962,7 @@ const i18n = {
     logsHint: "最近の動作状況、警告、エラーを表示します。",
     refresh: "更新",
     noLogs: "重要なログはまだありません。",
-    historyHint: "ファイルの移動、名前変更、削除の履歴を確認し、元に戻せる操作を復元します。",
+    historyHint: "フォルダーの作成、ファイルの移動・名前変更・削除を確認し、元に戻せる操作を復元します。",
     noHistory: "ユーザーコンテンツの変更履歴はありません。",
     historyMove: "移動",
     historyCreate: "フォルダー作成", historyOther: "フォルダー操作",
@@ -2212,6 +2233,9 @@ function localizedError(message, status = 0) {
     [/local_library_unavailable/, "layoutPreviewUnavailable"],
     [/^invalid_credentials$/, "errorCredentials"],
     [/^administrator_required$|^forbidden$/, "errorPermission"],
+    [/^catchup_selection_required$|^invalid_catchup_selection$/, "catchupSelectRequired"],
+    [/^invalid_service_endpoint$/, "errorServiceEndpoint"],
+    [/^service_redirect$/, "errorServiceRedirect"],
     [/^connection_failed$|Failed to fetch|NetworkError|Load failed/, "errorConnection"],
     [/^request_timeout$/, "errorTimeout"],
     [/^invalid_response$/, "errorResponse"],
@@ -2661,6 +2685,7 @@ const sourceBadge = (x, compact = false) => {
         badges.push(`<span class="badge ${x.ani_rss_managed ? "ani-rss-managed" : "ani-rss-resource"}" title="${esc(hint)}">${esc(detail)}</span>`);
     }
     if (!badges.length) badges.push(`<span class="badge muted-badge">${esc(t("noAvailableSource"))}</span>`);
+    if (x.hidden) badges.push(`<span class="badge muted-badge">${esc(t("workHidden"))}</span>`);
     return badges.join(compact ? " " : "");
   },
   stateBadge = (x) => {
@@ -2787,10 +2812,7 @@ function render() {
   if (!$("total")) return;
   if (topModalDialog()) { catalogRenderPending = true; return; }
   catalogRenderPending = false;
-  const downloadable = items.filter(selectable);
   items.filter((x) => !selectable(x)).forEach((x) => selected.delete(x.id));
-  $("selectPage").disabled = !downloadable.length;
-  $("selectPage").checked = downloadable.length > 0 && downloadable.every((x) => selected.has(x.id));
   updateSelection();
   $("total").textContent = fmt(total);
   const n = pageSize === "all" ? total : +pageSize;
@@ -3195,7 +3217,7 @@ const suffix = (c) =>
         .filter(Boolean)
         .join(" · ");
     const exclusion = eligibilityReasonText(y);
-    return `<label class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}"><input type="radio" name="resource-${id}" value="torrent:${esc(y.infoHash)}" data-policy-override="${!y.eligible && !!y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${torrentSelections.get(id) === y.infoHash && (y.eligible || policyOverrides.get(id) === `torrent:${y.infoHash}`) ? "checked" : ""}><span class="torrent-lines"><b title="${esc(storageDirectory)}">${esc(storageDirectory)}</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
+    return `<label class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}"><input type="radio" name="resource-${id}" value="torrent:${esc(y.infoHash)}" data-policy-override="${!y.eligible && !!y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${torrentSelections.get(id) === y.infoHash && (y.eligible || policyOverrides.get(id) === `torrent:${y.infoHash}`) ? "checked" : ""}><span class="torrent-lines"><b title="${esc(y.name || storageDirectory)}">${esc(y.name || storageDirectory || y.infoHash)}</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
   },
   aniResourceHtml = (y, id) => {
     const exclusion = eligibilityReasonText(y),
@@ -5145,6 +5167,8 @@ function playbackHtml(state) {
 const viewingRecords = new Map();
 let viewingEditId = 0, viewingEditRevision = 0, viewingUndoRecord = null, viewingGeneration = 0;
 let catchupRequest = null;
+let catchupGroups = [], catchupBusy = false;
+const catchupSelected = new Set();
 function viewingLabel(record) {
   return record?.episode != null ? t("viewingResume").replace("{episode}", String(record.episode))
     + (record.positionMs ? ` · ${positionText(record.positionMs)}` : "") : t("viewingNew");
@@ -5220,7 +5244,7 @@ async function saveViewing(episode, undo = false, positionMs = 0) {
 function playerActionsHtml(attribute = "data-catchup-player") {
   const button = (kind, key) => `<button type="button" class="tool dark-tool player-action" ${attribute}="${kind}"${kind === "copy" ? ' data-icon="copy"' : kind === "system" ? ' data-icon="download"' : ""}>${playerIcon(kind)}<span>${esc(t(key))}</span></button>`;
   const windows = /Windows/i.test(navigator.userAgent), mac = /(Macintosh|Mac OS X)/i.test(navigator.userAgent);
-  const primary = windows ? `<div class="potplayer-group">${button("potplayer", "openPotPlayer")}<a class="tool dark-tool extension-install" href="/api/playback/potplayer-extension.zip" download title="${esc(t("potplayerHint"))}">${esc(t("potplayerInstall"))}</a></div>` : mac ? button("iina", "openIina") : "";
+  const primary = windows ? `<div class="potplayer-group">${button("potplayer", "openPotPlayer")}<button class="tool dark-tool extension-install" type="button" data-install-playback-extension title="${esc(t("potplayerHint"))}">${esc(t("potplayerInstall"))}</button></div>` : mac ? button("iina", "openIina") : "";
   return `${primary}<div class="player-utilities">${button("vlc", "openVlc")}${button("copy", "copyPlaylist")}${button("system", "systemPlayer")}</div>`;
 }
 async function deliverPlayback(kind, handoff, button) {
@@ -5238,10 +5262,117 @@ async function deliverPlayback(kind, handoff, button) {
     location.href = handoff.protocolUrl;
   }
 }
+function catchupSelection() {
+  return catchupGroups.filter((group) => catchupSelected.has(group.bgmId)).map((group) => group.bgmId);
+}
+function updateCatchupControls(showCount = true) {
+  const chosen = catchupGroups.filter((group) => catchupSelected.has(group.bgmId));
+  $("catchupPlayers").querySelectorAll("button").forEach((button) => { button.disabled = catchupBusy || !chosen.length; });
+  $("catchupList").querySelectorAll("input, button").forEach((control) => { control.disabled = catchupBusy; });
+  $("catchupList").querySelectorAll("li[data-catchup-id]").forEach((row) => {
+    row.draggable = !catchupBusy;
+    row.classList.toggle("selected", catchupSelected.has(Number(row.dataset.catchupId)));
+  });
+  if (showCount && catchupGroups.length) $("catchupStatus").textContent = t("catchupSelectedCount")
+    .replace("{works}", chosen.length).replace("{episodes}", chosen.reduce((sum, group) => sum + group.count, 0));
+}
+function renderCatchupGroups() {
+  $("catchupList").innerHTML = `<ul class="catchup-list">${catchupGroups.map((group) => `<li draggable="true" data-catchup-id="${group.bgmId}"><button class="catchup-drag text-button" type="button" aria-label="${esc(group.title)} · ${esc(t("catchupDrag"))}" title="${esc(t("catchupDrag"))}"><svg viewBox="0 0 16 24" aria-hidden="true"><path d="M5 5h.01M11 5h.01M5 12h.01M11 12h.01M5 19h.01M11 19h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></button><label class="catchup-choice"><input type="checkbox" value="${group.bgmId}"${catchupSelected.has(group.bgmId) ? " checked" : ""}><span class="catchup-title">${esc(group.title)}</span></label><span class="muted catchup-episodes">${group.episodes.map((ep) => esc(String(ep))).join(" · ")}</span>${viewingButton(group.animeId, { episode: group.episode, bgmId: group.bgmId, positionMs: group.positionMs })}</li>`).join("")}</ul><p class="muted catchup-resume-hint">${esc(t("catchupHint"))}</p>`;
+  updateCatchupControls();
+}
+function moveCatchup(identity, index) {
+  if (catchupBusy) return;
+  const from = catchupGroups.findIndex((group) => group.bgmId === identity);
+  if (from < 0 || index < 0 || index >= catchupGroups.length || from === index) return;
+  const [group] = catchupGroups.splice(from, 1);
+  catchupGroups.splice(index, 0, group);
+  const list = $("catchupList").querySelector("ul"), row = list.querySelector(`[data-catchup-id="${identity}"]`);
+  list.insertBefore(row, from < index ? list.children[index].nextSibling : list.children[index]);
+}
+$("catchupList").addEventListener("change", (event) => {
+  const input = event.target.closest('.catchup-choice input');
+  if (!input || catchupBusy) return;
+  input.checked ? catchupSelected.add(Number(input.value)) : catchupSelected.delete(Number(input.value));
+  updateCatchupControls();
+});
+$("catchupList").addEventListener("keydown", (event) => {
+  const handle = event.target.closest(".catchup-drag");
+  if (!handle || catchupBusy || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+  event.preventDefault();
+  const identity = Number(handle.closest("li").dataset.catchupId);
+  moveCatchup(identity, catchupGroups.findIndex((group) => group.bgmId === identity) + (event.key === "ArrowUp" ? -1 : 1));
+  handle.focus({ preventScroll: true });
+});
+let catchupDragId = null, catchupTouchDrag = null, catchupDragBlocked = false;
+$("catchupList").addEventListener("dragstart", (event) => {
+  const row = event.target.closest("li[data-catchup-id]");
+  if (!row || catchupBusy || catchupDragBlocked) { event.preventDefault(); return; }
+  catchupDragId = Number(row.dataset.catchupId);
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", String(catchupDragId));
+  row.classList.add("dragging");
+});
+$("catchupList").addEventListener("dragover", (event) => {
+  const row = event.target.closest("li[data-catchup-id]");
+  if (catchupDragId == null || !row || catchupBusy) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  $("catchupList").querySelectorAll(".drop-target").forEach((item) => item.classList.remove("drop-target"));
+  if (Number(row.dataset.catchupId) !== catchupDragId) row.classList.add("drop-target");
+});
+$("catchupList").addEventListener("drop", (event) => {
+  event.preventDefault();
+  const row = event.target.closest("li[data-catchup-id]");
+  if (row && catchupDragId != null) moveCatchup(catchupDragId, catchupGroups.findIndex((group) => group.bgmId === Number(row.dataset.catchupId)));
+});
+function endCatchupDrag() {
+  catchupDragId = null;
+  $("catchupList").querySelectorAll(".dragging,.drop-target").forEach((row) => row.classList.remove("dragging", "drop-target"));
+}
+$("catchupList").addEventListener("dragend", endCatchupDrag);
+$("catchupList").addEventListener("pointerdown", (event) => {
+  catchupDragBlocked = Boolean(event.target.closest("input,.viewing-button"));
+  const handle = event.target.closest(".catchup-drag");
+  if (!handle || event.pointerType === "mouse" || catchupBusy) return;
+  event.preventDefault();
+  const row = handle.closest("li");
+  catchupTouchDrag = { pointerId: event.pointerId, identity: Number(row.dataset.catchupId) };
+  row.classList.add("dragging");
+});
+document.addEventListener("pointermove", (event) => {
+  if (!catchupTouchDrag || event.pointerId !== catchupTouchDrag.pointerId || catchupBusy) return;
+  const list = $("catchupList").querySelector("ul"), bounds = list.getBoundingClientRect();
+  if (event.clientY < bounds.top + 28) list.scrollTop -= 12;
+  else if (event.clientY > bounds.bottom - 28) list.scrollTop += 12;
+  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("#catchupList li[data-catchup-id]");
+  if (row) moveCatchup(catchupTouchDrag.identity, catchupGroups.findIndex((group) => group.bgmId === Number(row.dataset.catchupId)));
+});
+function endCatchupTouch(event) {
+  if (catchupTouchDrag && (!event || event.pointerId === catchupTouchDrag.pointerId)) {
+    catchupTouchDrag = null;
+    endCatchupDrag();
+  }
+}
+document.addEventListener("pointerup", endCatchupTouch);
+document.addEventListener("pointercancel", endCatchupTouch);
+$("catchupDialog").addEventListener("close", () => {
+  catchupRequest = null; catchupGroups = []; catchupSelected.clear(); catchupBusy = false;
+  endCatchupTouch(); endCatchupDrag();
+});
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-install-playback-extension]");
+  if (!button || button.disabled) return;
+  const anchor = document.createElement("a");
+  anchor.href = "/api/playback/potplayer-extension.zip";
+  anchor.download = "";
+  document.body.append(anchor); anchor.click(); anchor.remove();
+});
 async function openCatchup() {
   const season = radarSeasons()[radarSeason];
   catchupRequest = { from: season.from, to: season.to, language, sort: radarSort, direction: radarDirection };
   const request = catchupRequest;
+  catchupGroups = []; catchupSelected.clear(); catchupBusy = false;
+  $("catchupSelectionHint").hidden = true;
   $("catchupStatus").textContent = t("catchupPreparing");
   $("catchupList").replaceChildren(); $("catchupPlayers").replaceChildren();
   showModalDialog($("catchupDialog"));
@@ -5251,8 +5382,10 @@ async function openCatchup() {
     if (catchupRequest !== request || !$("catchupDialog").open) return;
     $("catchupStatus").textContent = state.count ? t("catchupCount").replace("{works}", state.groups.length).replace("{episodes}", state.count) : t("catchupEmpty");
     if (!state.count) return;
-    $("catchupList").innerHTML = `<ul class="catchup-list">${state.groups.map((group) => `<li><span>${esc(group.title)}</span><span class="muted">${group.episodes.map((ep) => esc(String(ep))).join(" · ")}</span>${viewingButton(group.animeId, { episode: group.episode, bgmId: group.bgmId, positionMs: group.positionMs })}</li>`).join("")}</ul><p class="muted">${esc(t("catchupHint"))}</p>`;
+    catchupGroups = state.groups;
+    $("catchupSelectionHint").hidden = false;
     $("catchupPlayers").innerHTML = playerActionsHtml();
+    renderCatchupGroups();
   } catch (error) { if (catchupRequest === request) $("catchupStatus").textContent = error.message; }
 }
 document.addEventListener("click", async (event) => {
@@ -5260,24 +5393,24 @@ document.addEventListener("click", async (event) => {
   if (edit) {
     event.stopPropagation();
     const title = edit.closest("tr")?.querySelector("[data-detail]")?.textContent
-      || edit.closest("li")?.firstElementChild?.textContent || $("detail").querySelector("h2")?.textContent || "";
+      || edit.closest("li")?.querySelector(".catchup-title")?.textContent || $("detail").querySelector("h2")?.textContent || "";
     openViewing(Number(edit.dataset.viewing), title, Number(edit.dataset.bgmId)); return;
   }
   const button = event.target.closest("[data-catchup-player]");
-  if (!button || !catchupRequest) return;
+  if (!button || button.disabled || !catchupRequest || catchupBusy || !catchupSelection().length) return;
   const kind = button.dataset.catchupPlayer, request = catchupRequest;
-  const buttons = $("catchupPlayers").querySelectorAll("button");
-  buttons.forEach((item) => { item.disabled = true; });
+  const selectedBgmIds = catchupSelection();
+  catchupBusy = true; updateCatchupControls(false);
   $("catchupStatus").textContent = t("catchupPreparing");
   try {
     const handoff = await api("/api/playback/catchup", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, player: kind, enhanced: true }) });
+      body: JSON.stringify({ ...request, selectedBgmIds, player: kind, enhanced: true }) });
     if (catchupRequest !== request || !$("catchupDialog").open) return;
     if (!handoff.count) { $("catchupStatus").textContent = t("catchupEmpty"); return; }
     await deliverPlayback(kind, handoff, button);
     $("catchupStatus").textContent = t("catchupCount").replace("{works}", handoff.groups.length).replace("{episodes}", handoff.count);
   } catch (error) { if (catchupRequest === request && $("catchupDialog").open) $("catchupStatus").textContent = error.message; }
-  finally { buttons.forEach((item) => { item.disabled = false; }); }
+  finally { if (catchupRequest === request) { catchupBusy = false; updateCatchupControls(false); } }
 });
 $("viewingForm").onsubmit = (event) => { event.preventDefault(); try { saveViewing($("viewingEpisode").value === "" ? null : Number($("viewingEpisode").value), false, positionValue($("viewingPosition").value)); } catch(error) { $("viewingStatus").textContent = error.message; } };
 $("viewingClear").onclick = () => saveViewing(null);
@@ -5348,10 +5481,65 @@ async function handoffPlayback(kind, animeId, button, generation = detailGenerat
   if (generation === detailGeneration && detailDialog.open) await deliverPlayback(kind, handoff, button);
 }
 
-function aniSubscriptionMenu(subscription, animeId, disabled = false) {
+function visibilityButton(bgmId, animeId, hidden = false) {
+  return `<button type="button" class="text-button" data-work-visibility="${Number(bgmId)}" data-work-id="${Number(animeId) || ""}" data-hidden-value="${!hidden}">${esc(t(hidden ? "restoreWork" : "hideWork"))}</button>`;
+}
+let hiddenWorks = [], hiddenWorksGeneration = 0, hiddenWorksPage = 0;
+function renderHiddenWorks() {
+  const query = $("hiddenWorksSearch").value.trim().toLocaleLowerCase();
+  const rows = hiddenWorks.filter((item) => [item.title_ja, item.title_zh_hans, item.title_en].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
+  hiddenWorksPage = Math.max(0, Math.min(hiddenWorksPage, Math.ceil(rows.length / 100) - 1));
+  $("hiddenWorksPrevious").disabled = hiddenWorksPage === 0;
+  $("hiddenWorksNext").disabled = (hiddenWorksPage + 1) * 100 >= rows.length;
+  $("hiddenWorksCount").textContent = rows.length ? `${hiddenWorksPage * 100 + 1}–${Math.min(rows.length, (hiddenWorksPage + 1) * 100)} / ${rows.length}` : "";
+  $("hiddenWorksList").innerHTML = rows.length ? rows.slice(hiddenWorksPage * 100, (hiddenWorksPage + 1) * 100).map((item) => `<div class="hidden-work"><div><strong>${esc(preferred(item))}</strong><small>${esc(localMonth(item.start_month))}${item.media_code ? ` · ${esc(label("media", item.media_code))}` : ""}</small></div>${visibilityButton(item.bgm_id, item.id, true)}</div>`).join("") : `<p class="empty">${esc(t("noHiddenWorks"))}</p>`;
+}
+async function loadHiddenWorks() {
+  const generation = ++hiddenWorksGeneration;
+  $("hiddenWorksStatus").textContent = t("radarLoading");
+  try {
+    const result = await api("/api/hidden-works");
+    if (generation !== hiddenWorksGeneration || !$("hiddenWorksDialog").open) return;
+    hiddenWorks = result.items;
+    renderHiddenWorks();
+    $("hiddenWorksStatus").textContent = "";
+  } catch (error) {
+    if (generation === hiddenWorksGeneration) $("hiddenWorksStatus").textContent = error.message;
+  }
+}
+$("radarHidden").onclick = () => { hiddenWorks = []; hiddenWorksPage = 0; $("hiddenWorksSearch").value = ""; renderHiddenWorks(); showModalDialog($("hiddenWorksDialog")); loadHiddenWorks(); };
+$("hiddenWorksSearch").oninput = () => { hiddenWorksPage = 0; renderHiddenWorks(); };
+$("hiddenWorksPrevious").onclick = () => { hiddenWorksPage--; renderHiddenWorks(); };
+$("hiddenWorksNext").onclick = () => { hiddenWorksPage++; renderHiddenWorks(); };
+$("hiddenWorksDialog").addEventListener("close", () => { hiddenWorksGeneration++; });
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-work-visibility]");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  const hidden = button.dataset.hiddenValue === "true", bgmId = Number(button.dataset.workVisibility), id = Number(button.dataset.workId);
+  try {
+    await api(`/api/hidden-works/${bgmId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden }) });
+    const menu = button.closest(".subscription-menu");
+    if (menu) menu.open = false;
+    selected.delete(id); torrentSelections.delete(id); resourceSelections.delete(id); policyOverrides.delete(id);
+    invalidateCatalogPages();
+    if ($("hiddenWorksDialog").open) await loadHiddenWorks();
+    if (detailDialog.open && Number(detailDialog.dataset.animeId) === id) await showDetail(id);
+    radarRefreshPending = true;
+    if (topModalDialog() === $("radarDialog")) await loadRadar();
+    await search({ background: true });
+  } catch (error) { alert(error.message); }
+  finally { button.disabled = false; }
+});
+document.addEventListener("click", (event) => {
+  document.querySelectorAll(".subscription-menu[open]").forEach((menu) => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+});
+function aniSubscriptionMenu(subscription, animeId, disabled = false, bgmId = null) {
   const remoteId = esc(subscription.remoteId), title = esc(subscription.title || ""),
     button = (action, key, icon, danger = false) => `<button type="button" class="text-button ${danger ? "danger" : ""}" data-icon="${icon}" data-subscription-action="${action}" data-remote-id="${remoteId}" data-anime-id="${animeId}" data-subscription-title="${title}" ${disabled ? "disabled" : ""}>${t(key)}</button>`;
-  return `<details class="subscription-menu"><summary title="${title}" aria-label="${title} · ${t(subscription.enabled ? "radarSubscribed" : "radarPaused")}">${t(subscription.enabled ? "radarSubscribed" : "radarPaused")} ▾</summary><div class="subscription-menu-actions">${button(subscription.enabled ? "pause" : "resume", subscription.enabled ? "aniRssPause" : "aniRssResume", subscription.enabled ? "pause" : "play")}${button("cancel", "aniRssCancel", "remove")}${authSession?.role === "admin" ? button("delete", "aniRssDeleteFiles", "remove", true) : ""}</div></details>`;
+  return `<details class="subscription-menu"><summary title="${title}" aria-label="${title} · ${t(subscription.enabled ? "radarSubscribed" : "radarPaused")}">${t(subscription.enabled ? "radarSubscribed" : "radarPaused")} ▾</summary><div class="subscription-menu-actions">${button(subscription.enabled ? "pause" : "resume", subscription.enabled ? "aniRssPause" : "aniRssResume", subscription.enabled ? "pause" : "play")}${button("cancel", "aniRssCancel", "remove")}${authSession?.role === "admin" ? button("delete", "aniRssDeleteFiles", "remove", true) : ""}${bgmId ? visibilityButton(bgmId, animeId) : ""}</div></details>`;
 }
 document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-subscription-action]");
@@ -5506,7 +5694,7 @@ async function showDetail(id) {
       || aniResources.some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `ani-rss:${y.resourceId}`));
   if (generation !== detailGeneration) return;
   $("detail").innerHTML =
-    `<div class="detail-hero"><header class="detail-intro"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}<div id="detailPlayback">${playbackHtml(playbackState)}</div><h3>${t("torrents")}</h3><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted"></small></div><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `<div class="detail-hero"><header class="detail-intro"><div class="detail-meta-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><div class="detail-visibility">${x.hidden ? `<span class="muted">${t("workHidden")}</span>` : ""}${visibilityButton(x.bgm_id, x.id, x.hidden)}</div></div><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}<div id="detailPlayback">${playbackHtml(playbackState)}</div><section id="detailResources" class="detail-resources"><h3>${t("torrents")}</h3><p id="resourceChoiceHint" class="muted resource-choice-hint">${hasEligibleResource ? t("resourcePickHint") : ""}</p><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted" role="status"></small></div></section><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
   $("detail")
     .querySelectorAll(`input[name="resource-${id}"]`)
@@ -5593,6 +5781,7 @@ async function showDetail(id) {
           try {
             const job = await api(`/api/anime/${id}/torrents/search`);
             if (generation !== detailGeneration || !detailDialog.open) return;
+            if (generation !== detailGeneration || !detailDialog.open) return;
             if (job.state === "running") {
               status.textContent = job.sourcesTotal ? t("torrentSearchProgress").replace("{done}", job.sourcesDone || 0)
                 .replace("{total}", job.sourcesTotal).replace("{found}", job.found || 0) : t("searchPoolRunning");
@@ -5601,7 +5790,15 @@ async function showDetail(id) {
             if (job.state === "failed") { status.textContent = t("torrentSearchFailed"); button.disabled = false; return; }
             await showDetail(id);
             const message = job.sourcesFailed ? t("torrentSearchPartial") : job.saved ? t("searchPoolDone") : t("searchPoolNone");
-            if (Number(detailDialog.dataset.animeId) === id) $("searchWorkState").textContent = message;
+            if (Number(detailDialog.dataset.animeId) === id && detailDialog.open) {
+              $("searchWorkState").textContent = message;
+              const section = $("detailResources"), choices = [...section.querySelectorAll('input[type="radio"]')];
+              $("resourceChoiceHint").textContent = choices.some((choice) => !choice.disabled)
+                ? t("resourcePickHint") : choices.length ? t("resourceExcludedHint") : job.saved ? t("resourceUnmappedHint") : t("searchPoolNone");
+              section.scrollIntoView({ block: "start", behavior: "smooth" });
+              const first = choices.find((choice) => !choice.disabled);
+              if (first) first.focus({ preventScroll: true });
+            }
           } catch (error) { status.textContent = error.message; button.disabled = false; }
         };
         setTimeout(poll, 500);
@@ -5617,6 +5814,7 @@ async function showDetail(id) {
           if (generation !== detailGeneration || !detailDialog.open) return;
           try {
             const job = await api(`/api/anime/${id}/ani-rss/search`);
+            if (generation !== detailGeneration || !detailDialog.open) return;
             if (generation !== detailGeneration || !detailDialog.open) return;
             if (job.state === "running") { setTimeout(poll, 900); return; }
             if (job.state === "failed") { status.textContent = job.error || t("failed"); button.disabled = false; return; }
@@ -5639,7 +5837,9 @@ async function showDetail(id) {
       selected.add(id);
       updateSelection();
       detailDialog.close();
-      createPlan();
+      createPlan("default", { animeIds: [id], torrentSelections: Object.fromEntries([...torrentSelections].filter(([key]) => key === id)),
+        resourceSelections: Object.fromEntries([...resourceSelections].filter(([key]) => key === id)),
+        policyOverrides: Object.fromEntries([...policyOverrides].filter(([key]) => key === id)) });
     };
   $("detail").querySelectorAll(".copy-library-path").forEach((button) => {
     button.onclick = async () => {
@@ -6371,7 +6571,11 @@ async function testConnection(kind) {
   const isAniRss = kind === "ani-rss",
     endpoint = $(isAniRss ? "aniRssEndpoint" : "qbtEndpoint").value,
     apiKey = $(isAniRss ? "aniRssApiKey" : "qbtApiKey").value.trim(),
-    state = $(isAniRss ? "aniRssState" : "qbtState");
+    state = $(isAniRss ? "aniRssState" : "qbtState"),
+    button = $(isAniRss ? "testAniRss" : "testQbt");
+  if (button.disabled) return;
+  button.disabled = true;
+  const unchanged = () => $(isAniRss ? "aniRssEndpoint" : "qbtEndpoint").value === endpoint && $(isAniRss ? "aniRssApiKey" : "qbtApiKey").value.trim() === apiKey;
   state.textContent = "…";
   try {
     const r = await api("/api/connections/test", {
@@ -6379,50 +6583,82 @@ async function testConnection(kind) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind, endpoint, apiKey }),
     });
-    state.textContent = r.authenticated
+    if (!unchanged()) { state.textContent = ""; return; }
+    state.textContent = r.message === "service_redirect" ? t("errorServiceRedirect") : r.authenticated
       ? `${t("connectionOk")}${r.version ? ` · ${r.version}` : ""}`
-      : r.reachable
-        ? t("authRequired")
+      : r.reachable || r.message === "credentials_required"
+        ? t("serviceCredentialsRequired")
         : t("connectionFailed");
   } catch (e) {
-    state.textContent = `${t("connectionFailed")}: ${e.message}`;
+    state.textContent = unchanged() ? `${t("connectionFailed")}: ${e.message}` : "";
+  } finally {
+    button.disabled = false;
   }
+}
+let logRecords = [], historyRecords = [];
+function recordTime(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(localeForLanguage(), { dateStyle: "short", timeStyle: "medium" }).format(date) : "—";
+}
+function logMessage(message) {
+  const names = {
+    ani_rss_sync_complete: ["Ani-RSS 状态已同步", "Ani-RSS state synchronized", "Ani-RSS の状態を同期しました"],
+    ani_rss_sync_failed: ["Ani-RSS 同步未完成", "Ani-RSS synchronization failed", "Ani-RSS を同期できませんでした"],
+    ani_rss_resource_refresh_complete: ["资源检索已完成", "Resource search completed", "リソース検索が完了しました"],
+    ani_rss_resource_refresh_failed: ["资源检索未完成", "Resource search did not complete", "リソース検索を完了できませんでした"],
+    torrent_search_complete: ["Torrent 检索已完成", "Torrent search completed", "Torrent 検索が完了しました"],
+    torrent_search_failed: ["Torrent 检索未完成", "Torrent search did not complete", "Torrent 検索を完了できませんでした"],
+    qbt_state_refresh_failed: ["下载器状态暂不可用", "Downloader status is unavailable", "ダウンローダーの状態を取得できません"],
+    application_update_check_failed: ["暂时无法检查新版", "Update check is unavailable", "更新を確認できませんでした"],
+    archive_schedule_failed: ["底包检查未完成", "Catalog update check did not complete", "カタログの更新を確認できませんでした"],
+  };
+  if (names[message]) return names[message][li()];
+  if (!/^[a-z][a-z0-9_]+$/.test(message)) return message;
+  return t(/(?:fail|error)/.test(message) ? "logTaskFailed" : /(?:complete|ready)$/.test(message) ? "logTaskComplete" : "logTaskStatus");
+}
+function renderLogs() {
+  const query = $("logSearch").value.trim().toLocaleLowerCase(), problems = $("logFilter").value === "problems";
+  const rows = logRecords.filter((item) => (!problems || ["WARNING", "ERROR", "CRITICAL"].includes(item.level))
+    && `${logMessage(item.message)} ${item.message} ${typeof item.details === "string" ? item.details : JSON.stringify(item.details)}`.toLocaleLowerCase().includes(query));
+  $("logList").innerHTML = rows.length ? rows.map((item) => {
+    const level = ["ERROR", "CRITICAL"].includes(item.level) ? "error" : item.level === "WARNING" ? "warning" : "info";
+    let details = item.details || "";
+    if (typeof details !== "string") details = JSON.stringify(details, null, 2);
+    else { try { details = JSON.stringify(JSON.parse(details), null, 2); } catch {} }
+    return `<article class="record log-record ${level}"><div class="record-heading"><span class="record-badge">${esc(t({ error: "logError", warning: "logWarning", info: "logInfo" }[level]))}</span><strong>${esc(logMessage(item.message))}</strong><time>${esc(recordTime(item.at))}</time></div><details class="record-details"><summary>${t("technicalDetails")}</summary><pre>${esc(item.message)}${details ? "\n" + esc(details) : ""}</pre></details></article>`;
+  }).join("") : `<p class="empty">${t("noLogs")}</p>`;
 }
 async function loadLogs() {
-  try {
-    const r = await api("/api/logs");
-    $("logList").innerHTML = r.items.length
-      ? r.items
-          .map(
-            (x) =>
-              `<div class="log ${esc(x.level.toLowerCase())}"><time>${esc(new Intl.DateTimeFormat(localeForLanguage(), { dateStyle: "short", timeStyle: "medium" }).format(new Date(x.at)))}</time><b>${esc(x.level)}</b><span>${esc(x.message)}</span><small>${esc(x.details)}</small></div>`,
-          )
-          .join("")
-      : `<p class="muted">${t("noLogs")}</p>`;
-  } catch (e) {
-    $("logList").innerHTML = `<p class="error">${esc(e.message)}</p>`;
-  }
+  const button = $("refreshLogs"); button.disabled = true;
+  try { logRecords = (await api("/api/logs")).items; renderLogs(); }
+  catch (error) { $("logList").innerHTML = `<p class="error">${esc(error.message)}</p>`; }
+  finally { button.disabled = false; }
+}
+function renderHistory() {
+  const query = $("historySearch").value.trim().toLocaleLowerCase();
+  const rows = historyRecords.filter((item) => `${item.sourcePath || ""} ${item.targetPath || ""} ${item.backupPath || ""}`.toLocaleLowerCase().includes(query));
+  $("historyList").innerHTML = rows.length ? rows.map((item) => {
+    const operation = item.state === "restored" ? t("historyRestored") : t({ move: "historyMove", rename: "historyRename", remove: "historyRemove", create_directory: "historyCreate" }[item.operation] || "historyOther");
+    const destination = item.operation === "remove" ? item.backupPath : item.targetPath;
+    const source = item.sourcePath;
+    const restore = item.operation === "remove" && item.state === "applied" ? `<button type="button" class="text-button restore-history" data-icon="refresh" data-event="${esc(item.eventId)}">${t("restoreHistory")}</button>` : "";
+    return `<article class="record history-record"><div class="record-heading"><span class="record-badge">${esc(operation)}</span><time>${esc(recordTime(item.createdAt))}</time>${restore}</div><dl class="record-paths">${source && item.operation !== "create_directory" ? `<dt>${t("historySource")}</dt><dd>${esc(source)}</dd>` : ""}${destination ? `<dt>${t("historyTarget")}</dt><dd>${esc(destination)}</dd>` : ""}</dl>${item.bytes ? `<small class="muted">${esc(fmt(item.bytes))} B</small>` : ""}</article>`;
+  }).join("") : `<p class="empty">${t("noHistory")}</p>`;
+  $("historyList").querySelectorAll(".restore-history").forEach((button) => button.onclick = async () => {
+    button.disabled = true;
+    try { await api(`/api/history/${encodeURIComponent(button.dataset.event)}/restore`, { method: "POST" }); await loadHistory(); }
+    catch (error) { alert(error.message); button.disabled = false; }
+  });
 }
 async function loadHistory() {
-  try {
-    const response = await api("/api/history?limit=200");
-    $("historyList").innerHTML = response.items.length
-      ? response.items.map((item) => {
-          const destination = item.operation === "remove" ? item.backupPath : item.targetPath;
-          const operation = item.state === "restored" ? t("historyRestored") : t({ move: "historyMove", rename: "historyRename", remove: "historyRemove", create_directory: "historyCreate" }[item.operation] || "historyOther");
-          const restore = item.operation === "remove" && item.state === "applied"
-            ? `<button type="button" class="text-button restore-history" data-icon="refresh" data-event="${item.eventId}">${t("restoreHistory")}</button>` : "";
-          return `<div class="log"><time>${esc(new Intl.DateTimeFormat(localeForLanguage(), { dateStyle: "short", timeStyle: "medium" }).format(new Date(item.createdAt)))}</time><b>${esc(operation)}</b><span>${esc(item.sourcePath || "—")}</span><small>→ ${esc(destination || "—")} · ${esc(fmt(item.bytes || 0))} B</small>${restore}</div>`;
-        }).join("")
-      : `<p class="muted">${t("noHistory")}</p>`;
-    document.querySelectorAll(".restore-history").forEach((button) => button.onclick = async () => {
-      await api(`/api/history/${button.dataset.event}/restore`, { method: "POST" });
-      loadHistory();
-    });
-  } catch (error) {
-    $("historyList").innerHTML = `<p class="error">${esc(error.message)}</p>`;
-  }
+  const button = $("refreshHistory"); button.disabled = true;
+  try { historyRecords = (await api("/api/history?limit=200")).items; renderHistory(); }
+  catch (error) { $("historyList").innerHTML = `<p class="error">${esc(error.message)}</p>`; }
+  finally { button.disabled = false; }
 }
+$("logSearch").oninput = renderLogs;
+$("logFilter").onchange = renderLogs;
+$("historySearch").oninput = renderHistory;
 function watchProgressText(item) {
   const sequence = Number(item.lastSequence || 0),
     key = { episode: "watchEpisode", volume: "watchVolume" }[item.releaseUnit];
@@ -7008,9 +7244,9 @@ async function loadRadar({ preferCache = false } = {}) {
         const state = item.subscription_state;
         const stamp = item.last_episode_update_at ? new Date(item.last_episode_update_at) : null;
         const subscription = pending ? esc(t("radarSubscriptionPending")) : item.ani_rss_subscriptions?.length ?
-          item.ani_rss_subscriptions.map((value) => aniSubscriptionMenu(value, item.id, !available)).join("") : state === "active" ?
-          `<span class="radar-subscribed">${t("radarSubscribed")}</span>` : state === "paused" ? esc(t("radarPaused")) :
-          `<button class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("radarSubscribe")}</button>`;
+          item.ani_rss_subscriptions.map((value) => aniSubscriptionMenu(value, item.id, !available, item.bgm_id)).join("") : state === "active" ?
+          `<details class="subscription-menu"><summary>${t("radarSubscribed")} ▾</summary><div class="subscription-menu-actions">${visibilityButton(item.bgm_id, item.id)}</div></details>` : state === "paused" ? `<details class="subscription-menu"><summary>${t("radarPaused")} ▾</summary><div class="subscription-menu-actions">${visibilityButton(item.bgm_id, item.id)}</div></details>` :
+          `<details class="subscription-menu"><summary>${t("radarSubscribe")} ▾</summary><div class="subscription-menu-actions"><button type="button" class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("enableSubscription")}</button>${visibilityButton(item.bgm_id, item.id)}</div></details>`;
         return `<tr data-radar-id="${item.id}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}" ${radarIsHighlighted(item) ? `title="${esc(t("radarUnwatched"))}"` : ""}><td class="radar-title-cell ${imagesEnabled ? "with-radar-cover" : ""}">${imagesEnabled ? `<img class="radar-cover" data-cover="${item.id}" alt="" decoding="async" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='600'%3E%3Crect width='400' height='600' fill='%23e6e4de'/%3E%3C/svg%3E">` : ""}<button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button>${item.media_code === "tv" && item.viewing?.episode != null ? viewingButton(item.id, item.viewing, item.bgm_id) : ""}</td>
           <td class="radar-media" data-label="${esc(t("radarMediaType"))}">${esc(label("media", item.media_code))}</td>
           <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}${radarReleaseDate(item)}</td>
@@ -7758,15 +7994,6 @@ $("prevPage").onclick = () => {
 $("nextPage").onclick = () => {
   page++;
   search();
-};
-$("selectPage").onchange = (e) => {
-  items
-    .filter(selectable)
-    .forEach((x) =>
-      e.target.checked ? selected.add(x.id) : selected.delete(x.id),
-    );
-  updateSelection();
-  render();
 };
 $("clearSelection").onclick = () => {
   selected.clear();

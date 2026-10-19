@@ -6,6 +6,22 @@ from animemachine.api import auth
 
 
 class AuthTests(unittest.TestCase):
+    def test_hidden_titles_are_account_scoped_idempotent_and_persisted(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "auth.sqlite3"
+            store = auth.Store(path, enabled=False)
+            store.set_hidden(1, 265, True)
+            store.set_hidden(1, 265, True)
+            store.set_hidden(2, 300, True)
+            self.assertEqual([265], auth.Store(path, enabled=False).hidden_works(1))
+            self.assertEqual([300], store.hidden_works(2))
+            store.set_hidden(1, 265, False)
+            store.set_hidden(1, 265, False)
+            self.assertEqual([], store.hidden_works(1))
+            for identity, hidden in ((0, True), (True, True), (265, "false"), (265, None)):
+                with self.assertRaises(ValueError):
+                    store.set_hidden(1, identity, hidden)
+
     def test_bootstrap_login_roles_sessions_and_disable(self):
         with tempfile.TemporaryDirectory() as raw:
             store = auth.Store(Path(raw) / "auth.sqlite3", enabled=True,

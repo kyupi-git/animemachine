@@ -128,7 +128,7 @@ def _option(arguments: list[str], name: str) -> str:
 def _writable_paths(arguments: list[str]) -> list[Path]:
     command = arguments[0] if arguments else "run"
     paths: list[Path] = []
-    if command in {"run", "init", "serve", "healthcheck", "validate-config", "sync"}:
+    if command in {"run", "init", "serve", "validate-config", "sync"}:
         paths.extend([
             Path(os.getenv("ANM_CONFIG_PATH", "/Config/config.json")).parent,
             Path(os.getenv("ANM_STATE_DIR", "/Data/state")),
@@ -137,6 +137,16 @@ def _writable_paths(arguments: list[str]) -> list[Path]:
         incomplete = os.getenv("ANM_INCOMPLETE_DIR", "").strip()
         if incomplete:
             paths.append(Path(incomplete))
+        if command == "run":
+            for flag, name, default in (
+                ("ANM_MANAGED_QBT", "ANM_QBT_CONFIG_DIR", "/QbtConfig"),
+                ("ANM_MANAGED_ANI_RSS", "ANM_ANI_RSS_CONFIG_DIR", "/AniRssConfig"),
+            ):
+                if os.getenv(flag, "false").casefold() == "true":
+                    paths.append(Path(os.getenv(name, default)))
+            managed_media = os.getenv("ANM_MANAGED_MEDIA_DIR", "").strip()
+            if os.getenv("ANM_MANAGED_ANI_RSS", "false").casefold() == "true" and managed_media:
+                paths.append(Path(managed_media))
     elif command in {"qbt-bootstrap", "ani-rss-bootstrap"}:
         config_dir = _option(arguments, "--config-dir")
         if config_dir:

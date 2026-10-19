@@ -81,6 +81,36 @@ class ViewingHTTPTests(unittest.TestCase):
             self.assertFalse(radar()['hasUnwatched'])
             self.assertEqual(3, radar()['viewing']['episode'])
 
+    def test_hide_search_restore_retains_identity_and_viewing(self):
+        with contextlib.closing(sqlite3.connect(self.database)) as db:
+            title = db.execute("SELECT title_ja FROM anime_work WHERE id=?", (self.anime_id,)).fetchone()[0]
+        path = f"/api/hidden-works/{self.bgm_id}"
+        with self.request(path, {"hidden": True}) as response:
+            self.assertTrue(json.load(response)["hidden"])
+        for mode in ("sort=title", "radar=1"):
+            with self.request("/api/anime?limit=all&" + mode) as response:
+                self.assertNotIn(self.anime_id, [item["id"] for item in json.load(response)["items"]])
+        with self.request("/api/anime?limit=all&q=" + urllib.parse.quote(title)) as response:
+            row = next(row for row in json.load(response)["items"] if row["id"] == self.anime_id)
+            self.assertTrue(row["hidden"])
+        with self.request("/api/hidden-works") as response:
+            self.assertIn(self.bgm_id, [row["bgm_id"] for row in json.load(response)["items"]])
+        with self.request(f"/api/anime/{self.anime_id}") as response:
+            self.assertTrue(json.load(response)["hidden"])
+        with mock.patch.object(playback, "viewing_identities", return_value={self.anime_id: self.bgm_id}), \
+                mock.patch.object(service.catchup, "queue", return_value=([], [], [])) as queue:
+            with self.request("/api/playback/catchup", {"preview": True, "from": "1995-10", "to": "1995-12"}) as response:
+                response.read()
+            self.assertNotIn(self.anime_id, [row["id"] for row in queue.call_args.args[1]])
+        with self.request(path, {"hidden": False}) as response:
+            self.assertFalse(json.load(response)["hidden"])
+        with self.request("/api/anime?limit=all&sort=title") as response:
+            self.assertIn(self.anime_id, [item["id"] for item in json.load(response)["items"]])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request(path, {"hidden": "false"})
+        self.assertEqual(400, error.exception.code)
+        error.exception.close()
+
     def test_viewing_failure_keeps_radar_titles_available(self):
         with mock.patch.object(playback, 'latest_cached_episodes', side_effect=sqlite3.DatabaseError('unavailable')):
             with self.request('/api/anime?radar=1&limit=all') as response:
@@ -152,6 +182,37 @@ class ViewingHTTPTests(unittest.TestCase):
             self.request("/api/playback/started/unknown", {"event": 1})
         self.assertEqual(404, error.exception.code)
         error.exception.close()
+
+    def test_catchup_handoff_plays_only_checked_works_in_requested_order(self):
+        with contextlib.closing(sqlite3.connect(self.database)) as db:
+            available = db.execute("SELECT id,bgm_id,title_ja FROM anime_work ORDER BY id LIMIT 3").fetchall()
+        rows = [{"id": row[0], "bgm_id": row[1], "title_ja": row[2], "media_code": "tv"} for row in available]
+        def collect(_database, identity, _config, **_kwargs):
+            media = self.root / f"{identity}-01.mp4"
+            media.write_bytes(b"synthetic-media")
+            return [playback.PlaybackItem(playback.MediaLocator.local(media, 15), "Episode 1", 1, 15, "managed")]
+        request = {"from": "2026-10", "to": "2026-12", "player": "copy"}
+        with mock.patch.object(service, "query_catalog", return_value={"items": rows}), \
+                mock.patch.object(playback, "collect_items", side_effect=collect):
+            with self.request("/api/playback/catchup", {**request, "preview": True}) as response:
+                self.assertEqual(3, len(json.load(response)["groups"]))
+            for selection in (None, [], [True], [rows[0]["bgm_id"], rows[0]["bgm_id"]]):
+                body = {**request, **({"selectedBgmIds": selection} if selection is not None else {})}
+                with self.subTest(selection=selection), self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request("/api/playback/catchup", body)
+                error.exception.close()
+                self.assertEqual(400, error.exception.code)
+            selected = [rows[2]["bgm_id"], rows[0]["bgm_id"]]
+            with self.request("/api/playback/catchup", {**request, "selectedBgmIds": selected}) as response:
+                handoff = json.load(response)
+            self.assertEqual(selected, [group["bgmId"] for group in handoff["groups"]])
+            self.assertEqual(2, handoff["count"])
+            with self.request(handoff["playlistUrl"]) as response:
+                playlist = response.read().decode()
+            titles = [line for line in playlist.splitlines() if line.startswith("#EXTINF")]
+            self.assertEqual(2, len(titles))
+            self.assertIn(rows[2]["title_ja"], titles[0])
+            self.assertIn(rows[0]["title_ja"], titles[1])
 
     def test_non_object_requests_fail_cleanly_without_breaking_other_pages(self):
         paths = [f'/api/anime/{self.anime_id}/playback/handoff', '/api/playback/catchup',

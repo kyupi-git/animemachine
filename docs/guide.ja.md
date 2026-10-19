@@ -44,13 +44,13 @@ macOS では **`AnimeMachine-macOS.command`** を開きます。展開したフ�
 
 NAS のアプリ管理で Docker / コンテナ管理を有効にするか、パソコンに [Docker](https://docs.docker.com/get-started/get-docker/) をインストールします。Docker Engine 24 以降、Docker Compose **2.20.3 以降**を使用してください。
 
-現在の環境に合わせて構成を選びます。
+通常は[フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)を使います。AnimeMachine、qBittorrent、Ani-RSS、リソース収集サービスをまとめて起動できます。既存サービスがある場合は、下表から代わりの構成を一つ選んでください。01～04 は構成の番号で、作業手順ではありません。
 
 | 利用環境 | 設定ファイル |
 | --- | --- |
 | 作品を探し、既存のメディアを接続する | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/compose.yaml) |
 | qBittorrent をすでに使っている | [02 · 既存のダウンローダーを接続](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/compose.yaml) |
-| qBittorrent も一緒に導入する | [03 · AnimeMachine + qBittorrent](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
+| qBittorrent も一緒に導入する | [03 · AnimeMachine + qBittorrent + 収集サービス](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
 | ダウンローダー、Ani-RSS、リソース収集をまとめて導入する | [04 · フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/compose.yaml) |
 
 1. `animemachine` など、今後も使うフォルダーを作成します。
@@ -71,6 +71,8 @@ docker compose logs animemachine
 既定のフォルダーと接続は自動で作成されます。03 / 04 は qBittorrent、04 は Ani-RSS も設定済みです。02 を選んだ場合は、[接続の手順](#connections)に沿って既存のダウンローダーを設定してください。
 
 保存先のディスクを指定する場合は、起動前に[フォルダー設定](#folders)に沿って `.env` を追加します。別のパソコンから qBittorrent や Ani-RSS を開く場合は、[管理画面へのアクセス](reference.ja.md#service-access)を設定します。
+
+どの構成も `compose.yaml` 一つで起動できます。初回起動時にアカウントとサービス接続を自動設定するため、初期化スクリプトの実行や API キーの入力は不要です。再起動時は既存の設定を引き継ぎます。フル構成では蜜柑と公開作品情報への接続を確認し、公式ソースを優先して、接続できない場合に利用可能な代替ソースを選びます。
 
 <a id="first-use"></a>
 
@@ -139,9 +141,11 @@ Docker ではコンテナから見えるパスを入力します。既定のコ�
 
 レーダーには視聴記録のある作品だけ再開位置を表示します。購読中またはメディアがある作品に未視聴の新しい話がある場合は薄緑色で示し、最新話の再生や記録の修正で更新します。詳細を開くだけでは消えません。
 
+作品の購読メニューで **作品を非表示** を選ぶと、現在のアカウントのレーダー、作品一覧、新しく生成する続き再生リストから除外します。購読とダウンロードは継続します。レーダー上部の **非表示の作品** から検索して再表示できます。ホーム画面の作品名検索でも見つけられます。
+
 ### まとめて続きを再生
 
-**新作レーダー** でシーズンを選び、**まとめて続きを再生** をクリックします。話数を確認してプレーヤーで開くと、購読中またはメディアが入庫済みの TV 作品をレーダーの順に再生します。各作品は前回再生した話から最新の再生可能な話までを含み、初回は最も早い話から始まります。
+**新作レーダー** でシーズンを選び、**まとめて続きを再生** をクリックします。視聴する作品にチェックを入れ、プレーヤーで開いてください。作品の行をドラッグして順番を変更できます。選択した作品だけを上から順に再生し、未選択の間は再生ボタンを押せません。対象は購読中またはメディアが入庫済みの TV 作品です。各作品は前回再生した話から最新の再生可能な話までを含み、初回は最も早い話から始まります。
 
 ![まとめて続きを再生：再生可能な話と記録した位置を確認](images/continue-watching.ja.png)
 
@@ -157,7 +161,7 @@ Docker ではコンテナから見えるパスを入力します。既定のコ�
 
 ### コレクションを補う・ダウンロードする
 
-qBittorrent を接続すると、作品詳細の **Torrent を検索** から検索を開始し、進捗を確認してリリースを選べます。内蔵の収集機能を使い、既存の計画プレビューとダウンロード確認へ進みます。
+qBittorrent の接続後、作品詳細で **Torrent を検索** を押すと、検索後に候補の一覧へ移動します。リリースを選び、**ダウンロード計画を確認** を押して、ファイルと保存先を確認してから送信します。作品との一致が未確認のリリースには理由を表示し、まだダウンロードを送信できません。
 
 手元の `.torrent` ファイルは **Torrent プール**に入れます。フル Compose 構成では、リソース収集サービスがこのフォルダーにファイルを追加します。詳細な設定は[収集サービスの設定例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example)を参照してください。
 
@@ -186,7 +190,7 @@ qBittorrent を接続すると、作品詳細の **Torrent を検索** から検
 
 休止中はローカル庫の接続確認、スキャン、検証、再生、書き込みを止め、保存済みの状態を表示します。終了後はアクセスを再開します。Ani-RSS と別のパスの外部ライブラリは動作を続けます。同じディスクを別のアプリやライブラリが使用すると、ディスクが起動する場合があります。
 
-設定、データベース、ログも別のディスクに保存してください。Docker では起動時の休止保護も適用するため、0.3.4 のイメージに更新します。
+設定、データベース、ログも別のディスクに保存すると、休止時間中にメディア用ディスクを待機状態に保ちやすくなります。
 
 ### 作品関係図
 
@@ -266,6 +270,10 @@ Windows で直接動かす場合は `D:\Anime` や `\\nas\Anime` などを指定
 <a id="maintenance"></a>
 
 ## 5. 設定・更新・バックアップ
+
+**設定 → 履歴**では、フォルダーの作成やファイルの移動・名前変更・削除をパスで検索し、元に戻せる操作を復元できます。**設定 → ログ**では警告とエラーを絞り込み、必要に応じて技術情報を開けます。
+
+更新時は同じ配置ディレクトリとデータを使い、`compose.yaml` を差し替えて `docker compose up -d --remove-orphans` を実行します。旧版の初期化コンテナも削除され、設定とメディアは引き継がれます。
 
 言語、テーマ、表示形式、絞り込みは好みに合わせて変更できます。管理者は設定画面でフォルダー、接続、リソース規則、ユーザーを管理し、一般ユーザーは作品の閲覧や再生を行います。
 

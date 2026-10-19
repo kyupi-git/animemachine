@@ -21,7 +21,7 @@ Common Compose variables are listed below. Path variables specify **host folders
 
 | Variable | Default / purpose |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.3.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.4.1` |
 | `ANM_LIBRARY_DIR` | `./library`, collected media |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`, Torrent pool |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`, existing media |
@@ -54,13 +54,15 @@ QBT_BIND_ADDRESS=0.0.0.0
 ANI_RSS_BIND_ADDRESS=0.0.0.0
 ```
 
-Run `docker compose up -d`, then sign in at `http://YOUR-NAS-ADDRESS:8080` or `http://YOUR-NAS-ADDRESS:7789`. Find qBittorrent's initial account in `docker compose logs qbt-bootstrap`. Ani-RSS defaults to `admin` / `admin`; change it in its security settings after signing in.
+Run `docker compose up -d`, then sign in at `http://YOUR-NAS-ADDRESS:8080` or `http://YOUR-NAS-ADDRESS:7789`. qBittorrent uses `admin` as its default username. Read its generated password with `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password`. Ani-RSS defaults to `admin` / `admin`; change it in its security settings after signing in.
 
 Those addresses are for browsers. Services within Compose use `http://qbittorrent:8080` and `http://ani-rss:7789`. Use `host.docker.internal` for host services; a custom Linux Compose setup needs the matching `host-gateway` entry.
 
 ## Network, proxies, and certificates
 
 Metadata and covers use official sources, mirrors, and available proxies according to connection health. **Settings → Diagnostics** shows routes and errors. Source options are under **Settings → Connections → Metadata network & mirrors**.
+
+In the full stack, AnimeMachine checks the Mikan homepage, public RSS feeds, Torrent metadata, and public Bangumi metadata in the background. It selects validated sources and periodically checks whether the official source has recovered. Public Mikan feed URLs in existing subscriptions follow the selected source, retaining groups and progress. External Ani-RSS instances and manually changed sources are left under user control. A configured Bangumi token keeps the official API; tokens are never sent to mirrors.
 
 To use a proxy, add settings such as these to your environment file:
 
@@ -82,7 +84,7 @@ Archive import accepts official `dump-*.zip` files. Select one in Settings or pl
 
 Scheduled checks use **UTC+8**: Thursday at 02:12, with one Friday 02:12 follow-up if no new archive is available, then the next weekly cycle. Convert from UTC+8 for your local time. Progress and recent results are persisted in runtime state.
 
-The full Compose stack includes the resource collector. It is also available as a [standalone collector configuration](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.yaml). See the [advanced environment example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example) for sources, history scans, retries, and proxies. The collector writes to the Torrent pool; AnimeMachine scans it and submits downloads from confirmed plans.
+The full Compose stack includes the resource collector. It is also available as a [standalone collector configuration](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/compose.yaml). See the [advanced environment example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/.env.example) for sources, history scans, retries, and proxies. The collector writes to the Torrent pool; AnimeMachine scans it and submits downloads from confirmed plans.
 
 ## Data files and maintenance
 

@@ -41,7 +41,7 @@ from typing import Any, Callable, Iterable
 from ..config.policy import ConfigStore, NON_GROUPING_RELATIONS, STRICT_SERIES_RELATIONS
 from ..config import credentials as credential_store
 from ..torrents import runtime as runtime_catalog
-from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup
+from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup, managed_network
 from . import archive_update, relation_graph, metadata_repair
 from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
@@ -2193,7 +2193,8 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
 
 
 
-def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None) -> dict[str, Any]:
+def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None,
+                  *, hidden_bgm_ids: Iterable[int] = ()) -> dict[str, Any]:
     ensure_catalog_features(db_path)
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as feature_db:
         has_ani_rss_media_table = bool(feature_db.execute(
@@ -2222,6 +2223,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         return [str(item).strip() for item in params.get(name, []) if str(item).strip()]
 
     q = value("q")
+    hidden = list(hidden_bgm_ids)
     radar_mode = value("radar") == "1"
     requested_sort = value("sort") or "recent_episode"
     subscription_order = ("COALESCE((SELECT MAX(aa.rowid) FROM ani_rss_action aa "
@@ -2567,6 +2569,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
     # Otherwise a quarter with a few dozen works classifies the entire Archive.
     if follow_filter:
         where.append(follow_filter)
+    if hidden and not q:
+        hard_where.append("w.bgm_id NOT IN (SELECT value FROM json_each(?))")
+        hard_values.append(json.dumps(hidden))
     predicate = " WHERE " + " AND ".join(base_where + hard_where + where)
     predicate_values = hard_values + values
     search_expanded = bool(q and len(where) > 1)
@@ -5128,6 +5133,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             rendered = fmt % args
             rendered = re.sub(r"(/api/playback/(?:media|playlist)/)[^/?\s]+", r"\1[redacted]", rendered)
+            rendered = re.sub(r"(/api/managed-bangumi/)[^/?\s]+", r"\1[redacted]", rendered)
             print(f"[web] {self.address_string()} {rendered}", flush=True)
 
         def write_body(self, body: bytes) -> bool:
@@ -5534,6 +5540,18 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
 
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
+            metadata_match = re.fullmatch(r"/api/managed-bangumi/([A-Za-z0-9_-]+)(/.*)", parsed.path)
+            if metadata_match:
+                try:
+                    value = managed_network.metadata_request(metadata_match[1], metadata_match[2], parsed.query)
+                    self.json_response(value)
+                except PermissionError:
+                    self.json_response({"error": "not_found"}, HTTPStatus.NOT_FOUND)
+                except ValueError:
+                    self.json_response({"error": "invalid_metadata_request"}, HTTPStatus.BAD_REQUEST)
+                except (OSError, RuntimeError, httpx.HTTPError):
+                    self.json_response({"error": "metadata_temporarily_unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
             item_match = re.fullmatch(r"/api/playback/item/([A-Za-z0-9_-]+)/episode\.anm", parsed.path)
             if item_match:
                 token = item_match.group(1)
@@ -5618,7 +5636,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     mark_interactive()
                     query = urllib.parse.parse_qs(parsed.query)
                     cfg = config_store.read()
-                    payload = query_catalog(db_path, query, cfg)
+                    hidden = set(auth_store.hidden_works(self.auth_session.user_id))
+                    payload = query_catalog(db_path, query, cfg, hidden_bgm_ids=hidden)
+                    for row in payload["items"]:
+                        row["hidden"] = int(row["bgm_id"]) in hidden
                     if query.get("radar") == ["1"]:
                         try:
                             records = {record["bgmId"]: record for record in viewing_store.snapshot(self.auth_session.user_id)}
@@ -5635,6 +5656,16 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     self.json_response(payload)
                 except (ValueError, sqlite3.Error) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            if parsed.path == "/api/hidden-works":
+                hidden = auth_store.hidden_works(self.auth_session.user_id)
+                with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db:
+                    db.row_factory = sqlite3.Row
+                    rows = db.execute("""SELECT id,bgm_id,title_ja,title_zh_hans,title_en,media_code,start_month
+                        FROM anime_work WHERE bgm_id IN (SELECT value FROM json_each(?))""", (json.dumps(hidden),)).fetchall()
+                mapped = {int(row["bgm_id"]): dict(row) for row in rows}
+                self.json_response({"items": [mapped.get(identity, {"id": None, "bgm_id": identity,
+                                      "title_ja": f"Bangumi #{identity}"}) for identity in hidden]})
                 return
             if parsed.path == "/api/viewing":
                 records = {record["bgmId"]: record for record in viewing_store.snapshot(self.auth_session.user_id)}
@@ -5740,7 +5771,11 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         key, {"state": "idle", "animeId": int(key)})))
                 return
             if parsed.path == "/api/ani-rss/status":
-                self.json_response(ani_rss.state(db_path, config_store.read()))
+                current = config_store.read()
+                result = ani_rss.state(db_path, current)
+                if managed_network.owned(str(current.get("components", {}).get("aniRss", {}).get("endpoint", ""))):
+                    result["managedNetwork"] = managed_network.status()
+                self.json_response(result)
                 return
             if parsed.path == "/api/ani-rss/season-search":
                 self.json_response(season_search.status())
@@ -5752,6 +5787,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 language = (urllib.parse.parse_qs(parsed.query).get("language") or [cfg.get("ui", {}).get("language", "en")])[0]
                 detail = catalog_detail(db_path, int(match.group(1)), cfg, language=language)
                 if detail:
+                    detail["hidden"] = int(detail["bgm_id"]) in auth_store.hidden_works(self.auth_session.user_id)
                     detail["viewing"] = {**viewing_store.get(self.auth_session.user_id, int(detail["bgm_id"])), "animeId": detail["id"]}
                 self.json_response(detail or {"error": "not found"}, 200 if detail else 404)
                 return
@@ -6052,6 +6088,22 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if not self.authorize(csrf=True):
                 return
+            hidden_match = re.fullmatch(r"/api/hidden-works/(\d+)", parsed.path)
+            if hidden_match:
+                try:
+                    request = self.read_json()
+                    hidden = request.get("hidden")
+                    bgm_id = int(hidden_match[1])
+                    if hidden is True:
+                        with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db:
+                            if not db.execute("SELECT 1 FROM anime_work WHERE bgm_id=?", (bgm_id,)).fetchone():
+                                self.json_response({"error": "anime not found"}, HTTPStatus.NOT_FOUND)
+                                return
+                    auth_store.set_hidden(self.auth_session.user_id, bgm_id, hidden)
+                    self.json_response({"bgmId": bgm_id, "hidden": hidden})
+                except (ValueError, sqlite3.Error) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if requires_admin("POST", parsed.path) and self.auth_session.role != "admin":
                 self.json_response({"error": "administrator_required"}, HTTPStatus.FORBIDDEN)
                 return
@@ -6081,7 +6133,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     if cfg.get("playback", {}).get("enabled", True) is not True:
                         raise ValueError("playback is disabled")
                     params = catchup.season_params(request)
-                    rows = query_catalog(db_path, params, cfg)["items"]
+                    rows = query_catalog(db_path, params, cfg, hidden_bgm_ids=auth_store.hidden_works(self.auth_session.user_id))["items"]
+                    if request.get("preview") is not True:
+                        rows = catchup.selected_rows(rows, request.get("selectedBgmIds"))
                     items, owners, groups = catchup.queue(db_path, rows, cfg, viewing_store, self.auth_session.user_id,
                                                         language=params["language"][0])
                     if not items:
@@ -6476,19 +6530,24 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     request = self.read_json()
                     kind = str(request.get("kind") or "")
                     transient_key = str(request.get("apiKey") or "").strip() or None
+                    current = config_store.read()
+                    component = "aniRss" if kind == "ani-rss" else "downloadClient"
+                    endpoint = network_validators.service_endpoint(str(request.get("endpoint") or ""))
+                    stored_endpoint = current.get("components", {}).get(component, {}).get("endpoint", "")
+                    use_saved_key = httpx.URL(endpoint) == httpx.URL(str(stored_endpoint).rstrip("/"))
                     with network_connectivity.recovery_probe():
                         if kind == "ani-rss":
-                            current = config_store.read()
                             current = json.loads(json.dumps(current))
-                            current.setdefault("components", {}).setdefault("aniRss", {})["endpoint"] = str(request.get("endpoint") or "")
-                            result = ani_rss.probe(current, transient_key)
+                            current.setdefault("components", {}).setdefault("aniRss", {})["endpoint"] = endpoint
+                            result = ani_rss.probe(current, transient_key, use_saved_key=use_saved_key)
                         else:
-                            result = connectivity.probe(kind, str(request.get("endpoint") or ""), transient_key)
+                            result = connectivity.probe(kind, endpoint, transient_key, use_saved_key=use_saved_key)
                     log_event("INFO" if result.get("reachable") else "ERROR", "connection_probe", result=result)
                     self.json_response(result)
                 except (ValueError, OSError, urllib.error.URLError, httpx.HTTPError) as exc:
                     log_event("ERROR", "connection_probe_failed", error=f"{type(exc).__name__}: {exc}")
-                    self.json_response({"error": "connection_failed", "errorType": type(exc).__name__}, HTTPStatus.BAD_REQUEST)
+                    self.json_response({"error": "invalid_service_endpoint" if str(exc) == "invalid_service_endpoint" else "connection_failed",
+                                        "errorType": type(exc).__name__}, HTTPStatus.BAD_REQUEST)
                 return
             if parsed.path == "/api/connections/qbittorrent/credential":
                 try:
@@ -7001,6 +7060,27 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
             if stop_monitor.wait(10):
                 break
 
+    managed_network_changed = threading.Event()
+
+    def monitor_managed_network() -> None:
+        while not stop_monitor.is_set() and not restart_requested.is_set():
+            try:
+                current = config_store.read()
+                endpoint = str(current.get("components", {}).get("aniRss", {}).get("endpoint", ""))
+                if managed_network.owned(endpoint):
+                    def cancelled():
+                        latest = config_store.read().get("components", {}).get("aniRss", {})
+                        return (stop_monitor.is_set() or ANI_RSS_USER_ACTIVITY.is_set()
+                                or latest != current.get("components", {}).get("aniRss", {}))
+                    result = managed_network.tick(ani_rss._client(current),
+                                                  operation_lock=ANI_RSS_OPERATION_LOCK, cancelled=cancelled)
+                    if result.get("changed"):
+                        managed_network_changed.set()
+            except (OSError, ValueError, RuntimeError, httpx.HTTPError):
+                pass  # Optional managed discovery retries independently of local functions.
+            if stop_monitor.wait(30):
+                break
+
     def monitor_ani_rss() -> None:
         """Keep Ani-RSS API state, resources, and optional mounted media on one scheduler."""
         media_scan_thread: threading.Thread | None = None
@@ -7075,6 +7155,10 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                             ANI_RSS_OPERATION_LOCK.release()
                 settings = current.get("components", {}).get("aniRss", {}) or {}
                 interval = min(60.0, max(15.0, float(settings.get("syncMinutes", 30)) * 15.0))
+                if managed_network_changed.is_set():
+                    next_resource_scan_at = 0.0
+                    resource_scan_epoch += 1
+                    managed_network_changed.clear()
                 result: dict[str, Any] | None = None
                 if ani_rss.sync_due(db_path, current) and not ANI_RSS_USER_ACTIVITY.is_set():
                     # Background API work never queues ahead of an explicit user request.
@@ -7210,6 +7294,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
     if ready_callback is not None:
         ready_callback()
     threading.Thread(target=monitor_ani_rss, daemon=True, name="anm-ani-rss-sync-monitor").start()
+    threading.Thread(target=monitor_managed_network, daemon=True, name="anm-managed-network").start()
     handler.catalog_warmup.start()
     threading.Thread(target=monitor_network, daemon=True, name="anm-network-monitor").start()
     threading.Thread(target=monitor_qbt, daemon=True, name="anm-qbt-state-monitor").start()

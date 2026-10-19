@@ -70,6 +70,40 @@ class PathPolicyTests(unittest.TestCase):
             with self.assertRaises(path_policy.PathAuthorizationError):
                 path_policy.authorize_existing(root / "missing.mkv", [root])
 
+    def test_queued_directory_replaced_by_external_link_is_not_scanned(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            root = base / "library"; root.mkdir()
+            child = root / "queued"; child.mkdir()
+            marker = root / "marker.mkv"; marker.write_bytes(b"marker")
+            outside = base / "outside"; outside.mkdir()
+            secret = outside / "secret.mkv"; secret.write_bytes(b"secret")
+            scan = os.scandir
+            def swapped(directory):
+                if Path(directory) == child:
+                    raise AssertionError("replaced directory must not be opened")
+                return scan(directory)
+            # scandir enumerates insertion order on the tested filesystems;
+            # drive the queued-directory state explicitly to avoid relying on it.
+            class Entries:
+                def __enter__(self):
+                    with scan(root) as stream:
+                        rows = list(stream)
+                    rows.sort(key=lambda entry: entry.name != "queued")
+                    return iter(rows)
+                def __exit__(self, *_):
+                    pass
+            with mock.patch.object(path_policy.os, "scandir", return_value=Entries()):
+                files = path_policy.walk_files(root)
+                self.assertEqual(marker, next(files))
+            child.rmdir()
+            try:
+                child.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable in this environment")
+            with mock.patch.object(path_policy.os, "scandir", side_effect=swapped):
+                self.assertEqual([], list(files))
+
 
 if __name__ == "__main__":
     unittest.main()

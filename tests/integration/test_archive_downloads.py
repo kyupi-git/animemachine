@@ -106,7 +106,7 @@ class ArchiveDownloadTests(unittest.TestCase):
                                         expected_sha256=hashlib.sha256(payload).hexdigest(),
                                         attempts_per_source=2,retry_backoff=0)
             self.assertEqual(payload,target.read_bytes())
-        self.assertTrue(any("github.com" in url and offset>0 for url,offset in calls))
+        self.assertTrue(any(httpx.URL(url).host == "github.com" and offset>0 for url,offset in calls))
 
     def test_restart_reuses_saved_segment(self):
         payload=b"restart-resume" * 1024

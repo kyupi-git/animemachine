@@ -44,13 +44,13 @@ The launcher installs the required components. Open **<http://localhost:8787>**.
 
 Enable Docker or container management in your NAS app center, or install [Docker](https://docs.docker.com/get-started/get-docker/) on your computer. Use Docker Engine 24+ and Docker Compose **2.20.3+**.
 
-Select a configuration based on your existing services:
+Use the [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
 
 | Deployment scenario | Configuration |
 | --- | --- |
 | Browse titles and connect existing media | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/compose.yaml) |
 | You already run qBittorrent | [02 · Connect an existing downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/compose.yaml) |
-| Install qBittorrent alongside AnimeMachine | [03 · AnimeMachine + qBittorrent](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
+| Install qBittorrent alongside AnimeMachine | [03 · AnimeMachine + qBittorrent + collector](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
 | Install a downloader, Ani-RSS, and a resource collector together | [04 · Full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/compose.yaml) |
 
 1. Create a permanent folder, such as `animemachine`.
@@ -71,6 +71,8 @@ docker compose logs animemachine
 Default folders and service connections are created automatically. Setups 03 and 04 configure qBittorrent; setup 04 also connects Ani-RSS. For setup 02, enter your existing downloader's details under [Connections](#connections).
 
 To store media on a particular drive, add a `.env` file before starting, as shown in [Folder paths](#folders). To open qBittorrent or Ani-RSS from another computer, configure [access to their web interfaces](reference.en.md#service-access).
+
+Each setup needs only one `compose.yaml`. Accounts and service connections are created automatically on first launch, with no initialization script or API keys to enter. Restarts retain existing settings. The full stack checks Mikan and public metadata access, prefers official sources, and selects a working alternative when needed.
 
 <a id="first-use"></a>
 
@@ -139,9 +141,11 @@ Open the Subscribed or Paused menu to pause, resume, or unsubscribe. Unsubscribi
 
 The radar shows progress beside titles you have watched. Pale green marks playable new episodes for subscribed titles or titles with media. Playing the latest episode or correcting your record updates the highlight; opening title details does not clear it.
 
+Choose **Hide title** from a title’s subscription menu to remove it from this account’s radar, title lists, and newly generated Continue watching playlists. Subscriptions and downloads continue. Open **Hidden titles** at the top of the radar to search and restore titles; the home page’s title search can also find them.
+
 ### Continue watching
 
-Choose a season in **Release radar**, click **Continue watching**, review the episodes and open a player. The playlist includes playable episodes of subscribed TV titles or TV titles already in your media library. Titles follow the radar order. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode.
+Choose a season in **Release radar**, click **Continue watching**, select the titles you want to watch, then open a player. Drag title rows to change the order. Only selected titles enter the playlist, from top to bottom; playback buttons stay disabled until you select a title. The list includes subscribed TV titles or TV titles already in your media library. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode.
 
 ![Continue watching: review playable episodes and saved positions](images/continue-watching.en.png)
 
@@ -157,7 +161,7 @@ Records belong to your account and are shared by title details and the radar. Cl
 
 ### Fill gaps and download
 
-With qBittorrent connected, click **Search Torrents** in title details, follow the search progress, and choose a release. Search uses the built-in collector and the existing plan preview and download confirmation flow.
+After connecting qBittorrent, click **Search Torrents** in title details. When the search finishes, the view moves to the release choices. Select one and click **Preview download plan**, then check the files and save location before submitting. Releases with an unconfirmed title match show an explanation and cannot be submitted yet.
 
 Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. Its options are in the [collector configuration example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example).
 
@@ -186,7 +190,7 @@ In **Settings → Connections → Local library**, enable daily quiet hours, ent
 
 Local library probes, scans, verification, playback, and writes pause while existing records remain visible. Access resumes after quiet hours. Ani-RSS and external libraries at other paths continue running. Other applications or libraries on the same disk may still wake it.
 
-Keep configuration, databases, and logs on another disk as well. For Docker, update to the 0.3.4 image to include quiet-hour protection during container startup.
+Keep configuration, databases, and logs on another disk as well, so the media disk can remain idle during quiet hours.
 
 ### Relationship graph
 
@@ -266,6 +270,10 @@ On Windows, enter a path such as `D:\Anime` or `\\nas\Anime`. On Linux / macOS, 
 <a id="maintenance"></a>
 
 ## 5. Preferences, updates, and backups
+
+In **Settings → History**, search folder creation, file moves, renames, and removals by path, and restore reversible operations. In **Settings → Logs**, filter warnings and errors, then expand technical details when needed.
+
+When updating, keep the same deployment directory and data. Replace `compose.yaml` there and run `docker compose up -d --remove-orphans`. This also removes old initialization containers while retaining configuration and media.
 
 Choose your language, theme, layout, and browsing filters. Administrators manage folders, connections, resource rules, and users in Settings; regular accounts browse and play media.
 

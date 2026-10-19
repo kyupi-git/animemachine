@@ -74,13 +74,18 @@ def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
 
 def walk_files(root: Path, *, config: dict[str, Any] | None = None) -> Iterator[Path]:
     """Walk without following links and recheck quiet hours before each directory."""
-    pending = [root]
+    boundary = canonical_existing(root)
+    pending = [boundary]
     while pending:
-        require_awake(root, config)
+        require_awake(boundary, config)
         directory = pending.pop()
+        # A queued directory can be replaced by a link before it is scanned.
+        if directory.is_symlink() or is_junction(directory):
+            continue
+        directory = authorize_existing(directory, [boundary], config=config)
         with os.scandir(directory) as entries:
             for entry in entries:
-                require_awake(root, config)
+                require_awake(boundary, config)
                 if entry.is_symlink() or is_junction(entry.path):
                     continue
                 if entry.is_dir(follow_symlinks=False):

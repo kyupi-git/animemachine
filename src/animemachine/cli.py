@@ -17,6 +17,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 from pathlib import Path
 from collections.abc import Callable
@@ -63,13 +64,15 @@ def _secret_value(value_env: str, file_env: str, default_file: str = "") -> str:
 def _persist_bootstrap_secret(path: Path, value: str) -> None:
     """Persist a generated/shared service secret without exposing it in logs."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(temporary, flags, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(value + "\n")
-    temporary.replace(path)
-    _restrict_credential_permissions(path)
+    fd, name = tempfile.mkstemp(prefix="." + path.name + "-", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(value + "\n")
+        _restrict_credential_permissions(temporary)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _shared_bootstrap_secret(
@@ -142,7 +145,7 @@ class InstanceLock:
 def bootstrap_qbittorrent(config_dir: Path) -> None:
     """Seed only the API-key settings needed by the bundled qBittorrent.
 
-    This runs as a one-shot Compose service before qBittorrent starts. Existing
+    The main application runs this before Compose starts qBittorrent. Existing
     preferences are preserved and the secret is never printed.
     """
     alphabet = string.ascii_letters + string.digits
@@ -186,9 +189,7 @@ def bootstrap_qbittorrent(config_dir: Path) -> None:
                        (r"Session\TempPath", incomplete_dir),
                        (r"Session\TempPathEnabled", "true")):
         set_value("BitTorrent", key, value)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(text, encoding="utf-8")
-    temporary.replace(path)
+    _persist_bootstrap_secret(path, text.rstrip("\n"))
 
 
 def bootstrap_ani_rss(config_dir: Path) -> None:
@@ -225,9 +226,48 @@ def bootstrap_ani_rss(config_dir: Path) -> None:
         ("autoStart", True),
     ):
         data.setdefault(key, value)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _persist_bootstrap_secret(path, json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def initialize_managed_services() -> list[str]:
+    """Prepare owned services before Compose starts them; preserve live settings on restart."""
+    errors: list[str] = []
+    for flag, directory, relative, initializer in (
+        ("ANM_MANAGED_QBT", os.getenv("ANM_QBT_CONFIG_DIR", "/QbtConfig"),
+         "qBittorrent/qBittorrent.conf", bootstrap_qbittorrent),
+        ("ANM_MANAGED_ANI_RSS", os.getenv("ANM_ANI_RSS_CONFIG_DIR", "/AniRssConfig"),
+         "config.v2.json", bootstrap_ani_rss),
+    ):
+        if os.getenv(flag, "false").casefold() != "true":
+            continue
+        try:
+            root = Path(directory)
+            marker = root / ".animemachine" / "initialized.json"
+            configuration = root / relative
+            secret = root / ".animemachine" / "api-key"
+            if configuration.is_file() and secret.is_file():
+                _restrict_credential_permissions(configuration)
+                _restrict_credential_permissions(secret)
+                variable = "ANM_QBT_API_KEY" if flag == "ANM_MANAGED_QBT" else "ANM_ANI_RSS_API_KEY"
+                supplied = os.getenv(variable, "").strip()
+                if supplied and supplied != secret.read_text(encoding="utf-8").strip():
+                    raise RuntimeError(f"{variable} differs from the initialized service. Remove this override from .env to reuse saved credentials.")
+                # Also adopts 0.4.0's already initialized services without rewriting
+                # settings while qBittorrent/Ani-RSS may still be running.
+                if not marker.is_file():
+                    _persist_bootstrap_secret(marker, json.dumps({"schemaVersion": 1}))
+                continue
+            if configuration.is_file() and not secret.is_file():
+                # A lost shared key must not reset an existing service's account.
+                raise RuntimeError(f"Managed service credentials are missing: {secret}. Restore its configuration directory.")
+            initializer(root)
+            _persist_bootstrap_secret(marker, json.dumps({"schemaVersion": 1}))
+        except (OSError, ValueError, RuntimeError) as exc:
+            message = f"{flag}: {exc}"
+            errors.append(message)
+            print(f"[setup] {message}", file=sys.stderr, flush=True)
+    return errors
+
 
 
 def sync_status(phase: str, *, state: str = "running", details: dict[str, object] | None = None) -> None:
@@ -355,10 +395,11 @@ def configure_web_security(host: str, port: int) -> dict[str, str] | None:
         saved = _read_bootstrap_credentials(path)
         if saved and _bootstrap_admin_active(saved[0]):
             return {"address": f"http://127.0.0.1:{port}" if remote else f"http://{host}:{port}",
-                    "username": saved[0], "password": saved[1], "path": str(path)}
+                    "username": saved[0], "path": str(path)}
         return None
     username = os.getenv("ANM_ADMIN_USERNAME", "").strip() or "admin"
     password = os.getenv("ANM_ADMIN_PASSWORD", "")
+    generated = False
     if not password:
         saved = _read_bootstrap_credentials(path)
         if saved:
@@ -366,10 +407,12 @@ def configure_web_security(host: str, port: int) -> dict[str, str] | None:
         else:
             password = "anm_" + secrets.token_urlsafe(24)
             _write_bootstrap_credentials(path, username, password)
+            generated = True
     os.environ["ANM_ADMIN_USERNAME"] = username
     os.environ["ANM_ADMIN_PASSWORD"] = password
     address = f"http://127.0.0.1:{port}" if remote else f"http://{host}:{port}"
-    return {"address": address, "username": username, "password": password, "path": str(path)}
+    return {"address": address, "username": username, **({"path": str(path)} if path.is_file() else {}),
+            **({"password": password} if generated else {})}
 
 
 def _print_initial_credentials(values: dict[str, str] | None) -> None:
@@ -377,8 +420,12 @@ def _print_initial_credentials(values: dict[str, str] | None) -> None:
         return
     print("\n========== AnimeMachine login =================", flush=True)
     print(f"Username: {values['username']}", flush=True)
-    print(f"Password: {values['password']}", flush=True)
-    print(f"Saved:    {values['path']}", flush=True)
+    # Only the newly generated first-login password is shown. Reused and
+    # deployment-supplied credentials never enter subsequent startup logs.
+    if "password" in values:
+        print(f"Password: {values['password']}", flush=True)
+    if values.get("path"):
+        print(f"Saved:    {values['path']}", flush=True)
     print("================================================\n", flush=True)
 
 
@@ -683,6 +730,7 @@ def main() -> int:
         instance_lock = InstanceLock(STATE)
         instance_lock.acquire()
         try:
+            initialize_managed_services()
             shell_created = ensure_catalog_shell()
             stop = threading.Event()
             bootstrap_finished = threading.Event()

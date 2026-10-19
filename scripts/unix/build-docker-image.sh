@@ -28,15 +28,11 @@ bundle="$dist/AnimeMachine-$version-compose"
 rm -rf "$bundle"
 mkdir -p "$bundle/docs"
 cp "$root/deploy/compose/04-full-stack/compose.yaml" "$root/deploy/compose/04-full-stack/.env.example" "$bundle/"
-cp "$root/deploy/compose/torrent-collector.yaml" "$bundle/"
-cp "$script_dir/initialize-animemachine.sh" "$bundle/"
-cp "$root/scripts/windows/Initialize-AnimeMachine.ps1" "$bundle/"
 cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$bundle/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$bundle/docs/" \;
-cp -R "$root/docs/images" "$bundle/docs/images"
-chmod +x "$bundle/initialize-animemachine.sh"
+"$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$bundle/docs/images"
 for file in "$bundle/compose.yaml" "$bundle/.env.example"; do
-  sed -E -e "s|ghcr.io/kyupi-git/animemachine:[0-9]+\.[0-9]+\.[0-9]+|$image:$version|g" -e 's|../torrent-collector.yaml|./torrent-collector.yaml|g' "$file" > "$file.tmp"
+  sed -E -e "s|ghcr.io/kyupi-git/animemachine:[0-9]+\.[0-9]+\.[0-9]+|$image:$version|g" "$file" > "$file.tmp"
   mv "$file.tmp" "$file"
 done
 printf 'Image archive: %s\nCompose bundle: %s\n' "$archive" "$bundle"

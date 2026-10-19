@@ -1,51 +1,13 @@
+# Choose one deployment and keep this directory when updating. No .env is required.
 name: animemachine
 
 services:
-  qbt-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.0}
-    environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
-      ANM_QBT_WEB_USERNAME: "${ANM_QBT_WEB_USERNAME:-admin}"
-      ANM_QBT_WEB_PASSWORD: "${ANM_QBT_WEB_PASSWORD:-}"
-      ANM_QBT_LIBRARY_DIR: /Library
-      ANM_ANI_RSS_MEDIA_DIR: /Media
-      ANM_INCOMPLETE_DIR: /downloads/incomplete
-    command: ["qbt-bootstrap", "--config-dir", "/QbtConfig"]
-    volumes:
-      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig
-      - ${ANM_LIBRARY_DIR:-./library}:/Library
-      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media
-      - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
-    restart: "no"
-    security_opt: [no-new-privileges:true]
-
-  ani-rss-bootstrap:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.0}
-    depends_on:
-      qbt-bootstrap:
-        condition: service_completed_successfully
-    environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
-      ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
-      ANM_ANI_RSS_API_KEY: "${ANM_ANI_RSS_API_KEY:-}"
-      ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
-      ANM_QBT_API_KEY_FILE: /QbtConfig/.animemachine/api-key
-    command: ["ani-rss-bootstrap", "--config-dir", "/AniRssConfig"]
-    volumes:
-      - ${ANM_CONFIG_DIR:-./config}/ani-rss:/AniRssConfig
-      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig:ro
-    restart: "no"
-    security_opt: [no-new-privileges:true]
-
   qbittorrent:
+    depends_on:
+      animemachine:
+        condition: service_healthy
     image: ${QBITTORRENT_IMAGE:-lscr.io/linuxserver/qbittorrent:5.2.3}
     restart: unless-stopped
-    depends_on:
-      qbt-bootstrap:
-        condition: service_completed_successfully
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -64,13 +26,13 @@ services:
     security_opt: [no-new-privileges:true]
 
   ani-rss:
-    image: ${ANI_RSS_IMAGE:-ghcr.io/wushuo894/ani-rss:v3.2.51}
-    restart: unless-stopped
     depends_on:
-      ani-rss-bootstrap:
-        condition: service_completed_successfully
+      animemachine:
+        condition: service_healthy
       qbittorrent:
         condition: service_started
+    image: ${ANI_RSS_IMAGE:-ghcr.io/wushuo894/ani-rss:v3.2.51}
+    restart: unless-stopped
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -86,16 +48,13 @@ services:
     security_opt: [no-new-privileges:true]
 
   animemachine:
-    depends_on:
-      qbt-bootstrap:
-        condition: service_completed_successfully
-      ani-rss-bootstrap:
-        condition: service_completed_successfully
-      qbittorrent:
-        condition: service_started
-      ani-rss:
-        condition: service_started
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.0}
+    healthcheck:
+      test: ["CMD", "python", "-m", "animemachine", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.1}
     restart: unless-stopped
     init: true
     environment:
@@ -110,11 +69,14 @@ services:
       ANM_INCOMPLETE_DIR: /downloads/incomplete
       ANM_MANAGED_QBITTORRENT_URL: http://qbittorrent:8080
       ANM_QBT_API_KEY: "${ANM_QBT_API_KEY:-}"
+      ANM_QBT_WEB_USERNAME: "${ANM_QBT_WEB_USERNAME:-admin}"
+      ANM_QBT_WEB_PASSWORD: "${ANM_QBT_WEB_PASSWORD:-}"
       ANM_QBT_API_KEY_FILE: /QbtConfig/.animemachine/api-key
       ANM_ANI_RSS_MEDIA_DIR: /Media
       ANM_EXTERNAL_LIBRARY_DIR: /External
       ANM_MANAGED_QBT: "true"
       ANM_MANAGED_ANI_RSS: "true"
+      ANM_MANAGED_MEDIA_DIR: /ManagedMedia
       ANM_SUBMISSION_ENABLED: "true"
       ANM_WEB_PORT: "8787"
       ANM_BIND_ADDRESS: "0.0.0.0"
@@ -134,8 +96,8 @@ services:
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,qbittorrent,ani-rss}
     volumes:
       - ${ANM_CONFIG_DIR:-./config}:/Config
-      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig:ro
-      - ${ANM_CONFIG_DIR:-./config}/ani-rss:/AniRssConfig:ro
+      - ${ANM_CONFIG_DIR:-./config}/qbittorrent:/QbtConfig
+      - ${ANM_CONFIG_DIR:-./config}/ani-rss:/AniRssConfig
       - ${ANM_DATA_DIR:-./data}:/Data
       - ${ANM_IMPORTS_DIR:-./imports}:/Imports:ro
       - ${ANM_TORRENT_POOL_DIR:-./torrents}:/Torrents:ro
@@ -143,12 +105,16 @@ services:
       - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
       - ${ANM_EXTERNAL_LIBRARY_DIR:-./external/read-only}:/External:ro
       - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media:ro
+      - ${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/ManagedMedia
     ports:
       - ${ANM_BIND_ADDRESS:-0.0.0.0}:${ANM_WEB_PORT:-8787}:8787
     security_opt: [no-new-privileges:true]
 
   torrent-collector:
-    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.0}
+    depends_on:
+      animemachine:
+        condition: service_healthy
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.1}
     restart: unless-stopped
     init: true
     environment:

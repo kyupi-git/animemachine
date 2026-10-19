@@ -32,7 +32,8 @@ class WebContractTests(unittest.TestCase):
             database = root / "catalog.sqlite3"
             with contextlib.closing(sqlite3.connect(database)) as db, db:
                 db.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT)")
-            handler = service.make_handler(database, ConfigStore(root / "config.json", service.EXAMPLE_CONFIG),
+            config_store = ConfigStore(root / "config.json", service.EXAMPLE_CONFIG)
+            handler = service.make_handler(database, config_store,
                                            submission_enabled=False, start_warmup=False)
             server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -50,6 +51,28 @@ class WebContractTests(unittest.TestCase):
                         self.assertEqual({"error": "connection_failed", "errorType": "ConnectError"}, json.load(response))
                 with urllib.request.urlopen(base + "/api/auth/session", timeout=5) as response:
                     self.assertEqual(200, response.status)
+                for kind, component, adapter in (("qbittorrent", "downloadClient", service.connectivity),
+                                                  ("ani-rss", "aniRss", service.ani_rss)):
+                    config = config_store.read()
+                    config["components"][component]["endpoint"] = "http://saved-nas:7789"
+                    config_store.write(config)
+                    for endpoint, expected in (("http://new-nas:7789", False), ("http://saved-nas:7789/", True)):
+                        request = urllib.request.Request(base + "/api/connections/test", method="POST",
+                            headers={"Content-Type": "application/json"},
+                            data=json.dumps({"kind": kind, "endpoint": endpoint}).encode())
+                        with mock.patch.object(adapter, "probe", return_value={"reachable": True}) as probe:
+                            with urllib.request.urlopen(request, timeout=5) as response:
+                                self.assertEqual(200, response.status)
+                            self.assertEqual(expected, probe.call_args.kwargs["use_saved_key"])
+                request = urllib.request.Request(base + "/api/connections/test", method="POST",
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps({"kind": "qbittorrent", "endpoint": "file:///private"}).encode())
+                with mock.patch.object(service.connectivity, "probe") as probe:
+                    with self.assertRaises(urllib.error.HTTPError) as failed:
+                        urllib.request.urlopen(request, timeout=5)
+                    with failed.exception as response:
+                        self.assertEqual("invalid_service_endpoint", json.load(response)["error"])
+                    probe.assert_not_called()
             finally:
                 server.shutdown()
                 server.server_close()

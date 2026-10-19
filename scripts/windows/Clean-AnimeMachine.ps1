@@ -1,28 +1,19 @@
 [CmdletBinding()]
 param([switch]$IncludeBuilds)
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$releaseLayout = (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'app\animemachine') -PathType Container) -or
-    (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'packages') -PathType Container)
-$root = if ($releaseLayout) {
-    $PSScriptRoot.TrimEnd('\')
-} else {
-    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..')).TrimEnd('\')
-}
-$directories = @('.pytest_cache','build')
-if ($IncludeBuilds) { $directories += 'dist' }
-foreach ($relative in $directories) {
-    $target = [IO.Path]::GetFullPath((Join-Path $root $relative))
-    if ($target.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $target)) {
-        Remove-Item -LiteralPath $target -Recurse -Force
-    }
-}
-Get-ChildItem -LiteralPath $root -Directory -Recurse -Force |
-    Where-Object { $_.Name -in @('__pycache__','.mypy_cache','.ruff_cache') -and $_.FullName -notlike "$root\.local\state\*" } |
-    Sort-Object FullName -Descending | Remove-Item -Recurse -Force
-Get-ChildItem -LiteralPath $root -Directory -Recurse -Force -Filter '*.egg-info' |
-    Sort-Object FullName -Descending | Remove-Item -Recurse -Force
-Get-ChildItem -LiteralPath $root -File -Recurse -Force |
-    Where-Object { $_.Extension -in @('.pyc','.pyo') -or $_.Name -match '\.(tmp|part)$' } |
-    Where-Object { $_.FullName -notlike "$root\.local\state\*" } |
-    Remove-Item -Force
-Write-Host 'Temporary files were removed. Databases, cover cache, credentials and history were preserved.'
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$releaseLayout = Test-Path -LiteralPath (Join-Path $root 'VERSION') -PathType Leaf
+if (-not $releaseLayout) { throw 'Application directory not found.' }
+$python = if (Test-Path -LiteralPath (Join-Path $root 'runtime/python.exe')) {
+    Join-Path $root 'runtime/python.exe'
+} elseif (Test-Path -LiteralPath (Join-Path $root '.venv/Scripts/python.exe')) {
+    Join-Path $root '.venv/Scripts/python.exe'
+} else { (Get-Command python -ErrorAction Stop).Source }
+$cleaner = if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'clean_runtime.py')) {
+    Join-Path $PSScriptRoot 'clean_runtime.py'
+} else { Join-Path $root 'scripts/clean_runtime.py' }
+$arguments = @($cleaner, '--root', $root)
+if ($IncludeBuilds) { $arguments += '--include-builds' }
+& $python @arguments
+if ($LASTEXITCODE -ne 0) { throw 'Application cache cleanup failed.' }

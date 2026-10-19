@@ -231,12 +231,6 @@
                 <option value="all" data-i18n="all">全部</option>
               </select></label
             >
-            <label class="check inline-check"
-              ><input id="selectPage" type="checkbox" /><span
-                data-i18n="selectPage"
-                >勾选本页可下载作品</span
-              ></label
-            >
           </div>
         </div>
         <div id="results" class="results cards" aria-live="polite"></div>
@@ -272,6 +266,7 @@
             <button id="radarCatchup" class="text-button radar-button" type="button" data-icon="play" data-i18n="catchup">一键继续观看</button>
             <button id="radarSync" class="text-button radar-button" type="button" data-i18n-title="radarSync" data-i18n-aria-label="radarSync"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1a8 8 0 0 1 13.2 3.2M17.9 17.9A8 8 0 0 1 4.7 14.7"/></svg><span data-i18n="radarSyncShort">同步状态</span></button>
             <button id="radarSearch" class="text-button radar-button" type="button" data-i18n-title="radarSearch" data-i18n-aria-label="radarSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span data-i18n="radarSearchShort">检索资源</span></button>
+            <button id="radarHidden" class="text-button radar-button" type="button" data-i18n-title="hiddenWorks" data-i18n-aria-label="hiddenWorks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10 5h2c6 0 10 7 10 7a20 20 0 0 1-4 4M6 6a20 20 0 0 0-4 6s4 7 10 7c2 0 4-.6 5-1.5M10 10a3 3 0 0 0 4 4"/></svg><span data-i18n="hiddenWorks">已隐藏作品</span></button>
             <button id="radarPlaceholders" class="text-button radar-button" type="button" data-admin-only data-i18n-title="createPlaceholders" data-i18n-aria-label="createPlaceholders"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3zM12 11v6M9 14h6"/></svg><span data-i18n="radarFoldersShort">建立目录</span></button>
           </div>
         </div>
@@ -287,10 +282,22 @@
         </div>
       </div>
     </dialog>
+    <dialog id="hiddenWorksDialog" aria-labelledby="hiddenWorksTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <div class="hidden-works-shell">
+        <h2 id="hiddenWorksTitle" data-i18n="hiddenWorks">已隐藏作品</h2>
+        <p class="muted" data-i18n="hiddenWorksHint">隐藏仅影响当前账号的列表和一键继续观看，原订阅与下载保持不变。</p>
+        <input id="hiddenWorksSearch" type="search" data-i18n-placeholder="findRecords" placeholder="搜索记录" aria-label="Search hidden works" data-i18n-aria-label="hiddenWorks" />
+        <p id="hiddenWorksStatus" class="muted" role="status" aria-live="polite"></p>
+        <div id="hiddenWorksList" class="hidden-works-list"></div>
+        <div class="pager"><button id="hiddenWorksPrevious" class="text-button" type="button" data-i18n="previous">上一页</button><span id="hiddenWorksCount"></span><button id="hiddenWorksNext" class="text-button" type="button" data-i18n="next">下一页</button></div>
+      </div>
+    </dialog>
     <dialog id="catchupDialog" aria-labelledby="catchupTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <h2 id="catchupTitle" data-i18n="catchup">一键继续观看</h2>
       <p id="catchupStatus" class="muted" role="status" aria-live="polite"></p>
+      <p id="catchupSelectionHint" class="muted" data-i18n="catchupSelectHint" hidden>勾选要看的作品，拖动调整播放顺序。</p>
       <div id="catchupList"></div>
       <div id="catchupPlayers" class="playback-actions"></div>
     </dialog>
@@ -674,20 +681,13 @@
           </div>
         </section>
         <section class="tab-panel" data-panel="logs" id="settingsPanel-logs" role="tabpanel" aria-labelledby="settingsTab-logs" tabindex="0">
-          <p class="muted" data-i18n="logsHint">近期运行状态、警告和错误。</p>
-          <button
-            id="refreshLogs" data-icon="refresh"
-            type="button"
-            class="tool dark-tool"
-            data-i18n="refresh"
-          >
-            刷新
-          </button>
+          <div class="records-toolbar"><p class="muted" data-i18n="logsHint">近期运行状态、警告和错误。</p><button id="refreshLogs" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button></div>
+          <div class="records-filters"><input id="logSearch" type="search" data-i18n-placeholder="findRecords" placeholder="搜索记录" aria-label="Search logs" data-i18n-aria-label="findRecords" /><select id="logFilter" aria-label="Log filter" data-i18n-aria-label="logsTab"><option value="all" data-i18n="logAll">全部记录</option><option value="problems" data-i18n="logProblems">警告与错误</option></select></div>
           <div id="logList" class="log-list"></div>
         </section>
         <section class="tab-panel" data-panel="history" id="settingsPanel-history" role="tabpanel" aria-labelledby="settingsTab-history" tabindex="0">
-          <p class="muted" data-i18n="historyHint">查看文件移动、改名和移除记录，恢复可撤销的操作。</p>
-          <button id="refreshHistory" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button>
+          <div class="records-toolbar"><p class="muted" data-i18n="historyHint">查看文件建立、移动、改名和移除记录，恢复可撤销的操作。</p><button id="refreshHistory" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="refresh">刷新</button></div>
+          <div class="records-filters"><input id="historySearch" type="search" data-i18n-placeholder="findRecords" placeholder="搜索记录" aria-label="Search history" data-i18n-aria-label="findRecords" /></div>
           <div id="historyList" class="log-list"></div>
         </section>
         <section class="tab-panel update-panel" data-panel="updates" id="settingsPanel-updates" role="tabpanel" aria-labelledby="settingsTab-updates" tabindex="0">

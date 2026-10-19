@@ -69,11 +69,12 @@ try {
     [IO.File]::WriteAllText((Join-Path $release 'imports\README.txt'), 'Place a verified Bangumi Archive dump-*.zip here, then start AnimeMachine.', [Text.UTF8Encoding]::new($false))
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AnimeMachine.ps1') -Destination (Join-Path $release 'AnimeMachine.ps1')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AnimeMachine.cmd') -Destination (Join-Path $release 'AnimeMachine.cmd')
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Clean-AnimeMachine.ps1') -Destination (Join-Path $release 'Clean-AnimeMachine.ps1')
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Clean-AnimeMachine.cmd') -Destination (Join-Path $release 'Clean-AnimeMachine.cmd')
-    foreach ($name in @('AnimeMachine.sh','AnimeMachine-Linux.sh','AnimeMachine-macOS.command','Clean-AnimeMachine.sh')) {
-        Copy-Item -LiteralPath (Join-Path $root "scripts\unix\$name") -Destination (Join-Path $release $name)
+    $maintenance = Join-Path $release 'tools/maintenance'
+    New-Item -ItemType Directory -Force -Path $maintenance | Out-Null
+    foreach ($name in @('Clean-AnimeMachine.ps1','Clean-AnimeMachine.cmd')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $maintenance
     }
+    Copy-Item -LiteralPath (Join-Path $root 'scripts/clean_runtime.py') -Destination $maintenance
     Copy-Item -LiteralPath (Join-Path $root 'deploy\local\.env.local.example') -Destination (Join-Path $release '.env.local.example')
     foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','CHANGELOG.en.md','CHANGELOG.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
         Copy-Item -LiteralPath (Join-Path $root $name) -Destination $release

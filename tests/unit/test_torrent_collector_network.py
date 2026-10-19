@@ -9,6 +9,18 @@ from animemachine.torrents import collector
 
 
 class TorrentCollectorNetworkTests(unittest.TestCase):
+    def test_dmhy_download_uses_actual_host_and_path(self) -> None:
+        url = "https://dl.dmhy.org/2026/example.torrent?download=1"
+        with mock.patch.object(collector, "get_text", return_value=(f'<a href="{url}">Torrent</a>', "")):
+            self.assertEqual(url, collector.resolve_dmhy_download("https://share.dmhy.org/topics/view/1.html"))
+        for invalid in ("https://evil.invalid/x?source=dl.dmhy.org&name=x.torrent",
+                        "https://dl.dmhy.org.evil.invalid/x.torrent", "https://evil.invalid/x.torrent",
+                        "https://dl.dmhy.org@evil.invalid/x.torrent", "javascript:dl.dmhy.org/x.torrent"):
+            with self.subTest(url=invalid), \
+                    mock.patch.object(collector, "get_text", return_value=(f'<a href="{invalid}">Torrent</a>', "")), \
+                    self.assertRaisesRegex(ValueError, "no .torrent link"):
+                collector.resolve_dmhy_download("https://share.dmhy.org/topics/view/1.html")
+
     def test_standard_http_uses_shared_adaptive_transport(self) -> None:
         request = httpx.Request("GET", "https://example.invalid/feed")
         response = httpx.Response(200, content=b"ok", headers={"Content-Type": "text/plain"}, request=request)

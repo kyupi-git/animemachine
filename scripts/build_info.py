@@ -54,7 +54,9 @@ def check_repository_version(version: str) -> None:
         ROOT / "README.md",
         ROOT / "README.en.md",
         ROOT / "README.ja.md",
-        ROOT / "deploy" / "compose" / "torrent-collector.yaml",
+        *sorted((ROOT / "docs").glob("reference*.md")),
+        ROOT / "deploy" / "compose" / "compose.yaml",
+        ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml",
         *(ROOT / "deploy" / "compose").glob("[0-9][0-9]-*/compose.yaml"),
         *(ROOT / "deploy" / "compose").glob("[0-9][0-9]-*/.env.example"),
     ]

@@ -13,6 +13,36 @@ from animemachine.integrations import subtitle_service
 
 
 class SubtitleServiceTests(unittest.TestCase):
+    def test_language_cannot_create_a_path(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = {"deployment": {"libraryUncRoot": str(root)}}
+            for language in ("../../escape", "zh\\..\\escape", "zh:stream", "zh\ncn"):
+                with self.subTest(language=language), mock.patch.object(subtitle_service, "_download") as download, \
+                        self.assertRaisesRegex(ValueError, "invalid subtitle language"):
+                    subtitle_service.apply(1, str(root), {"language": language}, config)
+                download.assert_not_called()
+
+    def test_install_does_not_follow_existing_subtitle_link(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw); root = base / "library"; root.mkdir()
+            (root / "Show Ep01.mkv").write_bytes(b"video")
+            loose = root / "subtitle 01.ass"; loose.write_bytes(b"new subtitles")
+            outside = base / "outside.ass"; outside.write_bytes(b"keep")
+            target = root / "Show Ep01.zh-cn.ass"
+            try:
+                target.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable in this environment")
+            config = {"deployment": {"libraryUncRoot": str(root)}}
+            with mock.patch.dict(os.environ, {"ANM_STATE_DIR": str(base / "state")}):
+                result = subtitle_service.apply(1, str(root), {
+                    "provider": "local", "providerId": str(loose), "language": "zh-cn"}, config)
+            self.assertEqual(1, result["installed"])
+            self.assertEqual(b"keep", outside.read_bytes())
+            self.assertEqual(b"new subtitles", target.read_bytes())
+            self.assertFalse(target.is_symlink())
+
     def test_titles_reads_current_catalog_schema(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             db_path = Path(raw) / "catalog.sqlite3"

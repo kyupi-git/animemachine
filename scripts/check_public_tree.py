@@ -15,7 +15,7 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 SKIP_DIRS = {".git", ".venv", "dist", "build", "__pycache__", ".codex", ".agents"}
-SOURCE_PRIVATE_DIRS = {".local", ".anm-history", "archive", "audit", "state"}
+SOURCE_PRIVATE_DIRS = {".local", ".playwright-mcp", ".anm-history", "archive", "audit", "state"}
 SOURCE_PRIVATE_FILES = {"AGENTS.md", "config.json"}
 SOURCE_PRIVATE_PREFIXES = {"deploy/private", "tools/private-library"}
 PRIVATE_LAUNCHER_PATTERNS = ("start-codex*.cmd", "resume-codex*.cmd")

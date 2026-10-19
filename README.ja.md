@@ -34,7 +34,7 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 | Windows 10 / 11 | [Releases](https://github.com/kyupi-git/animemachine/releases/latest) から Windows 用 ZIP をダウンロードし、展開して `AnimeMachine.cmd` をダブルクリックします。Python は同梱されています。 |
 | Linux | Python 3.11 以降をインストールし、対応する Linux 用パッケージを展開して `./AnimeMachine-Linux.sh` を実行します。 |
 | macOS | Python 3.11 以降をインストールし、対応する macOS 用パッケージを展開して `AnimeMachine-macOS.command` を開きます。 |
-| NAS / Docker | [Compose 構成](docs/guide.ja.md#docker)を選び、`compose.yaml` を保存して `docker compose up -d` を実行します。 |
+| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。既存サービスを使う場合は[別の構成](docs/guide.ja.md#docker)を選べます。 |
 
 起動後は **<http://localhost:8787>** を開きます。別の機器から使う場合は、`localhost` を AnimeMachine が動いているパソコンや NAS のアドレスに置き換えてください。初回のアカウントと自動生成されたパスワードは、起動ウィンドウまたはコンテナのログに表示されます。
 

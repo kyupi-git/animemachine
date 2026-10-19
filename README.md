@@ -34,7 +34,7 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 | Windows 10 / 11 | 从 [Releases](https://github.com/kyupi-git/animemachine/releases/latest) 下载 Windows ZIP，解压后双击 `AnimeMachine.cmd`。发布包包含 Python 运行环境。 |
 | Linux | 安装 Python 3.11 或更新版本，下载对应的 Linux 发布包，解压后运行 `./AnimeMachine-Linux.sh`。 |
 | macOS | 安装 Python 3.11 或更新版本，下载对应的 macOS 发布包，解压后打开 `AnimeMachine-macOS.command`。 |
-| NAS / Docker | 选择 [Compose 方案](docs/guide.md#docker)，保存其 `compose.yaml`，执行 `docker compose up -d`。 |
+| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，在文件所在目录执行 `docker compose up -d`。已有服务可选[其它方案](docs/guide.md#docker)。 |
 
 启动后打开 **<http://localhost:8787>**。从其他设备访问时，将 `localhost` 替换为运行 AnimeMachine 的电脑或 NAS 地址。初始账户和随机密码显示在启动窗口或容器日志中。
 

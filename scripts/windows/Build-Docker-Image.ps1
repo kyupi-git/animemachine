@@ -36,18 +36,16 @@ if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse 
 New-Item -ItemType Directory -Force -Path $bundle | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\04-full-stack\compose.yaml') -Destination $bundle
 Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\04-full-stack\.env.example') -Destination $bundle
-Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\torrent-collector.yaml') -Destination $bundle
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Initialize-AnimeMachine.ps1') -Destination $bundle
-Copy-Item -LiteralPath (Join-Path $root 'scripts\unix\initialize-animemachine.sh') -Destination $bundle
 foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','CHANGELOG.en.md','CHANGELOG.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
     Copy-Item -LiteralPath (Join-Path $root $name) -Destination $bundle
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $bundle 'docs') | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $root 'docs') -Filter '*.md' -File |
     Copy-Item -Destination (Join-Path $bundle 'docs')
-Copy-Item -LiteralPath (Join-Path $root 'docs\images') -Destination (Join-Path $bundle 'docs\images') -Recurse
+& $python (Join-Path $root 'scripts/copy_document_images.py') (Join-Path $root 'docs/images') (Join-Path $bundle 'docs/images')
+if ($LASTEXITCODE) { throw 'Unable to copy documentation images.' }
 foreach ($file in @((Join-Path $bundle 'compose.yaml'), (Join-Path $bundle '.env.example'))) {
-    $text = [regex]::Replace([IO.File]::ReadAllText($file), 'ghcr\.io/kyupi-git/animemachine:\d+\.\d+\.\d+', $tag).Replace('../torrent-collector.yaml', './torrent-collector.yaml')
+    $text = [regex]::Replace([IO.File]::ReadAllText($file), 'ghcr\.io/kyupi-git/animemachine:\d+\.\d+\.\d+', $tag)
     [IO.File]::WriteAllText($file, $text, [Text.UTF8Encoding]::new($false))
 }
 Write-Host "Image archive: $archive"

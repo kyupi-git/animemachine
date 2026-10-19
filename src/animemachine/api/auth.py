@@ -68,6 +68,10 @@ class Store:
                 expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL,
                 FOREIGN KEY(user_id) REFERENCES auth_user(id) ON DELETE CASCADE
               );
+              CREATE TABLE IF NOT EXISTS hidden_work(
+                user_id INTEGER NOT NULL,bgm_id INTEGER NOT NULL,hidden_at INTEGER NOT NULL,
+                PRIMARY KEY(user_id,bgm_id)
+              );
             """)
             count = int(db.execute("SELECT COUNT(*) FROM auth_user").fetchone()[0])
         if enabled and count == 0:
@@ -78,6 +82,20 @@ class Store:
     @staticmethod
     def _digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def hidden_works(self, user_id: int) -> list[int]:
+        with contextlib.closing(sqlite3.connect(self.path)) as db:
+            return [int(row[0]) for row in db.execute(
+                "SELECT bgm_id FROM hidden_work WHERE user_id=? ORDER BY hidden_at DESC,bgm_id", (user_id,))]
+
+    def set_hidden(self, user_id: int, bgm_id: int, hidden: bool) -> None:
+        if type(hidden) is not bool or type(bgm_id) is not int or not 0 < bgm_id < 10**12:
+            raise ValueError("invalid_hidden_work")
+        with contextlib.closing(sqlite3.connect(self.path)) as db, db:
+            if hidden:
+                db.execute("INSERT OR IGNORE INTO hidden_work VALUES(?,?,?)", (user_id, bgm_id, int(time.time())))
+            else:
+                db.execute("DELETE FROM hidden_work WHERE user_id=? AND bgm_id=?", (user_id, bgm_id))
 
     def create_user(self, username: str, password: str, role: str = "user") -> dict[str, Any]:
         username = username.strip()

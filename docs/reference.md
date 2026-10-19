@@ -21,7 +21,7 @@ Compose 常用变量如下。路径变量指定**宿主机目录**，容器内�
 
 | 变量 | 默认值 / 用途 |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.3.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.4.1` |
 | `ANM_LIBRARY_DIR` | `./library`，收藏库 |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`，Torrent 池 |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`，已有媒体 |
@@ -54,13 +54,15 @@ QBT_BIND_ADDRESS=0.0.0.0
 ANI_RSS_BIND_ADDRESS=0.0.0.0
 ```
 
-执行 `docker compose up -d`，然后用 `http://NAS地址:8080` 或 `http://NAS地址:7789` 登录。qBittorrent 的初始账户可在 `docker compose logs qbt-bootstrap` 中查看；Ani-RSS 默认账户为 `admin` / `admin`，登录后可在其安全设置中修改。
+执行 `docker compose up -d`，然后用 `http://NAS地址:8080` 或 `http://NAS地址:7789` 登录。qBittorrent 默认用户名为 `admin`，自动生成的密码可通过 `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` 查看；Ani-RSS 默认账户为 `admin` / `admin`，登录后可在其安全设置中修改。
 
 以上地址用于浏览器访问。Compose 内的服务连接使用 `http://qbittorrent:8080`、`http://ani-rss:7789`。连接宿主机服务可使用 `host.docker.internal`；Linux 自定义 Compose 需配置对应的 `host-gateway` 映射。
 
 ## 网络、代理与证书
 
 作品资料与封面会按连接健康情况选择官方来源、镜像和可用代理。当前线路及错误可在 **设置 → 诊断** 中查看；来源配置位于 **设置 → 连接 → 元数据网络与镜像**。
+
+完整组合由 AnimeMachine 在后台检查蜜柑首页、公开 RSS、Torrent 元数据和 Bangumi 公开资料，自动选择通过校验的来源，并定期检查官方来源是否恢复。已有订阅中的公开蜜柑地址随来源迁移，字幕组与进度保持不变。自行连接的 Ani-RSS 以及用户手动更改的来源不参与自动切换。设置了 Bangumi 令牌时保留官方 API，令牌不会发送给镜像。
 
 使用代理时，在环境文件中设置，例如：
 
@@ -82,7 +84,7 @@ Archive 导入支持官方 `dump-*.zip`。可通过设置页选取文件，也�
 
 定时检查采用 **UTC+8**：每周四 02:12 检查，上游未发布新版时于周五 02:12 补查一次，再进入下周周期。时区转换时以 UTC+8 为基准。任务进度与近期结果保存在运行状态中。
 
-资源采集器由完整 Compose 组合提供，也可使用[独立采集器配置](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.yaml)。来源、历史扫描、重试和代理参数见[高级环境示例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example)。采集器写入 Torrent 池，AnimeMachine 扫描其内容，再按用户确认的计划提交下载任务。
+资源采集器由完整 Compose 组合提供，也可使用[独立采集器配置](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/compose.yaml)。来源、历史扫描、重试和代理参数见[高级环境示例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/.env.example)。采集器写入 Torrent 池，AnimeMachine 扫描其内容，再按用户确认的计划提交下载任务。
 
 ## 数据文件与维护
 

@@ -44,13 +44,13 @@ macOS 打开 **`AnimeMachine-macOS.command`**。也可以在解压目录的终�
 
 先在 NAS 的应用中心启用 Docker / 容器管理，或在电脑上安装 [Docker](https://docs.docker.com/get-started/get-docker/)。使用 Docker Engine 24+、Docker Compose **2.20.3+**。
 
-根据现有服务选择配置：
+默认使用[完整组合](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，一次启动 AnimeMachine、qBittorrent、Ani-RSS 和资源采集器。已有服务时，从下表选择一个替代方案；01–04 是不同组合，选择其中一个即可。
 
 | 适用场景 | 配置文件 |
 | --- | --- |
 | 先浏览作品，接入已有媒体 | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/compose.yaml) |
 | 已经有 qBittorrent | [02 · 接入现有下载器](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/compose.yaml) |
-| 同时部署 qBittorrent | [03 · AnimeMachine + qBittorrent](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
+| 同时部署 qBittorrent | [03 · AnimeMachine + qBittorrent + 资源采集器](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
 | 同时部署下载器、Ani-RSS 和资源采集器 | [04 · 完整组合](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/compose.yaml) |
 
 1. 新建一个固定目录，例如 `animemachine`。
@@ -71,6 +71,8 @@ docker compose logs animemachine
 默认目录和服务连接会自动建立。03 / 04 自动配置 qBittorrent，04 同时完成 Ani-RSS 连接；选择 02 时，按[连接说明](#connections)填写已有下载器的信息。
 
 需要把媒体保存到指定磁盘时，在启动前按[目录设置](#folders)增加 `.env`。需要从其他电脑打开 qBittorrent 或 Ani-RSS 时，按[管理页面访问](reference.md#service-access)设置其访问地址。
+
+每种方案只需一个 `compose.yaml`，无需先运行初始化脚本或填写密钥。服务连接与账户在首次启动时自动建立，重启沿用已有设置。完整组合会检测蜜柑与公开作品资料的连接情况，优先使用官方来源，连接异常时选择可用备用来源。
 
 <a id="first-use"></a>
 
@@ -139,9 +141,11 @@ Docker 中填写程序看到的容器路径；例如默认收藏库是 `/Library
 
 雷达只在已有观看记录的作品旁显示续看进度。浅绿色标出已订阅或已有媒体作品中的待看新集；播放最新集或修正记录后更新，打开详情不会消除高亮。
 
+在作品的订阅菜单中选择 **隐藏作品**，可将它从当前账号的雷达、作品列表和新生成的续播列表中移除；订阅和下载继续运行。点击雷达顶部的 **已隐藏作品** 可搜索并还原，首页标题搜索也能找到已隐藏的作品。
+
 ### 一键继续观看
 
-在 **新作雷达** 中选择季度，点击 **一键继续观看**，确认集数后打开播放器。列表收录已订阅或已有媒体的 TV 动画，只加入可播放的集数；作品顺序沿用雷达排序，每部从上次播放的那一集开始，直到最新一集。首次观看则从最早可播放集开始。
+在 **新作雷达** 中选择季度，点击 **一键继续观看**，勾选要看的作品，再打开播放器。拖动作品行可调整顺序，播放列表只包含已勾选的作品，按从上到下的顺序播放；未勾选时播放按钮不可用。列表收录已订阅或已有媒体的 TV 动画，每部从上次播放的那一集开始，直到最新可播放集；首次观看则从最早可播放集开始。
 
 ![一键继续观看：确认本季可播放的集数与续看位置](images/continue-watching.png)
 
@@ -157,7 +161,7 @@ Docker 中填写程序看到的容器路径；例如默认收藏库是 `/Library
 
 ### 补齐收藏与下载
 
-连接 qBittorrent 后，可在作品详情点击 **检索 Torrent**，查看检索进度并选择资源。检索使用内置采集器，结果沿用计划预览与下载确认流程。
+连接 qBittorrent 后，在作品详情点击 **检索 Torrent**。检索完成后会定位到候选资源：选择一项，再点击 **预览下载计划**，核对文件和保存位置后提交。已找到但未确认作品匹配的资源会说明原因，暂不能提交下载。
 
 已有 `.torrent` 文件放入 **Torrent 池**目录。使用完整 Compose 组合时，资源采集器会在后台补充这个目录；采集参数见[配置示例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example)。
 
@@ -186,7 +190,7 @@ Docker 中填写程序看到的容器路径；例如默认收藏库是 `/Library
 
 期间暂停对本地库的探测、扫描、核验、播放和写入，页面继续显示已有记录；时段结束后恢复访问。Ani-RSS 和其它路径的外部库继续运行。若其它程序或媒体库使用同一块硬盘，它们仍可能唤醒硬盘。
 
-配置、数据库和日志也建议保存在其它磁盘。Docker 部署请更新至 0.3.4 镜像，以同时应用启动阶段的休眠保护。
+配置、数据库和日志也建议保存在其它磁盘，以便媒体磁盘在休眠时段保持空闲。
 
 ### 作品关系图
 
@@ -266,6 +270,10 @@ ANM_LIBRARY_DIR=/srv/anime
 <a id="maintenance"></a>
 
 ## 5. 设置、更新与备份
+
+**设置 → 历史记录**可按目录搜索建立、移动、改名和移除记录，并还原可撤销的操作。**设置 → 日志**可只看警告和错误，需要进一步检查时再展开技术详情。
+
+更新时保留原来的部署目录和数据，在同一目录替换 `compose.yaml`，执行 `docker compose up -d --remove-orphans`。该命令会移除旧版初始化容器，已有配置和媒体继续使用。
 
 语言、主题、布局和浏览筛选可以按自己的习惯调整。管理员在设置中管理目录、连接、资源规则和用户；普通账户用于浏览与播放。
 

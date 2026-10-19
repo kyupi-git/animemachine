@@ -1,8 +1,15 @@
+# Choose one deployment and keep this directory when updating. No .env is required.
 name: animemachine
 
 services:
   animemachine:
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.0}
+    healthcheck:
+      test: ["CMD", "python", "-m", "animemachine", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.1}
     restart: unless-stopped
     init: true
     environment:

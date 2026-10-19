@@ -34,7 +34,7 @@ Select a launch method for your device. Detailed steps are in the [setup and usa
 | Windows 10 / 11 | Download the Windows ZIP from [Releases](https://github.com/kyupi-git/animemachine/releases/latest), extract it, and double-click `AnimeMachine.cmd`. Python is included. |
 | Linux | Install Python 3.11 or later, download and extract the matching Linux release, then run `./AnimeMachine-Linux.sh`. |
 | macOS | Install Python 3.11 or later, download and extract the matching macOS release, then open `AnimeMachine-macOS.command`. |
-| NAS / Docker | Choose a [Compose setup](docs/guide.en.md#docker). Save its `compose.yaml` and run `docker compose up -d`. |
+| NAS / Docker | Download the [full-stack compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) and run `docker compose up -d` in its directory. If you already run some services, choose an [alternative](docs/guide.en.md#docker). |
 
 After launch, open **<http://localhost:8787>**. From another device, replace `localhost` with the address of the computer or NAS running AnimeMachine. Your initial account and randomly generated password appear in the launch window or container logs.
 

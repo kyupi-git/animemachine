@@ -92,7 +92,7 @@ class CliBootstrapTests(unittest.TestCase):
                 self.assertEqual("true", os.environ["ANM_AUTH_ENABLED"])
                 self.assertTrue((state / "auth" / "initial-admin.txt").is_file())
 
-    def test_remote_zero_config_reuses_and_reports_saved_admin_after_bootstrap(self):
+    def test_restart_reports_account_without_repeating_saved_password(self):
         from animemachine.api import auth
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"
@@ -108,9 +108,14 @@ class CliBootstrapTests(unittest.TestCase):
             self.assertIsNotNone(second)
             assert second is not None
             self.assertEqual(first["username"], second["username"])
-            self.assertEqual(first["password"], second["password"])
+            self.assertNotIn("password", second)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                anm_cli._print_initial_credentials(second)
+            self.assertNotIn(first["password"], output.getvalue())
+            self.assertIn("initial-admin.txt", output.getvalue())
 
-    def test_remote_first_start_reports_deployment_supplied_admin_password(self):
+    def test_supplied_admin_password_is_not_printed(self):
         with tempfile.TemporaryDirectory() as raw:
             state = Path(raw) / "state"
             environment = {
@@ -120,8 +125,9 @@ class CliBootstrapTests(unittest.TestCase):
             }
             with mock.patch.object(anm_cli, "STATE", state), mock.patch.dict(os.environ, environment, clear=True):
                 values = anm_cli.configure_web_security("0.0.0.0", 8787)
+                self.assertEqual("deployment-password-123", os.environ["ANM_ADMIN_PASSWORD"])
             self.assertEqual("operator", values["username"] if values else None)
-            self.assertEqual("deployment-password-123", values["password"] if values else None)
+            self.assertNotIn("password", values)
 
     def test_managed_qbt_bootstrap_generates_stable_zero_config_secrets(self):
         with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {}, clear=True):

@@ -25,6 +25,7 @@
 **/edge-debug-profile/
 *.lnk
 /.local/
+/.playwright-mcp/
 /.venv/
 **/*.pid.json
 **/*.py[cod]

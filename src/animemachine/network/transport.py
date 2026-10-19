@@ -470,7 +470,7 @@ def _request_headers(headers: dict[str, str] | None, *, allow_credentials: bool)
 @contextlib.contextmanager
 def stream(method: str, url: str, *, headers: dict[str, str] | None = None, content: bytes | None = None,
            timeout: float | httpx.Timeout = 15, allow_credentials: bool = False,
-           follow_redirects: bool | None = None):
+           follow_redirects: bool | None = None, proxy_url: str | None = None):
     """Open a streaming response, falling back across live proxy/system/direct routes before yielding."""
     values = _request_headers(headers, allow_credentials=allow_credentials)
     local_target = _local_target(url)
@@ -478,10 +478,15 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
         connectivity.note_environment(network_environment_id())
     needs_recovery_permit = connectivity.is_offline() and not connectivity.recovery_allowed() and not local_target
     recovery_context = connectivity.opportunistic_recovery() if needs_recovery_permit else contextlib.nullcontext(False)
+    def remember(route, *, ok):
+        if proxy_url is None:
+            _remember_route(url, route, ok=ok)
+
     with recovery_context as opportunistic:
         if connectivity.is_offline() and not connectivity.recovery_allowed() and not local_target:
             raise connectivity.OfflineModeError("remote network requests are paused while AnimeMachine is in local mode")
-        routes = _route_candidates(url)
+        routes = (_route_candidates(url) if proxy_url is None else
+                  [{"mode": "environment_proxy" if proxy_url else "direct", "proxy": proxy_url or None}])
         attempts: list[dict[str, Any]] = []
         last_error: Exception | None = None
         with host_slot(url):
@@ -490,12 +495,14 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
                 if follow_redirects is not None:
                     kwargs["follow_redirects"] = follow_redirects
                 try:
-                    manager = client(url, route_mode=str(route["mode"])).stream(method, url, **kwargs)
+                    selected_client = (client(url, route_mode=str(route["mode"])) if proxy_url is None
+                                       else _client_for(proxy_url or None, proxy_revision()))
+                    manager = selected_client.stream(method, url, **kwargs)
                     response = manager.__enter__()
                 except (httpx.RequestError, httpx.InvalidURL, OSError, TimeoutError, ValueError, ImportError) as exc:
                     last_error = exc
                     attempts.append({"mode": str(route["mode"]), "status": "", "error": type(exc).__name__})
-                    _remember_route(url, route, ok=False)
+                    remember(route, ok=False)
                     continue
                 status = int(response.status_code)
                 if not local_target and status < 500 and status != 407 and (
@@ -504,7 +511,7 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
                     connectivity.note_online_activity()
                 if status in _ROUTE_FALLBACK_STATUS and index + 1 < len(routes):
                     attempts.append({"mode": str(route["mode"]), "status": status, "error": f"HTTP {status}"})
-                    _remember_route(url, route, ok=False)
+                    remember(route, ok=False)
                     manager.__exit__(None, None, None)
                     continue
                 route_info = {**route, "proxy": _safe_proxy(route.get("proxy"))}
@@ -515,15 +522,15 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
                     extensions["animemachine_proxy_route"] = route_info
                     extensions["animemachine_route_attempts"] = list(attempts)
                 if status in _ROUTE_FALLBACK_STATUS:
-                    _remember_route(url, route, ok=False)
+                    remember(route, ok=False)
                 try:
                     yield response
                 except (httpx.RequestError, OSError, TimeoutError):
-                    _remember_route(url, route, ok=False)
+                    remember(route, ok=False)
                     raise
                 else:
                     if status not in _ROUTE_FALLBACK_STATUS:
-                        _remember_route(url, route, ok=True)
+                        remember(route, ok=True)
                 finally:
                     manager.__exit__(None, None, None)
                 return
@@ -534,11 +541,12 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
 
 def request(method: str, url: str, *, headers: dict[str, str] | None = None, content: bytes | None = None,
             timeout: float | httpx.Timeout = 15, max_bytes: int = 16 * 1024 * 1024,
-            allow_credentials: bool = False) -> httpx.Response:
+            allow_credentials: bool = False, proxy_url: str | None = None,
+            follow_redirects: bool | None = None) -> httpx.Response:
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
     with stream(method, url, headers=headers, content=content, timeout=timeout,
-                allow_credentials=allow_credentials) as streamed:
+                allow_credentials=allow_credentials, proxy_url=proxy_url, follow_redirects=follow_redirects) as streamed:
         streamed.raise_for_status()
         declared = streamed.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > max_bytes:
@@ -588,10 +596,11 @@ class OpenResponse:
 
 
 def open_url(target: Any, *, timeout: float = 15, max_bytes: int = 64 * 1024 * 1024,
-             allow_credentials: bool = True) -> OpenResponse:
+             allow_credentials: bool = True, follow_redirects: bool | None = None) -> OpenResponse:
     url = str(getattr(target, "full_url", target))
     method = str(getattr(target, "get_method", lambda: "GET")())
     headers = dict(getattr(target, "header_items", lambda: [])())
     content = getattr(target, "data", None)
     return OpenResponse(request(method, url, headers=headers, content=content, timeout=timeout,
-                                max_bytes=max_bytes, allow_credentials=allow_credentials))
+                                max_bytes=max_bytes, allow_credentials=allow_credentials,
+                                follow_redirects=follow_redirects))

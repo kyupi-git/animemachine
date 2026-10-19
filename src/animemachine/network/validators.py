@@ -3,12 +3,43 @@ from __future__ import annotations
 
 import hashlib
 import io
+import ipaddress
 import json
+import urllib.parse
 import warnings
 from typing import Any
 
 
 IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"RIFF")
+
+
+def service_endpoint(value: str) -> str:
+    """Validate an administrator-selected service; keep NAS/loopback/Docker access."""
+    value = str(value).strip().rstrip("/")
+    if any(ord(character) < 33 or ord(character) == 127 for character in value) or "\\" in value:
+        raise ValueError("invalid_service_endpoint")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+        host = parsed.hostname
+    except ValueError as exc:
+        raise ValueError("invalid_service_endpoint") from exc
+    if (parsed.scheme not in {"http", "https"} or not host or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment or port == 0):
+        raise ValueError("invalid_service_endpoint")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # Docker service names and local DNS names intentionally remain valid.
+        if host.casefold().rstrip(".") in {"metadata.google.internal", "metadata.goog"}:
+            raise ValueError("invalid_service_endpoint")
+    else:
+        address = address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped else address
+        if address.is_link_local or address.is_multicast or address.is_unspecified:
+            raise ValueError("invalid_service_endpoint")
+    if any(part in {".", ".."} for part in urllib.parse.unquote(parsed.path).split("/")):
+        raise ValueError("invalid_service_endpoint")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
 def json_bytes(data: bytes, *, limit: int = 16 * 1024 * 1024) -> Any:

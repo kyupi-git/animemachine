@@ -51,8 +51,9 @@ class DockerEntrypointTests(unittest.TestCase):
                 "ANM_ANI_RSS_MEDIA_DIR": "/media", "ANM_INCOMPLETE_DIR": "/incomplete",
                 "TORRENT_COLLECTOR_STATE_DIR": "/collector", "ANM_TORRENT_POOL_DIR": "/torrents"}, clear=False):
             expected_app_paths = [Path("/config"), Path("/data/state"), Path("/library"), Path("/incomplete")]
-            for command in ("run", "init", "serve", "healthcheck", "validate-config", "sync"):
+            for command in ("run", "init", "serve", "validate-config", "sync"):
                 self.assertEqual(expected_app_paths, entrypoint._writable_paths([command]))
+            self.assertEqual([], entrypoint._writable_paths(["healthcheck"]))
             self.assertEqual([], entrypoint._writable_paths(["storage-preflight"]))
             self.assertEqual([Path("/bootstrap"), Path("/qbt-library"), Path("/media"), Path("/incomplete")],
                              entrypoint._writable_paths(["qbt-bootstrap", "--config-dir", "/bootstrap"]))

@@ -337,10 +337,7 @@ class Client:
     """Small compatibility adapter for the authenticated Ani-RSS HTTP API."""
 
     def __init__(self, endpoint: str, key: str, timeout: int = 30) -> None:
-        parsed = urllib.parse.urlparse(endpoint)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("Ani-RSS endpoint must be an absolute HTTP(S) URL")
-        self.endpoint = endpoint.rstrip("/")
+        self.endpoint = network_validators.service_endpoint(endpoint)
         self.key = key
         self.timeout = timeout
 
@@ -356,9 +353,14 @@ class Client:
             **({"Content-Type": "application/json; charset=utf-8"} if body is not None else {}),
         })
         try:
-            with tls_support.urlopen(request, timeout=timeout or self.timeout, max_bytes=4 * 1024 * 1024) as response:
+            with tls_support.urlopen(request, timeout=timeout or self.timeout, max_bytes=4 * 1024 * 1024,
+                                     follow_redirects=False) as response:
+                if 300 <= int(response.status) < 400:
+                    raise RuntimeError("service_redirect")
                 payload = json.loads(response.read().decode("utf-8"))
         except httpx.HTTPStatusError as exc:
+            if 300 <= exc.response.status_code < 400:
+                raise RuntimeError("service_redirect") from None
             raise RuntimeError(f"Ani-RSS request failed with HTTP {exc.response.status_code}") from None
         except httpx.RequestError:
             raise RuntimeError("Ani-RSS request failed") from None
@@ -838,9 +840,9 @@ def _resolve_anime(db: sqlite3.Connection, item: dict[str, Any]) -> tuple[int | 
     return None, {"mode": "unmatched" if not candidates else "ambiguous", "candidateIds": sorted(candidates)}
 
 
-def probe(config: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
+def probe(config: dict[str, Any], api_key: str | None = None, *, use_saved_key: bool = True) -> dict[str, Any]:
     settings = _settings(config)
-    key = str(api_key or "").strip() or _secret()
+    key = str(api_key or "").strip() or (_secret() if use_saved_key else "")
     if not key:
         return {"kind": "ani-rss", "reachable": False, "authenticated": False,
                 "configuredMode": settings["mode"], "effectiveMode": "manual",
@@ -853,7 +855,8 @@ def probe(config: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as exc:
         return {"kind": "ani-rss", "reachable": False, "authenticated": False,
                 "configuredMode": settings["mode"], "effectiveMode": "manual",
-                "message": "connection_failed", "errorType": type(exc).__name__}
+                "message": "service_redirect" if str(exc) == "service_redirect" else "connection_failed",
+                "errorType": type(exc).__name__}
 
 
 def sync(db_path: Path, config: dict[str, Any], *, abort_event: threading.Event | None = None,

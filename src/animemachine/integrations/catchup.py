@@ -30,6 +30,16 @@ def season_params(request: dict[str, Any]) -> dict[str, list[str]]:
     return params
 
 
+def selected_rows(rows: list[dict[str, Any]], selection: Any) -> list[dict[str, Any]]:
+    """Apply an explicit ordered selection to currently eligible, visible works."""
+    if not isinstance(selection, list) or not selection or len(selection) > 1000:
+        raise ValueError("catchup_selection_required")
+    if any(type(identity) is not int or identity <= 0 for identity in selection) or len(set(selection)) != len(selection):
+        raise ValueError("invalid_catchup_selection")
+    available = {int(row["bgm_id"]): row for row in rows}
+    return [available[identity] for identity in selection if identity in available]
+
+
 def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
           store: viewing.Store, user_id: int, *, language: str | None = None) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
     items: list[playback.PlaybackItem] = []

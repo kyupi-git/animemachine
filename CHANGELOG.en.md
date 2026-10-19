@@ -5,6 +5,24 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.4.1
+
+0.4.1 adds hidden titles and restoration, simplifies the bundled deployment, and improves source selection, resource search, and activity records. Existing subscriptions, media, and viewing records are retained.
+
+### Added and improved
+
+- Added title selection and drag-to-reorder in Continue watching: nothing is selected by default, and only checked titles play in list order; mouse, touch, and keyboard reordering are supported.
+- Added account-scoped hidden titles: remove titles from default lists and new Continue watching playlists, find them by title search, and restore them from the radar.
+- Added automatic network source selection for the bundled stack, preferring official sources, validating alternatives, and migrating existing public RSS feed URLs.
+- Improved deployment and layout: AnimeMachine initializes managed services automatically; each Compose setup works from one file. A default full stack, platform-specific launchers, and separate advanced collector and maintenance tools clarify the entry points.
+- Improved history and logs with search, warning/error filters, explicit folder-creation records, and expandable technical details; removed the select-page checkbox.
+
+### Fixed
+
+- Fixed the unclear path from Torrent search to release selection: show release names, move to the candidates, and guide users through a download plan for the current title.
+- Fixed cleanup tools potentially traversing media and download directories; cleanup now covers only application caches and build files.
+- Fixed download-link and subtitle-write validation, tightened service configuration permissions, prevented connection tests from reusing saved keys at a new address, and stopped repeating initial passwords on restart.
+
 ## 0.4.0
 
 0.4.0 adds Continue watching and per-title Torrent search, with faster startup and details, refined folder naming, and clearer maintenance actions. Existing settings, media, and cover caches carry over when you upgrade.

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from PIL import Image
+import httpx
 
 from animemachine.catalog import service
 from animemachine.config.policy import ConfigStore
@@ -114,8 +115,8 @@ class ImageFallbackTests(unittest.TestCase):
             return data,mime,"https://bgmimg.anibt.net/pic/cover/l/a.jpg"
         with tempfile.TemporaryDirectory() as raw, mock.patch.object(service.network_sources,"fetch_json",side_effect=subject), mock.patch.object(service.network_sources,"fetch_binary",side_effect=validated):
             service.get_anime_image(self.database(raw),1,network={"bangumiApiEndpoints":["https://api.bgm.tv"]})
-        self.assertTrue(any("bgmapi.anibt.net" in endpoint for endpoint in seen))
-        self.assertTrue(any("api.bangumi.pro" in endpoint for endpoint in seen))
+        self.assertTrue(any(httpx.URL(endpoint).host == "bgmapi.anibt.net" for endpoint in seen))
+        self.assertTrue(any(httpx.URL(endpoint).host == "api.bangumi.pro" for endpoint in seen))
 
     def test_cover_candidates_prefer_800px_and_keep_original_failover(self):
         with tempfile.TemporaryDirectory() as raw:

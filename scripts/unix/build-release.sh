@@ -26,11 +26,15 @@ rm -rf "$root/build" "$root/src/animemachine.egg-info"
 cp "$root/config/config.example.json" "$root/config/config.schema.json" "$release/config/"
 cp "$root/deploy/local/.env.local.example" "$release/.env.local.example"
 cp "$script_dir/AnimeMachine.sh" "$release/AnimeMachine.sh"
-cp "$script_dir/AnimeMachine-Linux.sh" "$release/AnimeMachine-Linux.sh"
-cp "$script_dir/AnimeMachine-macOS.command" "$release/AnimeMachine-macOS.command"
-cp "$script_dir/Clean-AnimeMachine.sh" "$release/Clean-AnimeMachine.sh"
-cp "$root/scripts/windows/AnimeMachine.ps1" "$root/scripts/windows/AnimeMachine.cmd" "$release/"
-cp "$root/scripts/windows/Clean-AnimeMachine.ps1" "$root/scripts/windows/Clean-AnimeMachine.cmd" "$release/"
+case "$platform" in
+  linux) launcher=AnimeMachine-Linux.sh ;;
+  macos) launcher=AnimeMachine-macOS.command ;;
+  *) printf 'Unsupported release platform: %s\n' "$platform" >&2; exit 1 ;;
+esac
+cp "$script_dir/$launcher" "$release/$launcher"
+mkdir -p "$release/tools/maintenance"
+cp "$script_dir/Clean-AnimeMachine.sh" "$root/scripts/clean_runtime.py" "$release/tools/maintenance/"
+
 cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$release/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/" \;
 if [ -d "$root/docs/images" ]; then
@@ -39,7 +43,7 @@ fi
 cp "$root/VERSION" "$root/RELEASE_PYTHON_VERSION" "$release/"
 "$python_cmd" "$root/scripts/build_info.py" --output "$release/BUILD-INFO.json" --build-type "$platform-portable" --platform "$platform" --python-version "$("$python_cmd" -c 'import platform; print(platform.python_version())')"
 printf '%s\n' 'Place a verified Bangumi Archive dump-*.zip here, then start AnimeMachine.' > "$release/imports/README.txt"
-chmod +x "$release/AnimeMachine.sh" "$release/AnimeMachine-Linux.sh" "$release/AnimeMachine-macOS.command" "$release/Clean-AnimeMachine.sh"
+chmod +x "$release/AnimeMachine.sh" "$release/$launcher" "$release/tools/maintenance/Clean-AnimeMachine.sh"
 "$python_cmd" "$root/scripts/check_public_tree.py" "$release"
 archive="$dist/AnimeMachine-$version-release-$platform-$arch.tar.gz"
 tar -C "$stage" -czf "$archive" "AnimeMachine-$version"

@@ -21,7 +21,7 @@ Compose の主な変数は次のとおりです。パス変数には**ホスト�
 
 | 変数 | 既定値 / 用途 |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.3.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.4.1` |
 | `ANM_LIBRARY_DIR` | `./library`、コレクション |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`、Torrent プール |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`、既存メディア |
@@ -54,13 +54,15 @@ QBT_BIND_ADDRESS=0.0.0.0
 ANI_RSS_BIND_ADDRESS=0.0.0.0
 ```
 
-`docker compose up -d` を実行し、`http://NASのアドレス:8080` または `http://NASのアドレス:7789` からログインします。qBittorrent の初回アカウントは `docker compose logs qbt-bootstrap` で確認できます。Ani-RSS の既定アカウントは `admin` / `admin` です。ログイン後、セキュリティ設定で変更できます。
+`docker compose up -d` を実行し、`http://NASのアドレス:8080` または `http://NASのアドレス:7789` からログインします。qBittorrent の既定ユーザー名は `admin` です。自動生成されたパスワードは `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` で確認できます。Ani-RSS の既定アカウントは `admin` / `admin` です。ログイン後、セキュリティ設定で変更できます。
 
 これらはブラウザー用のアドレスです。Compose 内の接続では `http://qbittorrent:8080`、`http://ani-rss:7789` を使います。ホスト側のサービスへは `host.docker.internal` を使えます。Linux の独自 Compose では、対応する `host-gateway` を設定します。
 
 ## ネットワーク・プロキシ・証明書
 
 作品データとカバーは接続状態に応じて公式ソース、ミラー、利用できるプロキシを選びます。経路とエラーは **設定 → 診断**で、ソースの設定は **設定 → 接続 → メタデータ通信・ミラー**で確認できます。
+
+フル構成では、AnimeMachine が蜜柑のトップページ、公開 RSS、Torrent メタデータ、Bangumi の公開情報をバックグラウンドで確認します。検証に通ったソースを選び、公式ソースの復旧も定期的に確認します。既存購読の公開蜜柑 URL も切り替え、配信グループと進捗は保持します。外部の Ani-RSS や手動で変更したソースは自動切り替えの対象外です。Bangumi トークンが設定されている場合は公式 API を使い、ミラーにトークンを送信しません。
 
 プロキシを使う場合は、環境ファイルに設定します。
 
@@ -82,7 +84,7 @@ NO_PROXY=localhost,127.0.0.1,qbittorrent,ani-rss
 
 定期確認は **UTC+8** の木曜日 02:12、新版がない場合の再確認は金曜日 02:12 です。日本時間ではそれぞれ 03:12 に当たります。その後は次週の確認に移り、進捗と最近の結果は状態データに保存します。
 
-フル Compose 構成にはリソース収集サービスが含まれます。[単独の収集設定](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.yaml)でも使えます。ソース、過去の検索、再試行、プロキシの設定は[詳細な環境変数の例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example)を参照してください。収集サービスが Torrent プールに保存し、AnimeMachine が走査して、確定した計画からダウンロードを送信します。
+フル Compose 構成にはリソース収集サービスが含まれます。[単独の収集設定](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/compose.yaml)でも使えます。ソース、過去の検索、再試行、プロキシの設定は[詳細な環境変数の例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/.env.example)を参照してください。収集サービスが Torrent プールに保存し、AnimeMachine が走査して、確定した計画からダウンロードを送信します。
 
 ## データファイルと保守
 

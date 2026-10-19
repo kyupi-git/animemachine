@@ -141,6 +141,17 @@ class ViewingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 catchup.season_params({"from": start, "to": end})
 
+    def test_catchup_requires_explicit_selection_and_preserves_stable_identity_order(self):
+        rows = [{"id": 10, "bgm_id": 100}, {"id": 20, "bgm_id": 200}, {"id": 30, "bgm_id": 300}]
+        self.assertEqual([rows[2], rows[0]], catchup.selected_rows(rows, [300, 100]))
+        # Hidden, unavailable, or no-longer-eligible works cannot be added back
+        # by a stale confirmation page, and unknown IDs never select everything.
+        self.assertEqual([rows[0]], catchup.selected_rows(rows, [999, 100]))
+        self.assertEqual([], catchup.selected_rows(rows, [999]))
+        for selection in (None, [], True, "100", [100, 100], [True], ["100"], [-1], [None], [[100]], list(range(1, 1002))):
+            with self.subTest(selection=repr(selection)[:40]), self.assertRaises(ValueError):
+                catchup.selected_rows(rows, selection)
+
     def test_optional_bridge_matches_its_source_and_build_manifest(self):
         folder = Path(__file__).parents[2] / "src/animemachine/resources/potplayer"
         manifest = json.loads((folder / "build.json").read_text(encoding="utf-8"))

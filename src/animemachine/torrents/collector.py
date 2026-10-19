@@ -803,8 +803,12 @@ def resolve_dmhy_download(details_url: str) -> str:
     text, _ = get_text(details_url)
     for anchor in anchors(text):
         href = unescape(anchor.get("href", ""))
-        if ".torrent" in href.lower() and ("dl.dmhy.org" in href.lower() or href.lower().endswith(".torrent")):
-            return absolute(details_url, href)
+        candidate = absolute(details_url, href)
+        parsed = urllib.parse.urlsplit(candidate)
+        if (parsed.scheme in {"http", "https"} and parsed.hostname == "dl.dmhy.org"
+                and not parsed.username and not parsed.password
+                and parsed.path.casefold().endswith(".torrent")):
+            return candidate
     raise ValueError("DMHY detail page has no .torrent link")
 
 

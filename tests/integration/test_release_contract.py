@@ -145,10 +145,10 @@ class ReleaseContractTests(unittest.TestCase):
         publication_files = [
             ROOT / "scripts" / "windows" / "Build-Docker-Image.ps1",
             ROOT / "scripts" / "unix" / "build-docker-image.sh",
-            ROOT / "deploy" / "compose" / "torrent-collector.yaml",
+            ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml",
         ]
         for directory in (ROOT / "deploy" / "compose").iterdir():
-            if directory.is_dir():
+            if directory.is_dir() and re.match(r"^\d{2}-", directory.name):
                 publication_files.extend((directory / "compose.yaml", directory / ".env.example"))
         for path in publication_files:
             text = path.read_text(encoding="utf-8")
@@ -169,9 +169,9 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertTrue((ROOT / ".github" / "release-notes" / f"v{version}.md").is_file())
 
     def test_four_compose_modes_are_config_complete(self):
-        directories = sorted(path for path in (ROOT / "deploy" / "compose").iterdir() if path.is_dir())
+        directories = sorted(path for path in (ROOT / "deploy" / "compose").iterdir() if path.is_dir() and re.match(r"^\d{2}-", path.name))
         self.assertEqual(4, len(directories))
-        collector = (ROOT / "deploy" / "compose" / "torrent-collector.yaml").read_text(encoding="utf-8")
+        collector = (ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml").read_text(encoding="utf-8")
         for directory in directories:
             compose = (directory / "compose.yaml").read_text(encoding="utf-8")
             template = (directory / ".env.example").read_text(encoding="utf-8")
@@ -203,16 +203,17 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn("${ANM_LIBRARY_DIR:-./library}", compose)
         managed = (root / "03-animemachine-managed-qbt" / "compose.yaml").read_text(encoding="utf-8")
         full = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
-        collector = (root / "torrent-collector.yaml").read_text(encoding="utf-8")
+        collector = (root / "advanced" / "collector" / "compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn('user: "${PUID:-1000}:${PGID:-1000}"', collector)
         self.assertIn('PUID: "${PUID:-1000}"', collector)
         self.assertIn("/QbtConfig/.animemachine/api-key", managed)
-        managed_bootstrap = managed.split("  qbt-bootstrap:", 1)[1].split("\n  qbittorrent:", 1)[0]
+        managed_bootstrap = managed.split("\n  animemachine:\n", 1)[1].split("\n  torrent-collector:", 1)[0]
         self.assertIn("${ANM_LIBRARY_DIR:-./library}:/Library", managed_bootstrap)
         self.assertIn("${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete", managed_bootstrap)
         self.assertIn("/QbtConfig/.animemachine/api-key", full)
         self.assertIn("/AniRssConfig/.animemachine/api-key", full)
-        self.assertIn("service_completed_successfully", full)
+        self.assertNotIn("service_completed_successfully", full)
+        self.assertIn("condition: service_healthy", full)
         external = (root / "02-animemachine-external-qbt" / ".env.example").read_text(encoding="utf-8")
         self.assertIn("ANM_QBT_API_KEY=\n", external)
         self.assertIn("ANM_QBT_LIBRARY_DIR=\n", external)
@@ -228,7 +229,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", fourth)
         self.assertIn("wushuo894/ani-rss:v3.2.51", fourth)
         self.assertNotIn(":latest", third + fourth)
-        advanced = (root / "torrent-collector.advanced.env.example").read_text(encoding="utf-8")
+        advanced = (root / "advanced" / "collector" / ".env.example").read_text(encoding="utf-8")
         self.assertIn("TORRENT_COLLECTOR_HISTORY_ENABLED", advanced)
         for name in ("03-animemachine-managed-qbt", "04-full-stack"):
             ordinary = (root / name / ".env.example").read_text(encoding="utf-8")
@@ -243,10 +244,13 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("\n  qbittorrent:", third)
         self.assertNotIn("\n  ani-rss:", third)
         self.assertIn("\n  ani-rss:", fourth)
-        self.assertIn("qbt-bootstrap:", third)
-        self.assertIn("ani-rss-bootstrap:", fourth)
+        self.assertNotIn("qbt-bootstrap:", third)
+        self.assertIn('ANM_MANAGED_QBT: "true"', third)
+        self.assertNotIn("ani-rss-bootstrap:", fourth)
+        self.assertIn('ANM_MANAGED_ANI_RSS: "true"', fourth)
         self.assertNotIn("torrent-collector.yaml", first)
-        self.assertIn("../torrent-collector.yaml", third)
+        self.assertNotIn("include:", third)
+        self.assertIn("\n  torrent-collector:", third)
         self.assertNotIn("include:", fourth)
         self.assertNotIn("../torrent-collector.yaml", fourth)
         self.assertIn("\n  torrent-collector:", fourth)
@@ -256,7 +260,7 @@ class ReleaseContractTests(unittest.TestCase):
         full = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn("include:", full)
         self.assertIn("\n  torrent-collector:", full)
-        bootstrap = full.split("  qbt-bootstrap:", 1)[1].split("\n  ani-rss-bootstrap:", 1)[0]
+        bootstrap = full.split("\n  animemachine:\n", 1)[1].split("\n  torrent-collector:", 1)[0]
         self.assertIn("ANM_QBT_LIBRARY_DIR: /Library", bootstrap)
         self.assertIn("ANM_ANI_RSS_MEDIA_DIR: /Media", bootstrap)
         self.assertIn("ANM_INCOMPLETE_DIR: /downloads/incomplete", bootstrap)
@@ -269,7 +273,7 @@ class ReleaseContractTests(unittest.TestCase):
         full = (ROOT / "deploy" / "compose" / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         qbt = full.split("  qbittorrent:", 1)[1].split("\n  ani-rss:", 1)[0]
         ani = full.split("  ani-rss:", 1)[1].split("\n  animemachine:", 1)[0]
-        anm = full.split("  animemachine:", 1)[1].split("\n  torrent-collector:", 1)[0]
+        anm = full.split("\n  animemachine:\n", 1)[1].split("\n  torrent-collector:", 1)[0]
         shared = "${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/Media"
         self.assertIn(shared, qbt)
         self.assertIn(shared, ani)
@@ -279,10 +283,10 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("/downloads/incomplete", qbt)
         self.assertIn('ANM_ANI_RSS_URL: \"${ANM_ANI_RSS_URL:-http://ani-rss:7789}\"', anm)
         self.assertIn("ANM_ANI_RSS_API_KEY_FILE: /AniRssConfig/.animemachine/api-key", anm)
-        self.assertIn("qbt-bootstrap:\n        condition: service_completed_successfully", anm)
-        self.assertIn("ani-rss-bootstrap:\n        condition: service_completed_successfully", anm)
-        self.assertIn("qbittorrent:\n        condition: service_started", anm)
-        self.assertIn("ani-rss:\n        condition: service_started", anm)
+        self.assertNotIn("depends_on:", anm)
+        self.assertIn("animemachine:\n        condition: service_healthy", qbt)
+        self.assertIn("animemachine:\n        condition: service_healthy", ani)
+        self.assertIn("${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/ManagedMedia", anm)
 
     def test_anirss_is_optional_outside_the_full_stack(self):
         root = ROOT / "deploy" / "compose"
@@ -294,7 +298,7 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertNotRegex(template, r"^ANM_ANI_RSS_API_KEY=", name)
 
     def test_torrent_collector_supplies_the_shared_pool_in_managed_modes(self):
-        collector = (ROOT / "deploy" / "compose" / "torrent-collector.yaml").read_text(encoding="utf-8")
+        collector = (ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("torrent-collector:", collector)
         self.assertIn('command: ["torrent-collector"]', collector)
         self.assertNotIn("python - <<", collector)
@@ -305,8 +309,10 @@ class ReleaseContractTests(unittest.TestCase):
 
     def test_ci_parses_every_compose_configuration(self):
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        self.assertIn("docker compose --env-file", workflow)
-        self.assertIn("config --quiet", workflow)
+        self.assertIn("python scripts/check_compose.py", workflow)
+        checker = (ROOT / "scripts/check_compose.py").read_text(encoding="utf-8")
+        self.assertIn("TemporaryDirectory", checker)
+        self.assertIn("--format", checker)
 
     def test_supply_chain_workflows_are_pinned_and_least_privileged(self):
         workflows = "\n".join(
@@ -337,12 +343,17 @@ class ReleaseContractTests(unittest.TestCase):
         ):
             self.assertTrue((ROOT / relative).is_file(), relative)
 
-    def test_every_release_builder_packages_all_platform_launchers(self):
+    def test_release_builders_expose_only_the_matching_platform_launchers(self):
         windows = (ROOT / "scripts" / "windows" / "Build-Release.ps1").read_text(encoding="utf-8")
         unix = (ROOT / "scripts" / "unix" / "build-release.sh").read_text(encoding="utf-8")
-        for launcher in ("AnimeMachine.cmd", "AnimeMachine-Linux.sh", "AnimeMachine-macOS.command"):
-            self.assertIn(launcher, windows)
-            self.assertIn(launcher, unix)
+        self.assertIn("AnimeMachine.cmd", windows)
+        self.assertNotIn("AnimeMachine-Linux.sh", windows)
+        self.assertNotIn("AnimeMachine.cmd", unix)
+        self.assertIn("launcher=AnimeMachine-Linux.sh", unix)
+        self.assertIn("launcher=AnimeMachine-macOS.command", unix)
+        for script in (windows, unix):
+            self.assertIn("tools/maintenance", script)
+            self.assertIn("clean_runtime.py", script)
         self.assertIn("Get-ChildItem", windows)
         self.assertIn("find \"$root/docs\"", unix)
         self.assertIn("BUILD-INFO.json", windows)
@@ -358,7 +369,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("Build-Release.ps1", workflow)
         self.assertIn("build-release.sh", workflow)
         self.assertNotIn("Start-AnimeMachine-Web.ps1", workflow)
-        self.assertIn("deploy/compose/[0-9][0-9]-*", workflow)
+        self.assertIn("scripts/check_compose.py", workflow)
 
     def test_docker_builders_pin_both_compose_and_environment_bundle(self):
         windows = (ROOT / "scripts" / "windows" / "Build-Docker-Image.ps1").read_text(encoding="utf-8")
@@ -366,7 +377,9 @@ class ReleaseContractTests(unittest.TestCase):
         for script in (windows, unix):
             self.assertIn("compose.yaml", script)
             self.assertIn(".env.example", script)
-            self.assertIn("torrent-collector.yaml", script)
+            self.assertNotIn("Initialize-AnimeMachine.ps1", script)
+            self.assertNotIn("torrent-collector.yaml", script)
+            self.assertIn("copy_document_images.py", script)
 
     def test_local_environment_template_has_shell_safe_assignment_examples(self):
         template = (ROOT / "deploy" / "local" / ".env.local.example").read_text(encoding="utf-8")
@@ -382,22 +395,13 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn(value, template)
 
 
-    def test_initializers_only_display_newly_generated_credentials(self):
-        unix = (ROOT / "scripts" / "unix" / "initialize-animemachine.sh").read_text(encoding="utf-8")
-        windows = (ROOT / "scripts" / "windows" / "Initialize-AnimeMachine.ps1").read_text(encoding="utf-8")
+    def test_legacy_initializers_do_not_replace_automatically_managed_credentials(self):
+        unix = (ROOT / "scripts/unix/initialize-animemachine.sh").read_text(encoding="utf-8")
+        windows = (ROOT / "scripts/windows/Initialize-AnimeMachine.ps1").read_text(encoding="utf-8")
         for script in (unix, windows):
-            self.assertIn("Docker Compose 2.20.3 or newer is required", script)
-            self.assertIn("Existing credentials preserved", script)
-        self.assertIn("managed_qbt=0", unix)
-        self.assertIn("managed_ani=0", unix)
-        self.assertIn("$managedQbt = $false", windows)
-        self.assertIn("$managedAni = $false", windows)
-        self.assertIn("had_admin=$(value ANM_ADMIN_PASSWORD)", unix)
-        self.assertIn('[ -z "$had_admin" ]', unix)
-        self.assertIn("$generated.ContainsKey('ANM_ADMIN_PASSWORD')", windows)
-        self.assertIn("url=http://localhost", unix)
-        self.assertIn("url=http://localhost", windows)
-        self.assertIn("Protect-AnmCredentialFile", windows)
+            self.assertIn("Initialization is automatic", script)
+            self.assertIn("docker compose up -d", script)
+            self.assertNotIn("ANM_ADMIN_PASSWORD=", script)
         launcher = (ROOT / "scripts" / "windows" / "AnimeMachine.ps1").read_text(encoding="utf-8")
         self.assertIn("Protect-AnmCredentialFile $environmentFile", launcher)
         self.assertIn("Get-AnmProbeHost $BindAddress", launcher)

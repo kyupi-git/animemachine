@@ -30,6 +30,8 @@ flowchart TB
 
 The standalone setup lets you browse titles and connect existing media. Add a downloader, Ani-RSS, or the collector when needed, or connect services you already run.
 
+The full stack contains four continuously running services. AnimeMachine prepares shared credentials for the downloader and Ani-RSS on first launch; the other services start once the Web service is available. Network checks run in the background without delaying browsing. Manually selected sources and external Ani-RSS configurations remain under user control.
+
 ## Title and file associations
 
 An anime can have Chinese, English, Japanese, and other names. AnimeMachine groups them by Bangumi work ID. Subscriptions and media stay associated with that work when its metadata is imported or updated.
