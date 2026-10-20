@@ -230,6 +230,8 @@ def bootstrap_ani_rss(config_dir: Path) -> None:
             config_dir, "web-password", "ANM_ANI_RSS_WEB_PASSWORD", "ANM_ANI_RSS_WEB_PASSWORD_FILE",
             "/run/secrets/ani_rss_web_password", lambda: "ani_" + secrets.token_urlsafe(24),
             lambda value: len(value) >= 12, "Ani-RSS Web password must contain at least 12 characters")
+        # Ani-RSS v3.2.51 requires an MD5 digest in its Login API/config format.
+        # This adapter encodes the owned service's independently generated password.
         data["login"] = {"username": "admin", "password": hashlib.md5(web_secret.encode(), usedforsecurity=False).hexdigest()}
     data.update({
         "apiKey": ani_key,

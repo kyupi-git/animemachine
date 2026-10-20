@@ -25,7 +25,7 @@ Changes affecting everyday use, with the newest release first.
 - Fixed brief radar table jumps during background refresh; existing content stays visible until new data is ready.
 - Fixed title details failing while the full catalog is published; improved database access in paths with special characters and read-only recognition of existing collection folders.
 - Fixed bundled Ani-RSS and qBittorrent interfaces being inaccessible over the LAN by default, and aligned deployment instructions and component documentation across three languages.
-- Fixed known security issues in the image-processing dependency and updated certificate-validation and development-check dependencies.
+- Fixed known security issues in image-processing and certificate dependencies, and updated development-check dependencies.
 
 ## 0.4.1
 
