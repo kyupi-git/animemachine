@@ -411,11 +411,13 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("/inheritance:r", launcher + windows)
 
     def test_runtime_dependencies_are_release_pinned(self):
+        import tomllib
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('"httpx[http2]==0.28.1"', project)
-        self.assertIn('"Pillow==12.3.0"', project)
-        self.assertNotIn('"httpx[http2]>=', project)
-        self.assertNotIn('"Pillow>=', project)
+        dependencies = tomllib.loads(project)['project']['dependencies']
+        self.assertEqual({'certifi','httpx[http2]','pillow','truststore'},
+                         {value.split('==')[0].lower() for value in dependencies})
+        for value in dependencies:
+            self.assertRegex(value, r'^[A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?==\d+(?:\.\d+)+$')
 
     def test_version_and_release_runtime_have_canonical_sources(self):
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
