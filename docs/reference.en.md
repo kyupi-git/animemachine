@@ -33,7 +33,7 @@ Common Compose variables are listed below. Path variables specify **host folders
 | `ANM_ANI_RSS_URL`, `ANM_ANI_RSS_MODE` | Ani-RSS address and `prefer` / `fallback` / `manual` mode |
 | `ANM_PUBLIC_URL` | An AnimeMachine address reachable from your viewing devices |
 
-Full examples: [local installation](https://github.com/kyupi-git/animemachine/blob/main/deploy/local/.env.local.example) · [standalone Compose](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/.env.example) · [external downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/.env.example) · [managed downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/.env.example) · [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/.env.example).
+Full examples: [local installation](https://github.com/kyupi-git/animemachine/blob/main/deploy/local/.env.local.example) · [standalone Compose](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/01-animemachine-standalone/.env.example) · [external downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/02-animemachine-external-qbt/.env.example) · [managed downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/03-animemachine-managed-qbt/.env.example) · [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/04-full-stack/.env.example).
 
 <a id="ports"></a>
 
@@ -54,7 +54,7 @@ QBT_BIND_ADDRESS=0.0.0.0
 ANI_RSS_BIND_ADDRESS=0.0.0.0
 ```
 
-Run `docker compose up -d`, then sign in at `http://YOUR-NAS-ADDRESS:8080` or `http://YOUR-NAS-ADDRESS:7789`. qBittorrent uses `admin` as its default username. Read its generated password with `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password`. Ani-RSS defaults to `admin` / `admin`; change it in its security settings after signing in.
+Run `docker compose up -d`, then sign in at `http://YOUR-NAS-ADDRESS:8080` or `http://YOUR-NAS-ADDRESS:7789`. qBittorrent uses `admin` as its default username. Read its generated password with `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password`. Ani-RSS defaults to `admin` / `admin`; **change this password in its security settings before opening the admin port to your LAN**, and restrict network access.
 
 Those addresses are for browsers. Services within Compose use `http://qbittorrent:8080` and `http://ani-rss:7789`. Use `host.docker.internal` for host services; a custom Linux Compose setup needs the matching `host-gateway` entry.
 

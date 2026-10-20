@@ -49,6 +49,10 @@ def download(url: str, destination: Path, *, expected_size: int | None = None,
     with transport.stream("GET", url, headers=headers, timeout=timeout) as response:
         response.raise_for_status()
         final_url = str(response.url)
+        if response.status_code == 206:
+            if not offset:
+                raise RangeProtocolError("unsolicited partial response")
+            _content_range(response, offset, maximum - 1, expected_size)
         mode = "ab" if offset and response.status_code == 206 else "wb"
         if mode == "wb":
             offset = 0

@@ -167,6 +167,16 @@ class AniRssTest(unittest.TestCase):
         if self.old_key is None: os.environ.pop("ANM_ANI_RSS_API_KEY", None)
         else: os.environ["ANM_ANI_RSS_API_KEY"] = self.old_key
 
+    def test_state_reads_without_trying_to_take_a_resource_policy_writer_lock(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("CREATE TABLE ani_rss_resource(resource_id TEXT)")
+            db.execute("INSERT INTO ani_rss_resource VALUES('cached')")
+        with contextlib.closing(sqlite3.connect(self.db_path)) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            with mock.patch.object(ani_rss, "refresh_resource_policy",
+                                   side_effect=AssertionError("read-only state attempted a write")):
+                self.assertIn("connection_state", ani_rss.state(self.db_path, self.config))
+
     def test_probe_can_use_transient_key_without_persisting_it(self):
         os.environ["ANM_ANI_RSS_API_KEY"] = "saved-key"
         FakeAniRss.seen_keys = []

@@ -17,11 +17,14 @@ TRANSLATED_FAMILIES = (
     ("docs/guide.md", "docs/guide.en.md", "docs/guide.ja.md"),
     ("docs/architecture.md", "docs/architecture.en.md", "docs/architecture.ja.md"),
     ("docs/reference.md", "docs/reference.en.md", "docs/reference.ja.md"),
+    ("deploy/compose/README.md", "deploy/compose/README.en.md", "deploy/compose/README.ja.md"),
 )
 
 
 def markdown_files() -> list[Path]:
-    return sorted([*ROOT.glob("*.md"), *ROOT.joinpath("docs").glob("*.md")])
+    return sorted(
+        [*ROOT.glob("*.md"), *ROOT.joinpath("docs").glob("*.md"), *ROOT.joinpath("deploy/compose").rglob("*.md")]
+    )
 
 
 def local_target(source: Path, raw: str) -> Path | None:

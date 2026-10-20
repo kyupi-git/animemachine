@@ -1276,7 +1276,6 @@ def refresh_new_subscription_media(db_path: Path, config: dict[str, Any],
 
 
 def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
-    refresh_resource_policy(db_path, config)
     settings = _settings(config)
     key = _secret()
     credential_configured = bool(key)
@@ -1817,6 +1816,8 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
 
 
 def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if config is not None:
+        refresh_resource_policy(db_path, config)
     if config is not None and not state_available(state(db_path, config)):
         return []
     with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:

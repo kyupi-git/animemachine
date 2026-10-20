@@ -97,6 +97,15 @@ class WebContractTests(unittest.TestCase):
         self.assertEqual(keys["zh-Hans"], keys["ja"])
 
 
+    def test_catchup_range_layout_contract(self):
+        script = (STATIC / "app.js").read_text(encoding="utf-8")
+        styles = (STATIC / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("grid-template-columns: 20px minmax(0, 1fr) 150px 176px", styles)
+        self.assertIn(".catchup-title { min-width: 0; overflow: hidden; text-overflow: ellipsis", styles)
+        self.assertIn('aria-label="${esc(t("catchupRangeFrom"))}"', script)
+        self.assertIn('aria-label="${esc(t("catchupRangeTo"))}"', script)
+        self.assertNotIn("catchup-episodes", script + styles)
+
     def test_capability_policy_blocks_admin_side_effects_before_execution(self):
         for path in (
             "/api/catalog/reshuffle", "/api/archive/update", "/api/archive/import",

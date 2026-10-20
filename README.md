@@ -19,7 +19,7 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 
 ## 连续播放本周新集
 
-在新作雷达点击 **一键继续观看**，将多部 TV 动画的待看集数放入同一播放列表。每部作品从上次播放的那一集继续，按顺序播到最新可用集数；PotPlayer 安装扩展后，还可从上次停止的位置续播。
+在新作雷达点击 **一键继续观看**，勾选多部 TV 动画，自行修改各作品的播放集数范围并排序。默认从上次未看完的一集播到最新可用集数；PotPlayer 安装扩展后，还可从上次停止的位置续播。
 
 ![PotPlayer 实际播放：侧栏列出多部新作，可连续观看](docs/images/potplayer-weekly.png)
 
@@ -34,7 +34,7 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 | Windows 10 / 11 | 从 [Releases](https://github.com/kyupi-git/animemachine/releases/latest) 下载 Windows ZIP，解压后双击 `AnimeMachine.cmd`。发布包包含 Python 运行环境。 |
 | Linux | 安装 Python 3.11 或更新版本，下载对应的 Linux 发布包，解压后运行 `./AnimeMachine-Linux.sh`。 |
 | macOS | 安装 Python 3.11 或更新版本，下载对应的 macOS 发布包，解压后打开 `AnimeMachine-macOS.command`。 |
-| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，在文件所在目录执行 `docker compose up -d`。已有服务可选[其它方案](docs/guide.md#docker)。 |
+| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，在文件所在目录执行 `docker compose up -d`。新手可按照[Docker Compose 分步指南](deploy/compose/README.md)选择方案。 |
 
 启动后打开 **<http://localhost:8787>**。从其他设备访问时，将 `localhost` 替换为运行 AnimeMachine 的电脑或 NAS 地址。初始账户和随机密码显示在启动窗口或容器日志中。
 

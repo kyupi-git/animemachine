@@ -759,7 +759,7 @@ def main() -> int:
                 print_access_info=True)
         finally:
             instance_lock.release()
-        if restart_requested and os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() == "1":
+        if restart_requested and os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() in {"1", "2"}:
             return 75
         return 0
     else:

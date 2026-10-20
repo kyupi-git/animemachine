@@ -40,6 +40,13 @@ class Store:
                                       ("media_key", "TEXT NOT NULL DEFAULT ''")):
                 if name not in columns:
                     db.execute(f"ALTER TABLE viewing_anchor ADD COLUMN {name} {declaration}")
+            db.execute("""CREATE TABLE IF NOT EXISTS viewing_episode(
+                user_id INTEGER NOT NULL,bgm_id INTEGER NOT NULL,episode REAL NOT NULL,
+                position_ms INTEGER NOT NULL DEFAULT 0,duration_ms INTEGER NOT NULL DEFAULT 0,
+                media_key TEXT NOT NULL DEFAULT '',completed INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(user_id,bgm_id,episode))""")
+            if "completed" not in {row[1] for row in db.execute("PRAGMA table_info(viewing_episode)")}:
+                db.execute("ALTER TABLE viewing_episode ADD COLUMN completed INTEGER NOT NULL DEFAULT 0")
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
@@ -60,6 +67,18 @@ class Store:
     def get(self, user_id: int, bgm_id: int) -> dict[str, Any]:
         with contextlib.closing(self._connect()) as db:
             return self._read(db, user_id, bgm_id)
+
+    def episode_position(self, user_id: int, bgm_id: int, episode: float) -> dict[str, Any]:
+        with contextlib.closing(self._connect()) as db:
+            anchor = self._read(db, user_id, bgm_id)
+            record = db.execute("""SELECT position_ms,duration_ms,media_key,completed FROM viewing_episode
+                WHERE user_id=? AND bgm_id=? AND episode=?""", (user_id, bgm_id, episode)).fetchone()
+            if anchor["episode"] == episode:
+                return {**anchor, "completed": (bool(record[3]) if record else False)
+                        or completed(anchor["positionMs"], anchor["durationMs"])}
+            return ({"positionMs": record[0], "durationMs": record[1], "mediaKey": record[2],
+                     "completed": bool(record[3])} if record else
+                    {"positionMs": 0, "durationMs": 0, "mediaKey": "", "completed": False})
 
     def snapshot(self, user_id: int) -> list[dict[str, Any]]:
         with contextlib.closing(self._connect()) as db:
@@ -101,6 +120,11 @@ class Store:
                 source=excluded.source,updated_at=excluded.updated_at,position_ms=0,duration_ms=0,media_key=''""",
                 (user_id, bgm_id, number, revision + 1, prior["epoch"] + 1, time.time()))
             db.execute("UPDATE viewing_anchor SET position_ms=? WHERE user_id=? AND bgm_id=?", (position_ms, user_id, bgm_id))
+            if number is not None:
+                db.execute("""INSERT INTO viewing_episode(user_id,bgm_id,episode,position_ms)
+                    VALUES(?,?,?,?) ON CONFLICT(user_id,bgm_id,episode) DO UPDATE SET
+                    position_ms=excluded.position_ms,duration_ms=0,media_key='',completed=0""",
+                    (user_id, bgm_id, number, position_ms))
             return {**self._read(db, user_id, bgm_id), "previousEpisode": prior["episode"], "previousPositionMs": prior["positionMs"]}
 
     def started(self, user_id: int, bgm_id: int, episode: float, epoch: int,
@@ -109,6 +133,8 @@ class Store:
         number = episode_number(episode)
         if position_ms is not None:
             position_ms, duration_ms = validate_position(position_ms, duration_ms)
+            if duration_ms and position_ms * 100 <= duration_ms:
+                return False
         with contextlib.closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             prior = self._read(db, user_id, bgm_id)
@@ -131,7 +157,19 @@ class Store:
                 (user_id, bgm_id, number, prior["revision"] + 1, epoch, session_order, source, time.time()))
             db.execute("UPDATE viewing_anchor SET position_ms=?,duration_ms=?,media_key=? WHERE user_id=? AND bgm_id=?",
                        (position_ms, duration_ms, media_key or (prior["mediaKey"] if same_media else ""), user_id, bgm_id))
+            db.execute("""INSERT INTO viewing_episode(user_id,bgm_id,episode,position_ms,duration_ms,media_key,completed)
+                VALUES(?,?,?,?,?,?,?) ON CONFLICT(user_id,bgm_id,episode) DO UPDATE SET
+                position_ms=excluded.position_ms,duration_ms=excluded.duration_ms,media_key=excluded.media_key,
+                completed=MAX(viewing_episode.completed,excluded.completed)""",
+                (user_id, bgm_id, number, position_ms, duration_ms,
+                 media_key or (prior["mediaKey"] if same_media else ""),
+                 int(completed(position_ms, duration_ms) or
+                     (prior["episode"] == number and completed(prior["positionMs"], prior["durationMs"])))))
             return True
+
+
+def completed(position: int, duration: int) -> bool:
+    return duration > 0 and position * 100 >= duration * 99
 
 
 def validate_position(position: Any, duration: Any) -> tuple[int, int]:

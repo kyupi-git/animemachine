@@ -92,6 +92,21 @@ class CliBootstrapTests(unittest.TestCase):
                 self.assertEqual("true", os.environ["ANM_AUTH_ENABLED"])
                 self.assertTrue((state / "auth" / "initial-admin.txt").is_file())
 
+    def test_supervised_restart_reports_restart_code_for_both_runtime_generations(self):
+        for runtime in ("1", "2", "0"):
+            with self.subTest(runtime=runtime), mock.patch.object(sys, "argv", ["animemachine", "run"]), \
+                 mock.patch.dict(os.environ, {"ANM_DOCKER_UPDATE_RUNTIME": runtime}), \
+                 mock.patch.object(anm_cli, "migrate_legacy_state"), \
+                 mock.patch.object(anm_cli, "ensure_runtime_config"), \
+                 mock.patch.object(anm_cli.credential_store, "load_into_environment"), \
+                 mock.patch.object(anm_cli, "configure_web_security", return_value=None), \
+                 mock.patch.object(anm_cli, "_print_initial_credentials"), \
+                 mock.patch.object(anm_cli, "InstanceLock"), \
+                 mock.patch.object(anm_cli, "initialize_managed_services"), \
+                 mock.patch.object(anm_cli, "ensure_catalog_shell", return_value=False), \
+                 mock.patch.object(anm_cli.catalog, "serve", return_value=True):
+                self.assertEqual(75 if runtime in {"1", "2"} else 0, anm_cli.main())
+
     def test_restart_reports_account_without_repeating_saved_password(self):
         from animemachine.api import auth
         with tempfile.TemporaryDirectory() as raw:

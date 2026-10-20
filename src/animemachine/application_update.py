@@ -31,6 +31,8 @@ _RELEASE_PAGE = f"https://github.com/{_REPOSITORY}/releases/latest"
 _CACHE_SECONDS = 30 * 60
 _MAX_RELEASE_JSON = 2 * 1024 * 1024
 _MAX_RELEASE_BYTES = 1024 * 1024 * 1024
+_MAX_RELEASE_MEMBERS = 20000
+_MAX_RELEASE_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024
 _VERSION_RE = re.compile(r"^(?:v)?(\d+)\.(\d+)\.(\d+)$", re.IGNORECASE)
 _CACHE_LOCK = threading.RLock()
 _CACHE: tuple[float, dict[str, Any]] | None = None
@@ -152,7 +154,7 @@ def _write_probe(parent: Path) -> bool:
 
 def _availability(mode: str, root: Path | None, asset_name: str | None) -> tuple[bool, str]:
     if mode == "docker":
-        if os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() != "1":
+        if os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() not in {"1", "2"}:
             return False, "docker_update_runtime_unavailable"
         if not asset_name:
             return False, "platform_not_supported"
@@ -252,11 +254,14 @@ def _build_status(payload: dict[str, Any]) -> dict[str, Any]:
     asset = next((item for item in assets if item.get("name") == expected_name), None)
     checksum_asset = next((item for item in assets if item.get("name") == f"{expected_name}.sha256"), None)
     can_update, reason = _availability(mode, root, expected_name)
-    if update_available and asset is None:
+    force_available = bool(current_tuple and latest_tuple and latest_tuple == current_tuple)
+    if (update_available or force_available) and asset is None:
         can_update, reason = False, "release_asset_unavailable"
     checksum = _checksum_from_digest(asset or {})
-    if update_available and asset is not None and not checksum and checksum_asset is None:
+    if (update_available or force_available) and asset is not None and not checksum and checksum_asset is None:
         can_update, reason = False, "release_checksum_unavailable"
+    if mode == "docker" and os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() != "2":
+        force_available = False
     asset_url = _release_asset_url(tag, expected_name) if asset and expected_name and latest_tuple else ""
     checksum_url = (_release_asset_url(tag, str(checksum_asset.get("name")))
                     if checksum_asset and latest_tuple else "")
@@ -268,6 +273,7 @@ def _build_status(payload: dict[str, Any]) -> dict[str, Any]:
         "releaseUrl": f"https://github.com/{_REPOSITORY}/releases/tag/{normalized_tag}" if normalized_tag else _RELEASE_PAGE,
         "installMode": mode,
         "canUpdate": bool(update_available and can_update),
+        "canForceUpdate": bool(force_available and can_update),
         "reason": reason if update_available and not can_update else "",
         "asset": {
             "name": str(asset.get("name") or "") if asset else "",
@@ -404,9 +410,9 @@ def _decorate_status(result: dict[str, Any], diagnostics: dict[str, Any]) -> dic
     verification = dict(state.get("verification") or {})
     if verification.get("version") == latest and verification.get("status") in {"verified", "failed"}:
         sha_status = str(verification["status"])
-    elif result.get("updateAvailable") and (result.get("asset") or {}).get("sha256"):
+    elif (result.get("updateAvailable") or result.get("canForceUpdate")) and (result.get("asset") or {}).get("sha256"):
         sha_status = "pending"
-    elif result.get("updateAvailable"):
+    elif result.get("updateAvailable") or result.get("canForceUpdate"):
         sha_status = "unavailable"
     else:
         sha_status = "not_required"
@@ -536,6 +542,8 @@ def _extract_release(archive: Path, destination: Path, expected_version: str) ->
             infos = source.infolist()
             if not infos:
                 raise ValueError("release archive is empty")
+            if len(infos) > _MAX_RELEASE_MEMBERS or sum(info.file_size for info in infos) > _MAX_RELEASE_EXPANDED_BYTES:
+                raise ValueError("release archive exceeds extraction limits")
             for info in infos:
                 _safe_member_path(info.filename, expected_root)
                 file_type = (info.external_attr >> 16) & 0o170000
@@ -547,6 +555,8 @@ def _extract_release(archive: Path, destination: Path, expected_version: str) ->
             members = source.getmembers()
             if not members:
                 raise ValueError("release archive is empty")
+            if len(members) > _MAX_RELEASE_MEMBERS or sum(member.size for member in members) > _MAX_RELEASE_EXPANDED_BYTES:
+                raise ValueError("release archive exceeds extraction limits")
             for member in members:
                 _safe_member_path(member.name, expected_root)
                 if not (member.isfile() or member.isdir()):
@@ -783,25 +793,38 @@ def _activate_docker_release(wheel: Path, version: str) -> None:
     try:
         _extract_docker_wheel(wheel, stage, version)
         _validate_docker_dependencies(stage)
+        (stage / ".same-version-verified").write_text("1\n", encoding="utf-8")
         target = releases / version
-        if target.exists():
-            shutil.rmtree(target)
-        os.replace(stage, target)
         current_file = update_root / "current"
         previous = current_file.read_text(encoding="utf-8").strip() if current_file.is_file() else ""
         if previous and _version_tuple(previous) is None:
             previous = ""
+        # A same-version reinstall needs the previous bytes, not just the version string.
+        backup = f".backup-{uuid.uuid4().hex}" if target.exists() and previous == version else ""
+        if backup:
+            os.replace(target, releases / backup)
+        elif target.exists():
+            shutil.rmtree(target)
+        try:
+            os.replace(stage, target)
+        except Exception:
+            if backup:
+                os.replace(releases / backup, target)
+            raise
         pending_file = update_root / "pending.json"
-        pending = '{"version":"' + version + '","previous":"' + previous + '"}\n'
+        pending = json.dumps({"version": version, "previous": previous, "backup": backup}, separators=(",", ":")) + "\n"
         # Publish rollback metadata before switching the active pointer.  If the
         # process is interrupted between the two writes, the previous layer stays
         # active; the reverse order could start an unverified layer without a
         # pending health check on the next container start.
-        _atomic_text(pending_file, pending)
         try:
+            _atomic_text(pending_file, pending)
             _atomic_text(current_file, version + "\n")
         except Exception:
             pending_file.unlink(missing_ok=True)
+            if backup:
+                shutil.rmtree(target)
+                os.replace(releases / backup, target)
             raise
         # Keep the current and previous application layers; older verified layers are disposable.
         keep = {version, previous}
@@ -813,7 +836,7 @@ def _activate_docker_release(wheel: Path, version: str) -> None:
             shutil.rmtree(stage, ignore_errors=True)
 
 
-def apply(*, host: str, port: int) -> dict[str, Any]:
+def apply(*, host: str, port: int, force: bool = False) -> dict[str, Any]:
     """Stage a verified update and request a controlled restart."""
     if not _UPDATE_LOCK.acquire(blocking=False):
         raise RuntimeError("update already in progress")
@@ -821,9 +844,9 @@ def apply(*, host: str, port: int) -> dict[str, Any]:
     download_dir: Path | None = None
     try:
         release = status(force=False)
-        if not release.get("updateAvailable"):
+        if not release.get("updateAvailable") and not (force and release.get("canForceUpdate")):
             raise ValueError("no newer release is available")
-        if not release.get("canUpdate"):
+        if not (release.get("canUpdate") or (force and release.get("canForceUpdate"))):
             raise ValueError(str(release.get("reason") or "online update is unavailable"))
         mode, root = _install_mode()
         asset = dict(release.get("asset") or {})

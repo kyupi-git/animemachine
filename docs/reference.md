@@ -33,7 +33,7 @@ Compose 常用变量如下。路径变量指定**宿主机目录**，容器内�
 | `ANM_ANI_RSS_URL`、`ANM_ANI_RSS_MODE` | Ani-RSS 服务地址与 `prefer` / `fallback` / `manual` 调用模式 |
 | `ANM_PUBLIC_URL` | 其他播放设备能访问的 AnimeMachine 地址 |
 
-完整示例：[本地配置](https://github.com/kyupi-git/animemachine/blob/main/deploy/local/.env.local.example) · [独立 Compose](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/.env.example) · [外部下载器](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/.env.example) · [托管下载器](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/.env.example) · [完整组合](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/.env.example)。
+完整示例：[本地配置](https://github.com/kyupi-git/animemachine/blob/main/deploy/local/.env.local.example) · [独立 Compose](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/01-animemachine-standalone/.env.example) · [外部下载器](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/02-animemachine-external-qbt/.env.example) · [托管下载器](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/03-animemachine-managed-qbt/.env.example) · [完整组合](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/04-full-stack/.env.example)。
 
 <a id="ports"></a>
 
@@ -54,7 +54,7 @@ QBT_BIND_ADDRESS=0.0.0.0
 ANI_RSS_BIND_ADDRESS=0.0.0.0
 ```
 
-执行 `docker compose up -d`，然后用 `http://NAS地址:8080` 或 `http://NAS地址:7789` 登录。qBittorrent 默认用户名为 `admin`，自动生成的密码可通过 `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` 查看；Ani-RSS 默认账户为 `admin` / `admin`，登录后可在其安全设置中修改。
+执行 `docker compose up -d`，然后用 `http://NAS地址:8080` 或 `http://NAS地址:7789` 登录。qBittorrent 默认用户名为 `admin`，自动生成的密码可通过 `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` 查看；Ani-RSS 默认账户为 `admin` / `admin`，**必须在通过局域网公开管理端口前**登录其安全设置修改密码，并限制网络访问范围。
 
 以上地址用于浏览器访问。Compose 内的服务连接使用 `http://qbittorrent:8080`、`http://ani-rss:7789`。连接宿主机服务可使用 `host.docker.internal`；Linux 自定义 Compose 需配置对应的 `host-gateway` 映射。
 

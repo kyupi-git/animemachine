@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -66,12 +67,12 @@ def _selected_release() -> tuple[Path | None, str]:
     except OSError:
         return None, _base_version()
     current_tuple, base_tuple = _version_tuple(version), _version_tuple(_base_version())
-    if current_tuple is None or (base_tuple is not None and current_tuple <= base_tuple):
+    if current_tuple is None or (base_tuple is not None and current_tuple < base_tuple):
         _clear_current()
         (_update_root() / "pending.json").unlink(missing_ok=True)
         return None, _base_version()
     root = _valid_release(version)
-    if root is None:
+    if root is None or (current_tuple == base_tuple and not (root / ".same-version-verified").is_file()):
         _clear_current()
         (_update_root() / "pending.json").unlink(missing_ok=True)
         return None, _base_version()
@@ -88,12 +89,33 @@ def _pending() -> dict[str, str] | None:
         return None
     version = str(value.get("version") or "").strip()
     previous = str(value.get("previous") or "").strip()
-    if _version_tuple(version) is None or (previous and _version_tuple(previous) is None):
+    backup = str(value.get("backup") or "")
+    if (_version_tuple(version) is None or (previous and _version_tuple(previous) is None)
+            or (backup and not re.fullmatch(r"\.backup-[0-9a-f]{32}", backup))):
         return None
-    return {"version": version, "previous": previous}
+    return {"version": version, "previous": previous, "backup": backup}
 
 
 def _rollback(pending: dict[str, str]) -> None:
+    backup = pending.get("backup", "")
+    if backup:
+        releases = _update_root() / "releases"
+        saved = releases / backup
+        if saved.is_dir():
+            target = releases / pending["version"]
+            if target.exists():
+                failed = releases / f".failed-{os.getpid()}"
+                os.replace(target, failed)
+                os.replace(saved, target)
+                shutil.rmtree(failed)
+            else:
+                os.replace(saved, target)
+        if _valid_release(pending["version"]):
+            _write_current(pending["version"])
+        else:
+            _clear_current()
+        (_update_root() / "pending.json").unlink(missing_ok=True)
+        return
     previous = pending.get("previous", "")
     base_tuple = _version_tuple(_base_version())
     previous_tuple = _version_tuple(previous)
@@ -260,6 +282,8 @@ def _await_pending(child: subprocess.Popen, pending: dict[str, str], arguments: 
             return None
         if _healthy(port, version, host):
             (_update_root() / "pending.json").unlink(missing_ok=True)
+            if pending.get("backup"):
+                shutil.rmtree(_update_root() / "releases" / pending["backup"])
             return child.wait()
         time.sleep(1)
     if _STOPPING:

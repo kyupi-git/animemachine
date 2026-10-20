@@ -202,17 +202,151 @@ class ViewingHTTPTests(unittest.TestCase):
                     self.request("/api/playback/catchup", body)
                 error.exception.close()
                 self.assertEqual(400, error.exception.code)
+            # Preview data may become stale when a title is hidden or removed.
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request("/api/playback/catchup", {**request, "selectedBgmIds": [rows[0]["bgm_id"], 999999]})
+            self.assertEqual(400, error.exception.code)
+            error.exception.close()
             selected = [rows[2]["bgm_id"], rows[0]["bgm_id"]]
             with self.request("/api/playback/catchup", {**request, "selectedBgmIds": selected}) as response:
                 handoff = json.load(response)
             self.assertEqual(selected, [group["bgmId"] for group in handoff["groups"]])
             self.assertEqual(2, handoff["count"])
+            # Media removed or changed between preview and handoff must not
+            # silently produce an incomplete, unexpectedly shortened playlist.
+            with mock.patch.object(service.catchup, "validate", return_value=([], [], [])):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request("/api/playback/catchup", {**request, "selectedBgmIds": selected})
+                self.assertEqual(400, error.exception.code)
+                error.exception.close()
             with self.request(handoff["playlistUrl"]) as response:
                 playlist = response.read().decode()
             titles = [line for line in playlist.splitlines() if line.startswith("#EXTINF")]
             self.assertEqual(2, len(titles))
             self.assertIn(rows[2]["title_ja"], titles[0])
             self.assertIn(rows[0]["title_ja"], titles[1])
+
+    def test_catchup_range_handoff_keeps_viewing_position(self):
+        with contextlib.closing(sqlite3.connect(self.database)) as db:
+            work = db.execute('SELECT id,bgm_id,title_ja FROM anime_work ORDER BY id LIMIT 1').fetchone()
+        row = {'id': work[0], 'bgm_id': work[1], 'title_ja': work[2], 'media_code': 'tv'}
+        media = []
+        for ep in range(1, 5):
+            path = self.root / f'episode-{ep}.mp4'
+            path.write_bytes(f'episode-{ep}'.encode())
+            media.append(playback.PlaybackItem(playback.MediaLocator.local(path, path.stat().st_size),
+                                               f'Ep{ep}', ep, path.stat().st_size, 'managed'))
+        with self.request(f'/api/anime/{row["id"]}/viewing',
+                          {'episode': 2, 'positionMs': 12000, 'revision': 0, 'bgmId': row['bgm_id']}) as response:
+            saved = json.load(response)
+        request = {'from': '2026-10', 'to': '2026-12', 'selectedBgmIds': [row['bgm_id']], 'player': 'copy'}
+        with mock.patch.object(service, 'query_catalog', return_value={'items': [row]}), \
+             mock.patch.object(playback, 'collect_items', return_value=media):
+            with self.request('/api/playback/catchup', {**request, 'preview': True}) as response:
+                group = json.load(response)['groups'][0]
+            self.assertEqual([2, 3, 4], group['episodes'])
+            self.assertEqual([1, 2, 3, 4], group['availableEpisodes'])
+            for lower, upper, expected in ((1, 4, [1, 2, 3, 4]), (3, 4, [3, 4])):
+                with self.request('/api/playback/catchup', {**request, 'episodeRanges': [
+                    {'bgmId': row['bgm_id'], 'from': lower, 'to': upper}]}) as response:
+                    handoff = json.load(response)
+                self.assertEqual(expected, handoff['groups'][0]['episodes'])
+                with self.request(handoff['playlistUrl']) as response:
+                    playlist = response.read().decode()
+                self.assertEqual(len(expected), playlist.count('#EXTINF:'))
+            for lower, upper in ((0, 4), (4, 2), (5, 6)):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request('/api/playback/catchup', {**request, 'episodeRanges': [
+                        {'bgmId': row['bgm_id'], 'from': lower, 'to': upper}]})
+                self.assertEqual(400, error.exception.code)
+                error.exception.close()
+        with self.request(f'/api/anime/{row["id"]}/viewing') as response:
+            latest = json.load(response)
+        self.assertEqual((saved['revision'], saved['episode'], saved['positionMs']),
+                         (latest['revision'], latest['episode'], latest['positionMs']))
+
+    def test_catchup_fully_watched_title_requires_explicit_replay_range(self):
+        with contextlib.closing(sqlite3.connect(self.database)) as db:
+            work = db.execute('SELECT id,bgm_id,title_ja FROM anime_work ORDER BY id LIMIT 1').fetchone()
+        row = {'id': work[0], 'bgm_id': work[1], 'title_ja': work[2], 'media_code': 'tv'}
+        media = []
+        for episode in (1, 2):
+            path = self.root / f'replay-{episode}.mp4'
+            path.write_bytes(b'video')
+            media.append(playback.PlaybackItem(playback.MediaLocator.local(path, 5),
+                                               f'Ep{episode}', episode, 5, 'managed'))
+        with self.request(f'/api/anime/{row["id"]}/viewing',
+                          {'episode': 2, 'revision': 0, 'bgmId': row['bgm_id']}) as response:
+            response.read()
+        request = {'from': '2026-10', 'to': '2026-12', 'selectedBgmIds': [row['bgm_id']], 'player': 'copy'}
+        with mock.patch.object(service, 'query_catalog', return_value={'items': [row]}), \
+             mock.patch.object(playback, 'collect_items', return_value=media), \
+             mock.patch.object(service.viewing.Store, 'episode_position', return_value={'completed': True}):
+            with self.request('/api/playback/catchup', {**request, 'preview': True}) as response:
+                preview = json.load(response)
+            self.assertEqual(0, preview['count'])
+            self.assertEqual(1, len(preview['groups']))
+            self.assertEqual([], preview['groups'][0]['episodes'])
+            self.assertEqual([1, 2], preview['groups'][0]['availableEpisodes'])
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('/api/playback/catchup', request)
+            self.assertEqual(400, error.exception.code)
+            error.exception.close()
+            with self.request('/api/playback/catchup', {**request, 'episodeRanges': [
+                    {'bgmId': row['bgm_id'], 'from': 1, 'to': 2}]}) as response:
+                handoff = json.load(response)
+            self.assertEqual([1, 2], handoff['groups'][0]['episodes'])
+            with self.request(handoff['playlistUrl']) as response:
+                self.assertEqual(2, response.read().decode().count('#EXTINF:'))
+
+    def test_potplayer_catchup_handoff_reads_original_m3u_and_media(self):
+        with contextlib.closing(sqlite3.connect(self.database)) as db:
+            rows = [dict(id=int(row[0]), bgm_id=int(row[1]), title_ja=row[2], media_code="tv")
+                    for row in db.execute("SELECT id,bgm_id,title_ja FROM anime_work ORDER BY id LIMIT 2")]
+        self.assertEqual(2, len(rows))
+        media = {}
+        def collect(_database, identity, _config, **_kwargs):
+            path = self.root / f"episode-{identity}.mp4"
+            body = f"synthetic-media-{identity}".encode("ascii")
+            path.write_bytes(body)
+            media[identity] = body
+            return [playback.PlaybackItem(playback.MediaLocator.local(path, len(body)),
+                                          "Episode 1", 1, len(body), "managed",
+                                          next(row["bgm_id"] for row in rows if row["id"] == identity))]
+        with mock.patch.object(service, "query_catalog", return_value={"items": rows}), \
+                mock.patch.object(playback, "collect_items", side_effect=collect):
+            request = {"from": "2026-10", "to": "2026-12", "selectedBgmIds": [row["bgm_id"] for row in reversed(rows)],
+                       "player": "potplayer", "enhanced": True}
+            with self.request("/api/playback/catchup", request) as response:
+                handoff = json.load(response)
+        self.assertEqual(2, handoff["count"])
+        self.assertEqual([row["bgm_id"] for row in reversed(rows)], [group["bgmId"] for group in handoff["groups"]])
+        self.assertEqual(f'potplayer://{handoff["playlistUrl"]}', handoff["protocolUrl"])
+        self.assertTrue(handoff["playlistUrl"].endswith(".m3u"))
+        with self.request(handoff["playlistUrl"]) as response:
+            self.assertTrue(response.headers["Content-Type"].startswith("audio/x-mpegurl"))
+            playlist = response.read().decode("utf-8")
+        self.assertIn("#EXTM3U", playlist)
+        urls = [line for line in playlist.splitlines() if line.startswith("http")]
+        self.assertEqual(2, len(urls))
+        for row, url in zip(reversed(rows), urls):
+            self.assertIn(f"episode-{row['id']}.mp4", url)
+            with self.request(url, method="HEAD") as response:
+                self.assertEqual(200, response.status)
+            with self.request(url) as response:
+                self.assertEqual(media[row["id"]], response.read())
+
+    def test_update_api_forwards_explicit_force_request(self):
+        with mock.patch.object(service.application_update, "apply", return_value={"accepted": True, "restarting": True}) as apply:
+            with self.request("/api/update/apply", {"force": True}) as response:
+                self.assertEqual(202, response.status)
+                self.assertTrue(json.load(response)["accepted"])
+            apply.assert_called_once_with(host="127.0.0.1", port=self.server.server_port, force=True)
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request("/api/update/apply", {"force": "true"})
+            self.assertEqual(409, error.exception.code)
+            error.exception.close()
+            self.assertEqual(1, apply.call_count)
 
     def test_non_object_requests_fail_cleanly_without_breaking_other_pages(self):
         paths = [f'/api/anime/{self.anime_id}/playback/handoff', '/api/playback/catchup',

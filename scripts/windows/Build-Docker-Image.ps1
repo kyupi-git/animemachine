@@ -34,8 +34,8 @@ $line = "$hash  $([IO.Path]::GetFileName($archive))" + [Environment]::NewLine
 $bundle = Join-Path $dist "AnimeMachine-$Version-compose"
 if (Test-Path -LiteralPath $bundle) { Remove-Item -LiteralPath $bundle -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $bundle | Out-Null
-Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\04-full-stack\compose.yaml') -Destination $bundle
-Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\04-full-stack\.env.example') -Destination $bundle
+Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\templates\04-full-stack\compose.yaml') -Destination $bundle
+Copy-Item -LiteralPath (Join-Path $root 'deploy\compose\templates\04-full-stack\.env.example') -Destination $bundle
 foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','CHANGELOG.en.md','CHANGELOG.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
     Copy-Item -LiteralPath (Join-Path $root $name) -Destination $bundle
 }

@@ -19,7 +19,7 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 
 ## 今週の新着話をまとめて再生
 
-新作レーダーの **まとめて続きを再生** をクリックすると、複数の TV 作品を一つのリストで続けて視聴できます。各作品は前回再生した話から最新の再生可能な話まで収録されます。PotPlayer 拡張を導入すると、保存した再生位置からも再開できます。
+新作レーダーの **まとめて続きを再生** をクリックして作品を選択し、作品ごとの再生話数の範囲と順番を変更できます。既定では未完了の話から最新の再生可能な話までを収録します。PotPlayer 拡張を導入すると、保存した再生位置からも再開できます。
 
 ![PotPlayer での実際の再生画面。サイドバーに複数の新作が並びます](docs/images/potplayer-weekly.ja.png)
 
@@ -34,7 +34,7 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 | Windows 10 / 11 | [Releases](https://github.com/kyupi-git/animemachine/releases/latest) から Windows 用 ZIP をダウンロードし、展開して `AnimeMachine.cmd` をダブルクリックします。Python は同梱されています。 |
 | Linux | Python 3.11 以降をインストールし、対応する Linux 用パッケージを展開して `./AnimeMachine-Linux.sh` を実行します。 |
 | macOS | Python 3.11 以降をインストールし、対応する macOS 用パッケージを展開して `AnimeMachine-macOS.command` を開きます。 |
-| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。既存サービスを使う場合は[別の構成](docs/guide.ja.md#docker)を選べます。 |
+| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。初心者向けの手順と構成選択は[Compose 導入ガイド](deploy/compose/README.ja.md)を参照してください。 |
 
 起動後は **<http://localhost:8787>** を開きます。別の機器から使う場合は、`localhost` を AnimeMachine が動いているパソコンや NAS のアドレスに置き換えてください。初回のアカウントと自動生成されたパスワードは、起動ウィンドウまたはコンテナのログに表示されます。
 

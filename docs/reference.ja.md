@@ -33,7 +33,7 @@ Compose の主な変数は次のとおりです。パス変数には**ホスト�
 | `ANM_ANI_RSS_URL`、`ANM_ANI_RSS_MODE` | Ani-RSS のアドレスと `prefer` / `fallback` / `manual` モード |
 | `ANM_PUBLIC_URL` | 視聴機器から開ける AnimeMachine のアドレス |
 
-設定例：[ローカル](https://github.com/kyupi-git/animemachine/blob/main/deploy/local/.env.local.example) · [単独 Compose](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/.env.example) · [既存ダウンローダー](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/.env.example) · [同梱ダウンローダー](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/.env.example) · [フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/.env.example)。
+設定例：[ローカル](https://github.com/kyupi-git/animemachine/blob/main/deploy/local/.env.local.example) · [単独 Compose](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/01-animemachine-standalone/.env.example) · [既存ダウンローダー](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/02-animemachine-external-qbt/.env.example) · [同梱ダウンローダー](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/03-animemachine-managed-qbt/.env.example) · [フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/04-full-stack/.env.example)。
 
 <a id="ports"></a>
 
@@ -54,7 +54,7 @@ QBT_BIND_ADDRESS=0.0.0.0
 ANI_RSS_BIND_ADDRESS=0.0.0.0
 ```
 
-`docker compose up -d` を実行し、`http://NASのアドレス:8080` または `http://NASのアドレス:7789` からログインします。qBittorrent の既定ユーザー名は `admin` です。自動生成されたパスワードは `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` で確認できます。Ani-RSS の既定アカウントは `admin` / `admin` です。ログイン後、セキュリティ設定で変更できます。
+`docker compose up -d` を実行し、`http://NASのアドレス:8080` または `http://NASのアドレス:7789` からログインします。qBittorrent の既定ユーザー名は `admin` です。自動生成されたパスワードは `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` で確認できます。Ani-RSS の既定アカウントは `admin` / `admin` です。**管理ポートを LAN に公開する前に**セキュリティ設定でパスワードを変更し、アクセス範囲を制限してください。
 
 これらはブラウザー用のアドレスです。Compose 内の接続では `http://qbittorrent:8080`、`http://ani-rss:7789` を使います。ホスト側のサービスへは `host.docker.internal` を使えます。Linux の独自 Compose では、対応する `host-gateway` を設定します。
 

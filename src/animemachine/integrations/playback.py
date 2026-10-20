@@ -209,10 +209,13 @@ class MediaTokenRegistry:
         if binding is None:
             return 0
         anchor = store.get(binding.user_id, binding.bgm_id)
-        if (anchor["epoch"] != binding.epoch or anchor["episode"] != binding.episode
-                or (anchor["mediaKey"] and anchor["mediaKey"] != binding.media_key)):
+        if anchor["epoch"] != binding.epoch:
             return 0
-        return max(0, int(anchor["positionMs"]) - 5000)
+        position = store.episode_position(binding.user_id, binding.bgm_id, binding.episode)
+        if ((position["mediaKey"] and position["mediaKey"] != binding.media_key)
+                or position["completed"]):
+            return 0
+        return max(0, int(position["positionMs"]) - 5000)
 
     def started(self, token: str, store: viewing.Store, *, native_event: int | None = None,
                 position_ms: int | None = None, duration_ms: int = 0, instance: str = "") -> bool:

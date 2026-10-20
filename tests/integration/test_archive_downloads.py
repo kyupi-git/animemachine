@@ -60,6 +60,26 @@ class ArchiveDownloadTests(unittest.TestCase):
                                    expected_sha256=hashlib.sha256(payload).hexdigest())
             self.assertEqual(payload,target.read_bytes())
 
+    def test_resume_rejects_wrong_content_range_before_writing(self):
+        payload = b"correct" * 3
+        class Response:
+            status_code = 206
+            headers = {"content-range": "bytes 0-20/21"}
+            url = "https://x/archive"
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def raise_for_status(self): return None
+            def iter_bytes(self, _size): yield payload
+        with tempfile.TemporaryDirectory() as raw:
+            target = Path(raw) / "archive.zip"
+            partial = target.with_suffix(".zip.part")
+            partial.write_bytes(b"correct")
+            with mock.patch.object(downloads.transport, "stream", return_value=Response()):
+                with self.assertRaises(downloads.RangeProtocolError):
+                    downloads.download("https://x/archive", target, expected_size=len(payload))
+            self.assertEqual(b"correct", partial.read_bytes())
+            self.assertFalse(target.exists())
+
     def test_read_error_and_temporary_5xx_are_retried(self):
         payload=b"retry-me" * 1024
         calls=[]

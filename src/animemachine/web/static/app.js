@@ -131,6 +131,7 @@ const i18n = {
     aboutTitle: "关于 AnimeMachine",
     checkUpdate: "检查更新",
     updateNow: "更新",
+    forceUpdateNow: "强制更新",
     updateChecking: "正在检查更新…",
     updateAvailable: "检测到新版{version}可用！",
     updateLatest: "当前已是最新版本。",
@@ -417,8 +418,8 @@ const i18n = {
     sortBy: "排序",
     recentEpisodeSort: "新作追更",
     catchup: "一键继续观看", catchupEmpty: "本季度暂无可继续观看的 TV 集数。", catchupPreparing: "正在整理可播放集数…",
-    catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "从上次播放的那一集开始；媒体访问会自动记录，可随时修改。",
-    catchupSelectHint: "勾选要看的作品，拖动调整播放顺序。", catchupSelectRequired: "请先勾选要看的作品。", catchupSelectedCount: "已选择 {works} 部作品 · {episodes} 集",
+    catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "默认跳过已看完（≥99%）的集数；已全部看完的作品可填写起始与结束集重看。",
+    catchupSelectHint: "勾选作品、调整集数范围，拖动排序。", catchupRangeFrom: "起始集", catchupRangeTo: "结束集", catchupRangeFromShort: "起始", catchupRangeToShort: "结束", catchupRangeInvalid: "请检查集数范围（必须在可播放集数内，且起始集不大于结束集）。", catchupSelectionOutdated: "作品或媒体状态已变化，请关闭窗口后重新打开续播列表。", catchupSelectRequired: "请先勾选要看的作品。", catchupSelectedCount: "已选择 {works} 部作品 · {episodes} 集",
     catchupDrag: "拖动排序，也可使用上下方向键",
     viewingResume: "续看：第 {episode} 话", viewingNew: "未开始", viewingEdit: "修改续看集数",
     viewingEpisode: "下次从这一集开始（包含本集）", viewingClear: "设为未开始", viewingUndo: "撤销",
@@ -761,6 +762,7 @@ const i18n = {
     aboutTitle: "About AnimeMachine",
     checkUpdate: "Check for updates",
     updateNow: "Update",
+    forceUpdateNow: "Reinstall",
     updateChecking: "Checking for updates…",
     updateAvailable: "New version {version} is available!",
     updateLatest: "You are running the latest version.",
@@ -1051,8 +1053,8 @@ const i18n = {
     sortBy: "Sort",
     recentEpisodeSort: "New Episode Follow-up",
     catchup: "Continue watching", catchupEmpty: "No playable TV episodes to continue this season.", catchupPreparing: "Preparing playable episodes…",
-    catchupCount: "{works} titles · {episodes} episodes", catchupHint: "Includes your last played episode. Media access updates your record; you can correct it anytime.",
-    catchupSelectHint: "Select titles to watch and drag them into playback order.", catchupSelectRequired: "Select at least one title to watch.", catchupSelectedCount: "Selected: {works} titles · {episodes} episodes",
+    catchupCount: "{works} titles · {episodes} episodes", catchupHint: "Completed episodes (≥99%) are skipped by default. For fully watched titles, enter a start and end episode to replay.",
+    catchupSelectHint: "Select titles, adjust episode ranges, and drag to reorder.", catchupRangeFrom: "From episode", catchupRangeTo: "Through episode", catchupRangeFromShort: "From", catchupRangeToShort: "To", catchupRangeInvalid: "Check episode ranges: choose available episodes in ascending order.", catchupSelectionOutdated: "Titles or media have changed. Close this window and reopen Continue watching.", catchupSelectRequired: "Select at least one title to watch.", catchupSelectedCount: "Selected: {works} titles · {episodes} episodes",
     catchupDrag: "Drag to reorder, or use the up and down arrow keys",
     viewingResume: "Continue: Ep {episode}", viewingNew: "Not started", viewingEdit: "Change starting episode",
     viewingEpisode: "Next time, start here (including this episode)", viewingClear: "Mark as not started", viewingUndo: "Undo",
@@ -1395,6 +1397,7 @@ const i18n = {
     aboutTitle: "AnimeMachineについて",
     checkUpdate: "更新を確認",
     updateNow: "更新",
+    forceUpdateNow: "強制更新",
     updateChecking: "更新を確認しています…",
     updateAvailable: "新しいバージョン {version} を利用できます！",
     updateLatest: "現在のバージョンが最新です。",
@@ -1685,8 +1688,8 @@ const i18n = {
     sortBy: "並び順",
     recentEpisodeSort: "新作追従",
     catchup: "まとめて続きを再生", catchupEmpty: "このシーズンには続けて再生できる TV の話数がありません。", catchupPreparing: "再生できる話数を確認中…",
-    catchupCount: "{works} 作品 · {episodes} 話", catchupHint: "前回再生した話から始めます。メディアへのアクセスを自動記録し、後から修正できます。",
-    catchupSelectHint: "視聴する作品を選び、ドラッグして再生順を変更できます。", catchupSelectRequired: "視聴する作品を選択してください。", catchupSelectedCount: "選択中：{works} 作品 · {episodes} 話",
+    catchupCount: "{works} 作品 · {episodes} 話", catchupHint: "99%以上視聴した話は既定で除外します。全話視聴済みの作品は開始話数と終了話数を入力して再視聴できます。",
+    catchupSelectHint: "作品と話数範囲を選択し、ドラッグで再生順を変更できます。", catchupRangeFrom: "開始話数", catchupRangeTo: "終了話数", catchupRangeFromShort: "開始", catchupRangeToShort: "終了", catchupRangeInvalid: "話数範囲を確認してください。再生可能な話数を昇順で指定してください。", catchupSelectionOutdated: "作品または動画の状態が変わりました。画面を閉じて続き再生リストを開き直してください。", catchupSelectRequired: "視聴する作品を選択してください。", catchupSelectedCount: "選択中：{works} 作品 · {episodes} 話",
     catchupDrag: "ドラッグ、または上下の方向キーで並べ替え",
     viewingResume: "続き：第 {episode} 話", viewingNew: "未再生", viewingEdit: "再開する話数を変更",
     viewingEpisode: "次回はこの話から再生（この話を含む）", viewingClear: "未再生に戻す", viewingUndo: "元に戻す",
@@ -2233,7 +2236,8 @@ function localizedError(message, status = 0) {
     [/local_library_unavailable/, "layoutPreviewUnavailable"],
     [/^invalid_credentials$/, "errorCredentials"],
     [/^administrator_required$|^forbidden$/, "errorPermission"],
-    [/^catchup_selection_required$|^invalid_catchup_selection$/, "catchupSelectRequired"],
+    [/^catchup_selection_required$/, "catchupSelectRequired"],
+    [/^invalid_catchup_selection$|^catchup_selection_outdated$/, "catchupSelectionOutdated"],
     [/^invalid_service_endpoint$/, "errorServiceEndpoint"],
     [/^service_redirect$/, "errorServiceRedirect"],
     [/^connection_failed$|Failed to fetch|NetworkError|Load failed/, "errorConnection"],
@@ -5183,13 +5187,13 @@ function positionValue(text) {
   return text.split(":").reduce((sum, part) => sum * 60 + Number(part), 0) * 1000;
 }
 function viewingButton(animeId, record, bgmId = record?.bgmId) {
-  return `<button type="button" class="text-button viewing-button" data-viewing="${animeId}" data-bgm-id="${Number(bgmId) || 0}" title="${esc(t("viewingEdit"))}">${esc(viewingLabel(record))}</button>`;
+  return `<button type="button" class="text-button viewing-button" data-viewing="${animeId}" data-bgm-id="${Number(bgmId) || 0}" title="${esc(t("viewingEdit"))} · ${esc(viewingLabel(record))}">${esc(viewingLabel(record))}</button>`;
 }
 function updateViewing(record) {
   const previous = viewingRecords.get(record.animeId);
   if (previous && (previous.revision !== record.revision || previous.epoch !== record.epoch)) invalidateCatalogPages();
   viewingRecords.set(record.animeId, record);
-  document.querySelectorAll(`[data-viewing="${record.animeId}"]`).forEach((button) => { button.textContent = viewingLabel(record); });
+  document.querySelectorAll(`[data-viewing="${record.animeId}"]`).forEach((button) => { button.textContent = viewingLabel(record); button.title = `${t("viewingEdit")} · ${viewingLabel(record)}`; });
 }
 async function openViewing(animeId, title = "", bgmId = 0) {
   const generation = ++viewingGeneration;
@@ -5265,21 +5269,43 @@ async function deliverPlayback(kind, handoff, button) {
 function catchupSelection() {
   return catchupGroups.filter((group) => catchupSelected.has(group.bgmId)).map((group) => group.bgmId);
 }
+function catchupRangeValid(group) {
+  const episodes = group.availableEpisodes;
+  return Number.isFinite(group.rangeFrom) && Number.isFinite(group.rangeTo)
+    && group.rangeFrom >= episodes[0] && group.rangeTo <= episodes[episodes.length - 1]
+    && group.rangeFrom <= group.rangeTo
+    && episodes.some((episode) => episode >= group.rangeFrom && episode <= group.rangeTo);
+}
 function updateCatchupControls(showCount = true) {
   const chosen = catchupGroups.filter((group) => catchupSelected.has(group.bgmId));
-  $("catchupPlayers").querySelectorAll("button").forEach((button) => { button.disabled = catchupBusy || !chosen.length; });
+  const valid = chosen.every((group) => catchupRangeValid(group) && group.count > 0);
+  $("catchupPlayers").querySelectorAll("button").forEach((button) => { button.disabled = catchupBusy || !chosen.length || !valid; });
   $("catchupList").querySelectorAll("input, button").forEach((control) => { control.disabled = catchupBusy; });
   $("catchupList").querySelectorAll("li[data-catchup-id]").forEach((row) => {
     row.draggable = !catchupBusy;
     row.classList.toggle("selected", catchupSelected.has(Number(row.dataset.catchupId)));
   });
-  if (showCount && catchupGroups.length) $("catchupStatus").textContent = t("catchupSelectedCount")
-    .replace("{works}", chosen.length).replace("{episodes}", chosen.reduce((sum, group) => sum + group.count, 0));
+  if (showCount && catchupGroups.length) $("catchupStatus").textContent = valid
+    ? t("catchupSelectedCount").replace("{works}", chosen.length).replace("{episodes}", chosen.reduce((sum, group) => sum + group.count, 0))
+    : t("catchupRangeInvalid");
 }
 function renderCatchupGroups() {
-  $("catchupList").innerHTML = `<ul class="catchup-list">${catchupGroups.map((group) => `<li draggable="true" data-catchup-id="${group.bgmId}"><button class="catchup-drag text-button" type="button" aria-label="${esc(group.title)} · ${esc(t("catchupDrag"))}" title="${esc(t("catchupDrag"))}"><svg viewBox="0 0 16 24" aria-hidden="true"><path d="M5 5h.01M11 5h.01M5 12h.01M11 12h.01M5 19h.01M11 19h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></button><label class="catchup-choice"><input type="checkbox" value="${group.bgmId}"${catchupSelected.has(group.bgmId) ? " checked" : ""}><span class="catchup-title">${esc(group.title)}</span></label><span class="muted catchup-episodes">${group.episodes.map((ep) => esc(String(ep))).join(" · ")}</span>${viewingButton(group.animeId, { episode: group.episode, bgmId: group.bgmId, positionMs: group.positionMs })}</li>`).join("")}</ul><p class="muted catchup-resume-hint">${esc(t("catchupHint"))}</p>`;
+  $("catchupList").innerHTML = `<ul class="catchup-list">${catchupGroups.map((group) => `<li draggable="true" data-catchup-id="${group.bgmId}"><button class="catchup-drag text-button" type="button" aria-label="${esc(group.title)} · ${esc(t("catchupDrag"))}" title="${esc(t("catchupDrag"))}"><svg viewBox="0 0 16 24" aria-hidden="true"><path d="M5 5h.01M11 5h.01M5 12h.01M11 12h.01M5 19h.01M11 19h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></button><label class="catchup-choice"><input type="checkbox" value="${group.bgmId}"${catchupSelected.has(group.bgmId) ? " checked" : ""}><span class="catchup-title" title="${esc(group.title)}">${esc(group.title)}</span></label><span class="catchup-range"><label>${esc(t("catchupRangeFromShort"))}<input type="number" aria-label="${esc(t("catchupRangeFrom"))}" data-range="from" min="${group.availableEpisodes[0]}" max="${group.availableEpisodes.at(-1)}" step="any" value="${group.rangeFrom ?? ""}"></label><span>–</span><label>${esc(t("catchupRangeToShort"))}<input type="number" aria-label="${esc(t("catchupRangeTo"))}" data-range="to" min="${group.availableEpisodes[0]}" max="${group.availableEpisodes.at(-1)}" step="any" value="${group.rangeTo ?? ""}"></label></span>${viewingButton(group.animeId, { episode: group.episode, bgmId: group.bgmId, positionMs: group.positionMs })}</li>`).join("")}</ul><p class="muted catchup-resume-hint">${esc(t("catchupHint"))}</p>`;
   updateCatchupControls();
 }
+$("catchupList").addEventListener("input", (event) => {
+  const input = event.target.closest(".catchup-range input");
+  if (!input || catchupBusy) return;
+  const group = catchupGroups.find((value) => value.bgmId === Number(input.closest("li").dataset.catchupId));
+  if (!group) return;
+  const value = input.value.trim() && input.checkValidity() ? Number(input.value) : NaN;
+  if (input.dataset.range === "from") group.rangeFrom = value;
+  else group.rangeTo = value;
+  group.rangeEdited = true;
+  group.episodes = catchupRangeValid(group) ? group.availableEpisodes.filter((ep) => ep >= group.rangeFrom && ep <= group.rangeTo) : [];
+  group.count = group.episodes.length;
+  updateCatchupControls();
+});
 function moveCatchup(identity, index) {
   if (catchupBusy) return;
   const from = catchupGroups.findIndex((group) => group.bgmId === identity);
@@ -5381,8 +5407,9 @@ async function openCatchup() {
       body: JSON.stringify({ ...request, preview: true }) });
     if (catchupRequest !== request || !$("catchupDialog").open) return;
     $("catchupStatus").textContent = state.count ? t("catchupCount").replace("{works}", state.groups.length).replace("{episodes}", state.count) : t("catchupEmpty");
-    if (!state.count) return;
-    catchupGroups = state.groups;
+    if (!state.groups.length) return;
+    catchupGroups = state.groups.map((group) => ({ ...group, rangeFrom: group.episodes[0] ?? null,
+      rangeTo: group.episodes.at(-1) ?? null, rangeEdited: false }));
     $("catchupSelectionHint").hidden = false;
     $("catchupPlayers").innerHTML = playerActionsHtml();
     renderCatchupGroups();
@@ -5400,11 +5427,14 @@ document.addEventListener("click", async (event) => {
   if (!button || button.disabled || !catchupRequest || catchupBusy || !catchupSelection().length) return;
   const kind = button.dataset.catchupPlayer, request = catchupRequest;
   const selectedBgmIds = catchupSelection();
+  const episodeRanges = catchupGroups.filter((group) => catchupSelected.has(group.bgmId) && group.rangeEdited)
+    .map((group) => ({ bgmId: group.bgmId, from: group.rangeFrom, to: group.rangeTo }));
+  if (catchupGroups.some((group) => catchupSelected.has(group.bgmId) && !catchupRangeValid(group))) return;
   catchupBusy = true; updateCatchupControls(false);
   $("catchupStatus").textContent = t("catchupPreparing");
   try {
     const handoff = await api("/api/playback/catchup", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, selectedBgmIds, player: kind, enhanced: true }) });
+      body: JSON.stringify({ ...request, selectedBgmIds, episodeRanges, player: kind, enhanced: true }) });
     if (catchupRequest !== request || !$("catchupDialog").open) return;
     if (!handoff.count) { $("catchupStatus").textContent = t("catchupEmpty"); return; }
     await deliverPlayback(kind, handoff, button);
@@ -7673,7 +7703,11 @@ async function loadApplicationUpdate(force = false) {
   try {
     const payload = await api(`/api/update/status${force ? "?force=1" : ""}`, { timeoutMs: 30000 });
     controls.applies.forEach((button) => {
-      button.hidden = !(payload.updateAvailable && payload.canUpdate);
+      const reinstall = !payload.updateAvailable && payload.canForceUpdate;
+      button.hidden = !((payload.updateAvailable && payload.canUpdate) || reinstall);
+      button.dataset.force = reinstall ? "1" : "";
+      button.dataset.i18n = reinstall ? "forceUpdateNow" : "updateNow";
+      button.textContent = t(button.dataset.i18n);
       button.dataset.version = payload.latestVersion || "";
     });
     const message = payload.updateAvailable
@@ -7696,7 +7730,10 @@ async function applyApplicationUpdate() {
   controls.checks.forEach((button) => button.disabled = true);
   controls.statuses.forEach((target) => { target.classList.remove("error"); target.textContent = t("updatePreparing"); });
   try {
-    const payload = await api("/api/update/apply", { method: "POST", timeoutMs: 180000 });
+    const reinstall = controls.applies.some((button) => button.dataset.force === "1");
+    const previousBoot = reinstall ? (await api("/api/health/live", { timeoutMs: 3000 })).bootId : null;
+    const payload = await api("/api/update/apply", { method: "POST", timeoutMs: 180000,
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ force: reinstall }) });
     controls.statuses.forEach((target) => target.textContent = t("updateRestarting"));
     const expected = String(payload.version || controls.applies.find((button) => button.dataset.version)?.dataset.version || "");
     const deadline = Date.now() + 150000;
@@ -7704,7 +7741,7 @@ async function applyApplicationUpdate() {
       await new Promise((resolve) => setTimeout(resolve, 1200));
       try {
         const health = await api("/api/health/live", { timeoutMs: 2500 });
-        if (health.ok && (!expected || health.version === expected)) { window.location.reload(); return; }
+        if (health.ok && (!expected || health.version === expected) && (!reinstall || (previousBoot && health.bootId !== previousBoot))) { window.location.reload(); return; }
       } catch (_) {}
     }
     throw new Error(t("updateRestartTimeout"));

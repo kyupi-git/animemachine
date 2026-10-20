@@ -2584,7 +2584,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .radar-table [data-subscribe], .radar-table .radar-subscribed { padding: 4px 0; line-height: 20px; min-height: 28px; box-sizing: border-box; }
 .radar-table .viewing-button { margin-left: 10px; padding: 2px 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .playback-panel.unavailable { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-#catchupDialog { width: min(760px, calc(100vw - 32px)); }
+#catchupDialog { width: min(940px, calc(100vw - 32px)); }
 #viewingDialog { width: min(460px, calc(100vw - 32px)); }
 #layoutPreviewDialog { width: min(1100px, calc(100vw - 32px)); padding: 24px; box-sizing: border-box; }
 #layoutPreviewDialog > .close { position: absolute; top: 14px; right: 14px; margin: 0; }
@@ -2600,13 +2600,18 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 @keyframes query-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .query-loading::before { animation: none; } }
 .catchup-list { list-style: none; padding: 0; margin: 8px 0; max-height: 45vh; overflow-y: auto; }
-.catchup-list li { display: grid; grid-template-columns: 20px minmax(120px, 1fr) minmax(65px, .65fr) auto; gap: 6px 10px; padding: 8px 6px; border-bottom: 1px solid var(--line); align-items: center; border-radius: 5px; cursor: grab; }
+.catchup-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr) 150px 176px; gap: 6px 10px; padding: 8px 6px; border-bottom: 1px solid var(--line); align-items: center; border-radius: 5px; cursor: grab; }
 .catchup-list li > * { min-width: 0; overflow-wrap: anywhere; }
 .catchup-list li.selected { background: color-mix(in srgb, var(--green) 7%, transparent); }
 .catchup-list li.dragging { opacity: .45; }
 .catchup-list li.drop-target { outline: 2px solid var(--green); outline-offset: -2px; }
 .catchup-choice { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; }
 .catchup-choice input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--green); }
+.catchup-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catchup-list li > .viewing-button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: end; font-size: 12px; }
+.catchup-range { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 5px; }
+.catchup-range label { display: grid; gap: 2px; margin: 0; font-size: 11px; color: var(--muted); }
+.catchup-range input { box-sizing: border-box; width: 100%; min-width: 0; margin: 0; padding: 5px; color: var(--ink); }
 .catchup-drag.text-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; min-width: 20px; padding: 6px 0; color: var(--muted); cursor: grab; touch-action: none; }
 .catchup-drag svg { width: 12px; height: 22px; pointer-events: none; }
 .catchup-resume-hint, #catchupSelectionHint { font-size: 12px; line-height: 1.5; margin: 6px 0; }
@@ -2622,11 +2627,16 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
   #catchupPlayers button { min-width: 0; white-space: normal; text-align: center; justify-content: center; }
   #catchupPlayers .player-utilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #catchupPlayers [data-catchup-player="vlc"] { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
   .catchup-list li { grid-template-columns: 20px minmax(0, 1fr) auto; gap: 4px 8px; }
   .catchup-list li > .catchup-drag { grid-column: 1; grid-row: 1 / 3; }
   .catchup-list li > .catchup-choice { grid-column: 2 / -1; grid-row: 1; }
-  .catchup-list li > .muted { grid-column: 2; grid-row: 2; padding-inline-start: 24px; font-size: 12px; }
+  .catchup-list li > .catchup-range { grid-column: 2; grid-row: 2; width: 150px; }
   .catchup-list li > .viewing-button { grid-column: 3; grid-row: 2; }
+}
+@media (max-width: 480px) {
+  .catchup-list li > .viewing-button { grid-column: 2 / -1; grid-row: 3; justify-self: start; }
 }
 .subscription-menu-actions { position: absolute; right: 0; top: 100%; z-index: 20; min-width: 190px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 6px 24px #0002; }
 .subscription-menu-actions .text-button { display: flex; width: 100%; padding: 8px 10px; text-align: left; white-space: normal; }

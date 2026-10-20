@@ -19,7 +19,7 @@ AnimeMachine is an anime library manager with Chinese, English, and Japanese int
 
 ## Watch this week's episodes in one playlist
 
-Click **Continue watching** in Release radar to combine episodes from multiple TV titles. Each title starts with the last episode you played and continues to its latest playable episode. With the PotPlayer extension installed, playback also resumes from the saved position.
+Click **Continue watching** in Release radar, select titles, adjust each title’s episode range, and reorder them. By default, each title starts with its next unfinished episode and continues to the latest playable episode. With the PotPlayer extension installed, playback also resumes from the saved position.
 
 ![Actual playback in PotPlayer, with several seasonal titles in the playlist sidebar](docs/images/potplayer-weekly.en.png)
 
@@ -34,7 +34,7 @@ Select a launch method for your device. Detailed steps are in the [setup and usa
 | Windows 10 / 11 | Download the Windows ZIP from [Releases](https://github.com/kyupi-git/animemachine/releases/latest), extract it, and double-click `AnimeMachine.cmd`. Python is included. |
 | Linux | Install Python 3.11 or later, download and extract the matching Linux release, then run `./AnimeMachine-Linux.sh`. |
 | macOS | Install Python 3.11 or later, download and extract the matching macOS release, then open `AnimeMachine-macOS.command`. |
-| NAS / Docker | Download the [full-stack compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) and run `docker compose up -d` in its directory. If you already run some services, choose an [alternative](docs/guide.en.md#docker). |
+| NAS / Docker | Download the [full-stack compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) and run `docker compose up -d` in its directory. For a beginner-friendly walkthrough and alternatives, see the [Compose setup guide](deploy/compose/README.en.md). |
 
 After launch, open **<http://localhost:8787>**. From another device, replace `localhost` with the address of the computer or NAS running AnimeMachine. Your initial account and randomly generated password appear in the launch window or container logs.
 

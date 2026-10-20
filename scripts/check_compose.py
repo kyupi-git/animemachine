@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> None:
     templates = [ROOT / "deploy/compose/compose.yaml",
-                 *sorted((ROOT / "deploy/compose").glob("[0-9][0-9]-*/compose.yaml")),
+                 *sorted((ROOT / "deploy/compose/templates").glob("[0-9][0-9]-*/compose.yaml")),
                  ROOT / "deploy/compose/advanced/collector/compose.yaml"]
     for template in templates:
         with tempfile.TemporaryDirectory(prefix="anm-compose-") as raw:

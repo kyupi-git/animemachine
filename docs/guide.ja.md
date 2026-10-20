@@ -44,14 +44,14 @@ macOS では **`AnimeMachine-macOS.command`** を開きます。展開したフ�
 
 NAS のアプリ管理で Docker / コンテナ管理を有効にするか、パソコンに [Docker](https://docs.docker.com/get-started/get-docker/) をインストールします。Docker Engine 24 以降、Docker Compose **2.20.3 以降**を使用してください。
 
-通常は[フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)を使います。AnimeMachine、qBittorrent、Ani-RSS、リソース収集サービスをまとめて起動できます。既存サービスがある場合は、下表から代わりの構成を一つ選んでください。01～04 は構成の番号で、作業手順ではありません。
+初めての方は[Docker Compose の手順ガイド](../deploy/compose/README.ja.md)も参照してください。通常は[フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)を使います。AnimeMachine、qBittorrent、Ani-RSS、リソース収集サービスをまとめて起動できます。既存サービスがある場合は、下表から代わりの構成を一つ選んでください。01～04 は構成の番号で、作業手順ではありません。
 
 | 利用環境 | 設定ファイル |
 | --- | --- |
-| 作品を探し、既存のメディアを接続する | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/compose.yaml) |
-| qBittorrent をすでに使っている | [02 · 既存のダウンローダーを接続](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/compose.yaml) |
-| qBittorrent も一緒に導入する | [03 · AnimeMachine + qBittorrent + 収集サービス](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
-| ダウンローダー、Ani-RSS、リソース収集をまとめて導入する | [04 · フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/compose.yaml) |
+| 作品を探し、既存のメディアを接続する | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/01-animemachine-standalone/compose.yaml) |
+| qBittorrent をすでに使っている | [02 · 既存のダウンローダーを接続](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/02-animemachine-external-qbt/compose.yaml) |
+| qBittorrent も一緒に導入する | [03 · AnimeMachine + qBittorrent + 収集サービス](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/03-animemachine-managed-qbt/compose.yaml) |
+| ダウンローダー、Ani-RSS、リソース収集をまとめて導入する | [04 · フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/04-full-stack/compose.yaml) |
 
 1. `animemachine` など、今後も使うフォルダーを作成します。
 2. 表の設定ファイルを開き、**Download raw file** をクリックして、**`compose.yaml`** という名前で保存します。
@@ -145,11 +145,11 @@ Docker ではコンテナから見えるパスを入力します。既定のコ�
 
 ### まとめて続きを再生
 
-**新作レーダー** でシーズンを選び、**まとめて続きを再生** をクリックします。視聴する作品にチェックを入れ、プレーヤーで開いてください。作品の行をドラッグして順番を変更できます。選択した作品だけを上から順に再生し、未選択の間は再生ボタンを押せません。対象は購読中またはメディアが入庫済みの TV 作品です。各作品は前回再生した話から最新の再生可能な話までを含み、初回は最も早い話から始まります。
+**新作レーダー** でシーズンを選び、**まとめて続きを再生** をクリックします。視聴する作品にチェックを入れ、プレーヤーで開いてください。各行の「開始」「終了」欄で再生範囲を変更できます（既定の 2～4 話を 1～4 話や 3～4 話に変更するなど）。指定範囲内の再生可能な話だけが対象です。作品の行をドラッグして順番を変更できます。選択した作品だけを上から順に再生し、未選択の間は再生ボタンを押せません。再生を開始する前にメディアや視聴進捗が変わった場合は、再生リストを開き直して再生可能な範囲を更新してください。対象は購読中またはメディアが入庫済みの TV 作品です。各作品は前回再生した話から最新の再生可能な話までを含み、初回は最も早い話から始まります。全話視聴済みの作品は既定で再生されませんが、開始話数と終了話数を入力して再視聴できます。
 
 ![まとめて続きを再生：再生可能な話と記録した位置を確認](images/continue-watching.ja.png)
 
-記録はアカウントごとに保存され、作品詳細とレーダーで共有されます。**続き：第 X 話** から開始話数と再生位置の変更、未再生へのリセット、変更の取り消しができます。リストを開くだけでは記録は変わりません。標準では動画へのアクセスで話数を記録し、必要に応じて修正できます。ログインを無効にしている場合は、すべての端末で一つの記録を共有します。
+記録はアカウントごとに保存され、作品詳細とレーダーで共有されます。**続き：第 X 話** から開始話数と再生位置の変更、未再生へのリセット、変更の取り消しができます。再生リストを開いたり話数の範囲を変更したりするだけでは記録は変わりません。実際の再生が進捗に反映され、99％以上再生した話は完了、1％以下なら未視聴とみなします。再生位置の拡張機能がある場合は正確な再生時間も保存します。必要に応じて修正できます。ログインを無効にしている場合は、すべての端末で一つの記録を共有します。
 
 ![視聴記録の修正：開始話数と再生位置を指定して保存](images/viewing-record.ja.png)
 
@@ -163,7 +163,7 @@ Docker ではコンテナから見えるパスを入力します。既定のコ�
 
 qBittorrent の接続後、作品詳細で **Torrent を検索** を押すと、検索後に候補の一覧へ移動します。リリースを選び、**ダウンロード計画を確認** を押して、ファイルと保存先を確認してから送信します。作品との一致が未確認のリリースには理由を表示し、まだダウンロードを送信できません。
 
-手元の `.torrent` ファイルは **Torrent プール**に入れます。フル Compose 構成では、リソース収集サービスがこのフォルダーにファイルを追加します。詳細な設定は[収集サービスの設定例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example)を参照してください。
+手元の `.torrent` ファイルは **Torrent プール**に入れます。フル Compose 構成では、リソース収集サービスがこのフォルダーにファイルを追加します。詳細な設定は[収集サービスの設定例](../deploy/compose/advanced/collector/.env.example)を参照してください。
 
 1. 作品を検索し、詳細で候補リリースと既存のファイルを確認します。
 2. 収集したい作品を選んで計画を作り、取得するファイルと保存先を確認します。
@@ -273,7 +273,7 @@ Windows で直接動かす場合は `D:\Anime` や `\\nas\Anime` などを指定
 
 **設定 → 履歴**では、フォルダーの作成やファイルの移動・名前変更・削除をパスで検索し、元に戻せる操作を復元できます。**設定 → ログ**では警告とエラーを絞り込み、必要に応じて技術情報を開けます。
 
-更新時は同じ配置ディレクトリとデータを使い、`compose.yaml` を差し替えて `docker compose up -d --remove-orphans` を実行します。旧版の初期化コンテナも削除され、設定とメディアは引き継がれます。
+更新時は元の配置フォルダーとデータを維持し、`compose.yaml` を差し替えて `docker compose up -d` を実行します。別の構成へ切り替える際に不要な旧サービスがあることを確認した場合に限り、`--remove-orphans` を付けます。マウント先のデータは引き継がれます。
 
 言語、テーマ、表示形式、絞り込みは好みに合わせて変更できます。管理者は設定画面でフォルダー、接続、リソース規則、ユーザーを管理し、一般ユーザーは作品の閲覧や再生を行います。
 

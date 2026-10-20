@@ -44,14 +44,14 @@ The launcher installs the required components. Open **<http://localhost:8787>**.
 
 Enable Docker or container management in your NAS app center, or install [Docker](https://docs.docker.com/get-started/get-docker/) on your computer. Use Docker Engine 24+ and Docker Compose **2.20.3+**.
 
-Use the [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
+First-time Docker users can follow the [step-by-step Compose guide](../deploy/compose/README.en.md). Use the [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
 
 | Deployment scenario | Configuration |
 | --- | --- |
-| Browse titles and connect existing media | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/01-animemachine-standalone/compose.yaml) |
-| You already run qBittorrent | [02 · Connect an existing downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/02-animemachine-external-qbt/compose.yaml) |
-| Install qBittorrent alongside AnimeMachine | [03 · AnimeMachine + qBittorrent + collector](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/03-animemachine-managed-qbt/compose.yaml) |
-| Install a downloader, Ani-RSS, and a resource collector together | [04 · Full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/04-full-stack/compose.yaml) |
+| Browse titles and connect existing media | [01 · AnimeMachine](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/01-animemachine-standalone/compose.yaml) |
+| You already run qBittorrent | [02 · Connect an existing downloader](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/02-animemachine-external-qbt/compose.yaml) |
+| Install qBittorrent alongside AnimeMachine | [03 · AnimeMachine + qBittorrent + collector](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/03-animemachine-managed-qbt/compose.yaml) |
+| Install a downloader, Ani-RSS, and a resource collector together | [04 · Full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/templates/04-full-stack/compose.yaml) |
 
 1. Create a permanent folder, such as `animemachine`.
 2. Open a configuration above, click **Download raw file**, and save it in that folder as **`compose.yaml`**.
@@ -145,11 +145,11 @@ Choose **Hide title** from a title’s subscription menu to remove it from this 
 
 ### Continue watching
 
-Choose a season in **Release radar**, click **Continue watching**, select the titles you want to watch, then open a player. Drag title rows to change the order. Only selected titles enter the playlist, from top to bottom; playback buttons stay disabled until you select a title. The list includes subscribed TV titles or TV titles already in your media library. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode.
+Choose a season in **Release radar**, click **Continue watching**, select the titles you want to watch, then open a player. Use each row’s From and To fields to edit its playback range (for example, change the default 2–4 to 1–4 or 3–4), selecting only playable episodes in that range. Drag title rows to change the order. Only selected titles enter the playlist, from top to bottom; playback buttons stay disabled until you select a title. If media availability or viewing progress changes before you launch playback, reopen the playlist to refresh the playable range. The list includes subscribed TV titles or TV titles already in your media library. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode. Fully watched titles do not play by default; enter both endpoints to replay selected episodes.
 
 ![Continue watching: review playable episodes and saved positions](images/continue-watching.en.png)
 
-Records belong to your account and are shared by title details and the radar. Click **Continue: Ep X** to change the starting episode or position, mark a title as not started, or undo a change. Opening a playlist does not update the record. By default, video access records episodes; you can correct entries as needed. With sign-in disabled, all devices share one record.
+Records belong to your account and are shared by title details and the radar. Click **Continue: Ep X** to change the starting episode or position, mark a title as not started, or undo a change. Opening a playlist or editing an episode range does not change viewing records. Actual playback updates the record: ≥99% of an episode counts as completed, while ≤1% does not count as watched. Players with the position extension also save precise playback time; you can correct entries as needed. With sign-in disabled, all devices share one record.
 
 ![Correct a viewing record by setting the starting episode and position](images/viewing-record.en.png)
 
@@ -163,7 +163,7 @@ Records belong to your account and are shared by title details and the radar. Cl
 
 After connecting qBittorrent, click **Search Torrents** in title details. When the search finishes, the view moves to the release choices. Select one and click **Preview download plan**, then check the files and save location before submitting. Releases with an unconfirmed title match show an explanation and cannot be submitted yet.
 
-Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. Its options are in the [collector configuration example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/torrent-collector.advanced.env.example).
+Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. Its options are in the [collector configuration example](../deploy/compose/advanced/collector/.env.example).
 
 1. Find a title and check candidate releases and existing files in its details.
 2. Select the works to collect, generate a plan, and review the files and destination folders.
@@ -273,7 +273,7 @@ On Windows, enter a path such as `D:\Anime` or `\\nas\Anime`. On Linux / macOS, 
 
 In **Settings → History**, search folder creation, file moves, renames, and removals by path, and restore reversible operations. In **Settings → Logs**, filter warnings and errors, then expand technical details when needed.
 
-When updating, keep the same deployment directory and data. Replace `compose.yaml` there and run `docker compose up -d --remove-orphans`. This also removes old initialization containers while retaining configuration and media.
+For updates, keep the original deployment folder and data. Replace `compose.yaml` there and run `docker compose up -d`. Use `--remove-orphans` only when switching setups and after checking that obsolete services can be removed; existing mounted data is retained.
 
 Choose your language, theme, layout, and browsing filters. Administrators manage folders, connections, resource rules, and users in Settings; regular accounts browse and play media.
 

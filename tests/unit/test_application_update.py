@@ -204,6 +204,111 @@ class ApplicationUpdateTests(unittest.TestCase):
         self.assertFalse(status["canUpdate"])
         self.assertEqual("docker_update_runtime_unavailable", status["reason"])
 
+    def test_same_version_reinstall_requires_explicit_force_and_verified_asset(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "AnimeMachine"
+            root.mkdir()
+            (root / "VERSION").write_text("1.2.4\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"ANM_INSTALL_MODE": "portable", "ANM_INSTALL_ROOT": str(root)}, clear=False), \
+                 mock.patch.object(application_update, "__version__", "1.2.4"):
+                release = application_update._build_status(self._release())
+                self.assertFalse(release["updateAvailable"])
+                self.assertFalse(release["canUpdate"])
+                self.assertTrue(release["canForceUpdate"])
+                with mock.patch.object(application_update, "status", return_value=release):
+                    with self.assertRaisesRegex(ValueError, "no newer release"):
+                        application_update.apply(host="127.0.0.1", port=8787)
+                missing = self._release()
+                missing["assets"] = []
+                self.assertFalse(application_update._build_status(missing)["canForceUpdate"])
+
+    def test_docker_same_version_requires_new_supervisor_runtime(self):
+        for runtime, allowed in (("1", False), ("2", True)):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as temp, \
+                 mock.patch.dict(os.environ, {"ANM_INSTALL_MODE": "docker", "ANM_STATE_DIR": temp,
+                                             "ANM_DOCKER_UPDATE_RUNTIME": runtime}, clear=False), \
+                 mock.patch.object(application_update, "__version__", "1.2.4"):
+                status = application_update._build_status(self._release())
+                self.assertFalse(status["updateAvailable"])
+                self.assertEqual(allowed, status["canForceUpdate"])
+
+    def test_docker_same_version_reinstall_keeps_rollback_copy(self):
+        import importlib.util
+        entry = Path(__file__).resolve().parents[2] / "packaging/docker/entrypoint.py"
+        spec = importlib.util.spec_from_file_location("animemachine_docker_entrypoint", entry)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "state" / "application-update"
+            previous = root / "releases" / "1.2.4"
+            (previous / "animemachine").mkdir(parents=True)
+            (previous / "animemachine" / "__main__.py").write_text("old", encoding="utf-8")
+            meta = previous / "animemachine-1.2.4.dist-info"
+            meta.mkdir()
+            (meta / "METADATA").write_text("old", encoding="utf-8")
+            (root / "current").write_text("1.2.4\n", encoding="utf-8")
+            wheel = Path(temp) / "new.whl"
+            self._wheel(wheel)
+            with mock.patch.dict(os.environ, {"ANM_STATE_DIR": str(Path(temp) / "state")}, clear=False), \
+                 mock.patch.object(application_update, "_validate_docker_dependencies"), \
+                 mock.patch.object(module, "_base_version", return_value="1.2.4"):
+                application_update._activate_docker_release(wheel, "1.2.4")
+                pending = module._pending()
+                self.assertIsNotNone(pending)
+                self.assertRegex(pending["backup"], r"^\.backup-[a-f0-9]{32}$")
+                self.assertEqual("old", (root / "releases" / pending["backup"] / "animemachine" / "__main__.py").read_text())
+                self.assertEqual("1.2.4", module._selected_release()[1])
+                module._rollback(pending)
+                self.assertEqual("old", (previous / "animemachine" / "__main__.py").read_text())
+                self.assertFalse((root / "pending.json").exists())
+                self.assertFalse((root / "releases" / pending["backup"]).exists())
+
+    def test_docker_new_base_ignores_legacy_same_version_overlay(self):
+        import importlib.util
+        entry = Path(__file__).resolve().parents[2] / "packaging/docker/entrypoint.py"
+        spec = importlib.util.spec_from_file_location("animemachine_docker_supervisor", entry)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.dict(os.environ, {"ANM_STATE_DIR": str(Path(temp) / "state")}, clear=False), \
+             mock.patch.object(module, "_base_version", return_value="1.2.4"):
+            release = Path(temp) / "state" / "application-update" / "releases" / "1.2.4"
+            (release / "animemachine").mkdir(parents=True)
+            (release / "animemachine" / "__main__.py").write_text("old", encoding="utf-8")
+            metadata = release / "animemachine-1.2.4.dist-info"
+            metadata.mkdir()
+            (metadata / "METADATA").write_text("old", encoding="utf-8")
+            pointer = release.parents[1] / "current"
+            pointer.write_text("1.2.4\n", encoding="utf-8")
+            self.assertEqual((None, "1.2.4"), module._selected_release())
+            self.assertFalse(pointer.exists())
+            (release / ".same-version-verified").write_text("1\n", encoding="utf-8")
+            pointer.write_text("1.2.4\n", encoding="utf-8")
+            self.assertEqual((release, "1.2.4"), module._selected_release())
+
+    def test_force_reinstall_downloads_only_when_authorized(self):
+        with tempfile.TemporaryDirectory() as temp:
+            wheel = Path(temp) / "source.whl"
+            content = self._wheel(wheel)
+            sha = hashlib.sha256(content).hexdigest()
+            release = {"updateAvailable": False, "canUpdate": False, "canForceUpdate": True,
+                       "latestVersion": "1.2.4", "asset": {
+                           "name": "animemachine-1.2.4-py3-none-any.whl", "url": "https://github.com/kyupi-git/animemachine/releases/download/v1.2.4/test.whl",
+                           "size": len(content), "sha256": sha, "checksumUrl": ""}}
+            def fake_download(_urls, path, **_kwargs):
+                path.write_bytes(content)
+                return {"sha256": sha, "urls": ["official"]}
+            with mock.patch.dict(os.environ, {"ANM_INSTALL_MODE": "docker", "ANM_STATE_DIR": str(Path(temp) / "state"),
+                                           "ANM_DOCKER_UPDATE_RUNTIME": "2"}, clear=False), \
+                 mock.patch.object(application_update, "status", return_value=release), \
+                 mock.patch.object(application_update.downloads, "download_verified", side_effect=fake_download), \
+                 mock.patch.object(application_update, "_activate_docker_release") as activate:
+                result = application_update.apply(host="127.0.0.1", port=8787, force=True)
+                self.assertTrue(result["accepted"])
+                activate.assert_called_once()
+
     def test_zip_release_extraction_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temp:
             archive = Path(temp) / "release.zip"
@@ -238,6 +343,25 @@ class ApplicationUpdateTests(unittest.TestCase):
             root = application_update._extract_release(archive, Path(temp) / "stage", "1.2.4")
             self.assertEqual((root / "VERSION").read_text(encoding="utf-8").strip(), "1.2.4")
             self.assertTrue((root / launcher).is_file())
+
+    def test_portable_release_rejects_excessive_expansion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for suffix in (".zip", ".tar.gz"):
+                with self.subTest(suffix=suffix):
+                    archive = Path(temp) / ("release" + suffix)
+                    member = "AnimeMachine-1.2.4/VERSION"
+                    if suffix == ".zip":
+                        with zipfile.ZipFile(archive, "w") as package:
+                            package.writestr(member, "1.2.4\n")
+                    else:
+                        with tarfile.open(archive, "w:gz") as package:
+                            payload = b"1.2.4\n"
+                            info = tarfile.TarInfo(member)
+                            info.size = len(payload)
+                            package.addfile(info, io.BytesIO(payload))
+                    with mock.patch.object(application_update, "_MAX_RELEASE_EXPANDED_BYTES", 1):
+                        with self.assertRaisesRegex(ValueError, "extraction limits"):
+                            application_update._extract_release(archive, Path(temp) / ("stage" + suffix), "1.2.4")
 
     def test_docker_wheel_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temp:

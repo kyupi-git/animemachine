@@ -57,8 +57,8 @@ def check_repository_version(version: str) -> None:
         *sorted((ROOT / "docs").glob("reference*.md")),
         ROOT / "deploy" / "compose" / "compose.yaml",
         ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml",
-        *(ROOT / "deploy" / "compose").glob("[0-9][0-9]-*/compose.yaml"),
-        *(ROOT / "deploy" / "compose").glob("[0-9][0-9]-*/.env.example"),
+        *(ROOT / "deploy" / "compose" / "templates").glob("[0-9][0-9]-*/compose.yaml"),
+        *(ROOT / "deploy" / "compose" / "templates").glob("[0-9][0-9]-*/.env.example"),
     ]
     pattern = re.compile(r"ghcr\.io/kyupi-git/animemachine:(\d+\.\d+\.\d+)")
     mismatches: list[str] = []

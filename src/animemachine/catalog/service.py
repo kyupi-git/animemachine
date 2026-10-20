@@ -4465,6 +4465,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
     viewing_store = viewing.Store(auth_store.path.parent / "viewing.sqlite3")
     viewing_store.normalize_catalog_episodes(db_path)
     playlist_tokens = playback.PlaylistTokenRegistry()
+    web_boot_id = secrets.token_hex(12)
     playback_diagnostics = playback.PlaybackDiagnostics()
     runtime_health_lock = threading.RLock()
     runtime_health: dict[str, dict[str, Any]] = {
@@ -5581,7 +5582,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if parsed.path in {"/api/health", "/api/health/live"}:
                 marker = hashlib.sha256(str(db_path.resolve()).encode("utf-8")).hexdigest()[:16]
-                self.json_response({"ok": True, "service": "AnimeMachine", "version": __version__, "instanceId": marker, "kind": "liveness"})
+                self.json_response({"ok": True, "service": "AnimeMachine", "version": __version__, "instanceId": marker, "bootId": web_boot_id, "kind": "liveness"})
                 return
             if parsed.path == "/api/health/ready":
                 startup = startup_status()
@@ -6134,17 +6135,27 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         raise ValueError("playback is disabled")
                     params = catchup.season_params(request)
                     rows = query_catalog(db_path, params, cfg, hidden_bgm_ids=auth_store.hidden_works(self.auth_session.user_id))["items"]
+                    ranges = None
                     if request.get("preview") is not True:
                         rows = catchup.selected_rows(rows, request.get("selectedBgmIds"))
+                        ranges = catchup.episode_ranges(request.get("selectedBgmIds"), request.get("episodeRanges"))
                     items, owners, groups = catchup.queue(db_path, rows, cfg, viewing_store, self.auth_session.user_id,
-                                                        language=params["language"][0])
+                                                        language=params["language"][0], ranges=ranges,
+                                                        include_empty=request.get("preview") is True)
                     if not items:
-                        self.json_response({"count": 0, "groups": []})
+                        if request.get("preview") is not True:
+                            raise ValueError("catchup_selection_outdated")
+                        self.json_response({"count": 0, "groups": groups})
                         return
                     if request.get("preview") is True:
                         self.json_response({"count": len(items), "groups": groups})
                         return
+                    if len(groups) != len(rows):
+                        raise ValueError("catchup_selection_outdated")
+                    expected_count = len(items)
                     items, owners, groups = catchup.validate(items, owners, groups, cfg)
+                    if len(items) != expected_count:
+                        raise ValueError("catchup_selection_outdated")
                     if not items:
                         self.json_response({"count": 0, "groups": []})
                         return
@@ -6201,11 +6212,15 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if parsed.path == "/api/update/apply":
                 try:
-                    result = application_update.apply(host=self.server.server_address[0], port=int(self.server.server_port))
+                    request = self.read_json() if self.headers.get("Content-Length", "0") != "0" else {}
+                    if not isinstance(request, dict) or not isinstance(request.get("force", False), bool):
+                        raise ValueError("invalid update request")
+                    result = application_update.apply(host=self.server.server_address[0], port=int(self.server.server_port),
+                                                      force=request.get("force") is True)
                     self.json_response(result, HTTPStatus.ACCEPTED)
                     if restart_callback is not None:
                         threading.Timer(.35, restart_callback).start()
-                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, httpx.HTTPError) as exc:
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, httpx.HTTPError, json.JSONDecodeError) as exc:
                     self.json_response({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.CONFLICT)
                 return
             if parsed.path == "/api/catalog/reshuffle":
@@ -7153,6 +7168,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                             reconciled_catalog = catalog_stamp
                         finally:
                             ANI_RSS_OPERATION_LOCK.release()
+                ani_rss.refresh_resource_policy(db_path, current)
                 settings = current.get("components", {}).get("aniRss", {}) or {}
                 interval = min(60.0, max(15.0, float(settings.get("syncMinutes", 30)) * 15.0))
                 if managed_network_changed.is_set():

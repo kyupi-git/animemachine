@@ -27,7 +27,7 @@ fi
 bundle="$dist/AnimeMachine-$version-compose"
 rm -rf "$bundle"
 mkdir -p "$bundle/docs"
-cp "$root/deploy/compose/04-full-stack/compose.yaml" "$root/deploy/compose/04-full-stack/.env.example" "$bundle/"
+cp "$root/deploy/compose/templates/04-full-stack/compose.yaml" "$root/deploy/compose/templates/04-full-stack/.env.example" "$bundle/"
 cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$bundle/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$bundle/docs/" \;
 "$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$bundle/docs/images"

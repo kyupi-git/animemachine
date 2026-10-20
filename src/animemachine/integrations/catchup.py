@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import math
 import re
 import sqlite3
 from pathlib import Path
@@ -37,11 +38,37 @@ def selected_rows(rows: list[dict[str, Any]], selection: Any) -> list[dict[str, 
     if any(type(identity) is not int or identity <= 0 for identity in selection) or len(set(selection)) != len(selection):
         raise ValueError("invalid_catchup_selection")
     available = {int(row["bgm_id"]): row for row in rows}
-    return [available[identity] for identity in selection if identity in available]
+    if any(identity not in available for identity in selection):
+        raise ValueError("invalid_catchup_selection")
+    return [available[identity] for identity in selection]
+
+
+def episode_ranges(selection: Any, values: Any) -> dict[int, tuple[float, float]]:
+    """Accept explicit per-work ranges without changing saved viewing anchors."""
+    if values is None:
+        return {}
+    if not isinstance(values, list) or len(values) > 1000 or not isinstance(selection, list):
+        raise ValueError("invalid_episode_range")
+    result: dict[int, tuple[float, float]] = {}
+    for value in values:
+        if not isinstance(value, dict) or set(value) != {"bgmId", "from", "to"}:
+            raise ValueError("invalid_episode_range")
+        identity = value["bgmId"]
+        if type(identity) is not int or identity not in selection or identity in result:
+            raise ValueError("invalid_episode_range")
+        start, end = value["from"], value["to"]
+        if (type(start) not in (int, float) or type(end) not in (int, float)
+                or not math.isfinite(start) or not math.isfinite(end)
+                or not 0 <= start <= end <= 100000):
+            raise ValueError("invalid_episode_range")
+        result[identity] = (float(start), float(end))
+    return result
 
 
 def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
-          store: viewing.Store, user_id: int, *, language: str | None = None) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
+          store: viewing.Store, user_id: int, *, language: str | None = None,
+          ranges: dict[int, tuple[float, float]] | None = None,
+          include_empty: bool = False) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
     items: list[playback.PlaybackItem] = []
     owners: list[int] = []
     groups: list[dict[str, Any]] = []
@@ -69,10 +96,25 @@ def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
                             title or name, playback.playback_episode(db, anime_id, episode), size or 0, "ani-rss"))
             record = store.get(user_id, int(row["bgm_id"]))
             anchor = record["episode"]
-            selected = [item for item in playback._default_main_queue(candidates)
-                        if item.episode is not None and (anchor is None or item.episode >= anchor)]
+            available = [item for item in playback._default_main_queue(candidates) if item.episode is not None]
+            available.sort(key=lambda item: item.episode)
+            if not available:
+                continue
+            completed = (anchor is not None and
+                         store.episode_position(user_id, int(row["bgm_id"]), anchor)["completed"])
+            default = [item for item in available if anchor is None or item.episode > anchor
+                       or (item.episode == anchor and not completed)]
+            specified = (ranges or {}).get(int(row["bgm_id"]))
+            if specified is not None:
+                if specified[0] < available[0].episode or specified[1] > available[-1].episode:
+                    raise ValueError("invalid_episode_range")
+                selected = [item for item in available if specified[0] <= item.episode <= specified[1]]
+                if not selected:
+                    raise ValueError("invalid_episode_range")
+            else:
+                selected = default
             selected.sort(key=lambda item: item.episode)
-            if not selected:
+            if not selected and not include_empty:
                 continue
             title = str(row.get("title_zh_hans_localized") if language == "zh-Hans"
                         else row.get("title_en_localized") if language == "en"
@@ -83,7 +125,8 @@ def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
             owners.extend([anime_id] * len(selected))
             groups.append({"animeId": anime_id, "bgmId": int(row["bgm_id"]), "title": title, "episode": anchor,
                            "positionMs": record["positionMs"],
-                           "episodes": [item.episode for item in selected], "count": len(selected)})
+                           "episodes": [item.episode for item in selected], "count": len(selected),
+                           "availableEpisodes": [item.episode for item in available]})
     return items, owners, groups
 
 

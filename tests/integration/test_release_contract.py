@@ -123,7 +123,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('org.opencontainers.image.title="AnimeMachine"', dockerfile)
         self.assertIn('org.opencontainers.image.source="https://github.com/kyupi-git/animemachine"', dockerfile)
         self.assertIn('ENTRYPOINT ["python", "/opt/animemachine/docker-entrypoint.py"]', dockerfile)
-        self.assertIn("ANM_DOCKER_UPDATE_RUNTIME=1", dockerfile)
+        self.assertIn("ANM_DOCKER_UPDATE_RUNTIME=2", dockerfile)
         self.assertIn("COPY packaging/docker/entrypoint.py", dockerfile)
         self.assertNotIn("USER anm", dockerfile)
         entrypoint = (ROOT / "packaging" / "docker" / "entrypoint.py").read_text(encoding="utf-8")
@@ -147,7 +147,7 @@ class ReleaseContractTests(unittest.TestCase):
             ROOT / "scripts" / "unix" / "build-docker-image.sh",
             ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml",
         ]
-        for directory in (ROOT / "deploy" / "compose").iterdir():
+        for directory in (ROOT / "deploy" / "compose" / "templates").iterdir():
             if directory.is_dir() and re.match(r"^\d{2}-", directory.name):
                 publication_files.extend((directory / "compose.yaml", directory / ".env.example"))
         for path in publication_files:
@@ -169,7 +169,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertTrue((ROOT / ".github" / "release-notes" / f"v{version}.md").is_file())
 
     def test_four_compose_modes_are_config_complete(self):
-        directories = sorted(path for path in (ROOT / "deploy" / "compose").iterdir() if path.is_dir() and re.match(r"^\d{2}-", path.name))
+        directories = sorted(path for path in (ROOT / "deploy" / "compose" / "templates").iterdir() if path.is_dir() and re.match(r"^\d{2}-", path.name))
         self.assertEqual(4, len(directories))
         collector = (ROOT / "deploy" / "compose" / "advanced" / "collector" / "compose.yaml").read_text(encoding="utf-8")
         for directory in directories:
@@ -193,7 +193,7 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertEqual(set(), required - declared, directory.name)
 
     def test_compose_defaults_do_not_require_env_or_preseeded_service_secrets(self):
-        root = ROOT / "deploy" / "compose"
+        root = ROOT / "deploy" / "compose" / "templates"
         for name in ("01-animemachine-standalone", "02-animemachine-external-qbt",
                      "03-animemachine-managed-qbt", "04-full-stack"):
             compose = (root / name / "compose.yaml").read_text(encoding="utf-8")
@@ -203,7 +203,7 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn("${ANM_LIBRARY_DIR:-./library}", compose)
         managed = (root / "03-animemachine-managed-qbt" / "compose.yaml").read_text(encoding="utf-8")
         full = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
-        collector = (root / "advanced" / "collector" / "compose.yaml").read_text(encoding="utf-8")
+        collector = (root.parent / "advanced" / "collector" / "compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn('user: "${PUID:-1000}:${PGID:-1000}"', collector)
         self.assertIn('PUID: "${PUID:-1000}"', collector)
         self.assertIn("/QbtConfig/.animemachine/api-key", managed)
@@ -222,21 +222,21 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertNotIn("/path/visible/to/qbittorrent", external)
 
     def test_managed_images_are_pinned_and_tuning_is_separate(self):
-        root = ROOT / "deploy" / "compose"
+        root = ROOT / "deploy" / "compose" / "templates"
         third = (root / "03-animemachine-managed-qbt" / "compose.yaml").read_text(encoding="utf-8")
         fourth = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", third)
         self.assertIn("lscr.io/linuxserver/qbittorrent:5.2.3", fourth)
         self.assertIn("wushuo894/ani-rss:v3.2.51", fourth)
         self.assertNotIn(":latest", third + fourth)
-        advanced = (root / "advanced" / "collector" / ".env.example").read_text(encoding="utf-8")
+        advanced = (root.parent / "advanced" / "collector" / ".env.example").read_text(encoding="utf-8")
         self.assertIn("TORRENT_COLLECTOR_HISTORY_ENABLED", advanced)
         for name in ("03-animemachine-managed-qbt", "04-full-stack"):
             ordinary = (root / name / ".env.example").read_text(encoding="utf-8")
             self.assertNotIn("TORRENT_COLLECTOR_HISTORY_PAGES_PER_JOB_PER_CYCLE=", ordinary)
 
     def test_managed_modes_and_external_only_mode_are_distinct(self):
-        root = ROOT / "deploy" / "compose"
+        root = ROOT / "deploy" / "compose" / "templates"
         first = (root / "01-animemachine-standalone" / "compose.yaml").read_text(encoding="utf-8")
         third = (root / "03-animemachine-managed-qbt" / "compose.yaml").read_text(encoding="utf-8")
         fourth = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
@@ -256,7 +256,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("\n  torrent-collector:", fourth)
 
     def test_full_stack_is_single_file_zero_config_and_bootstrap_prepares_media_mounts(self):
-        root = ROOT / "deploy" / "compose"
+        root = ROOT / "deploy" / "compose" / "templates"
         full = (root / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         self.assertNotIn("include:", full)
         self.assertIn("\n  torrent-collector:", full)
@@ -270,7 +270,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("volumes:\n  torrent-collector-state:", full)
 
     def test_full_stack_zero_config_ani_rss_download_and_playback_share_media_mount(self):
-        full = (ROOT / "deploy" / "compose" / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
+        full = (ROOT / "deploy" / "compose" / "templates" / "04-full-stack" / "compose.yaml").read_text(encoding="utf-8")
         qbt = full.split("  qbittorrent:", 1)[1].split("\n  ani-rss:", 1)[0]
         ani = full.split("  ani-rss:", 1)[1].split("\n  animemachine:", 1)[0]
         anm = full.split("\n  animemachine:\n", 1)[1].split("\n  torrent-collector:", 1)[0]
@@ -289,7 +289,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("${ANM_ANI_RSS_MEDIA_DIR:-./external/ani-rss}:/ManagedMedia", anm)
 
     def test_anirss_is_optional_outside_the_full_stack(self):
-        root = ROOT / "deploy" / "compose"
+        root = ROOT / "deploy" / "compose" / "templates"
         for name in ("01-animemachine-standalone", "02-animemachine-external-qbt", "03-animemachine-managed-qbt"):
             compose = (root / name / "compose.yaml").read_text(encoding="utf-8")
             template = (root / name / ".env.example").read_text(encoding="utf-8")
@@ -433,7 +433,7 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn("8787", text)
             self.assertNotIn("127.0.0.1:8877", text)
             self.assertIn("2.20.3", text)
-            self.assertIn("deploy/compose/torrent-collector.advanced.env.example", text)
+            self.assertIn("deploy/compose/advanced/collector/.env.example", text)
             self.assertIn("ANM_CA_BUNDLE", text)
         for family in (("README.md", "README.en.md", "README.ja.md"),
                        ("docs/architecture.md", "docs/architecture.en.md", "docs/architecture.ja.md")):

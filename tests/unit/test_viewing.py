@@ -81,6 +81,85 @@ class ViewingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 viewing.validate_position(position, duration)
 
+    def test_native_percent_threshold_and_completed_rewatch(self):
+        self.assertTrue(self.store.started(1, 10, 2, 0, 100, 'potplayer', position_ms=2000, duration_ms=10000))
+        saved = self.store.get(1, 10)
+        self.assertFalse(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=100, duration_ms=10000))
+        self.assertEqual(saved, self.store.get(1, 10))
+        self.assertTrue(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=101, duration_ms=10000))
+        self.assertFalse(viewing.completed(9899, 10000))
+        self.assertTrue(viewing.completed(9900, 10000))
+        self.assertTrue(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=9900, duration_ms=10000))
+        self.assertTrue(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=2000, duration_ms=10000))
+        self.assertTrue(self.store.episode_position(1, 10, 3)['completed'])
+        record = self.store.get(1, 10)
+        self.store.correct(1, 10, 3, record['revision'])
+        self.assertFalse(self.store.episode_position(1, 10, 3)['completed'])
+
+    def test_independent_episode_position_survives_rewatch(self):
+        registry = playback.MediaTokenRegistry()
+        def issue(number, order):
+            locator = playback.MediaLocator.local(self.path / f'{number}.mp4')
+            return registry.issue_many([locator], 900, 900,
+                [playback.ViewingBinding(1, 10, number, 0, order, playback.media_identity(locator))])[0]
+        first, second = issue(1, 100), issue(2, 200)
+        registry.started(first, self.store, native_event=1, position_ms=9000, duration_ms=10000)
+        registry.started(second, self.store, native_event=1, position_ms=6000, duration_ms=10000)
+        replay = issue(1, 300)
+        self.assertEqual(4000, registry.resume_ms(replay, self.store))
+        registry.started(replay, self.store, native_event=1, position_ms=7000, duration_ms=10000)
+        self.assertEqual(1000, registry.resume_ms(second, self.store))
+        self.assertEqual(6000, self.store.episode_position(1, 10, 2)['positionMs'])
+        self.assertEqual(1, self.store.get(1, 10)['episode'])
+
+    def test_catchup_ranges_and_completion_do_not_modify_anchors(self):
+        db_path = self.path / 'catalog.sqlite3'
+        with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+            db.execute('CREATE TABLE anime_work(id INTEGER,bgm_id INTEGER)')
+            db.execute('INSERT INTO anime_work VALUES(1,10)')
+        self.store.correct(1, 10, 2, 0, 12000)
+        before = self.store.get(1, 10)
+        media = [playback.PlaybackItem(playback.MediaLocator.local(self.path / f'{ep}.mp4'),
+                  'episode', ep, 100, 'managed') for ep in range(1, 5)]
+        rows = [{'id': 1, 'bgm_id': 10, 'media_code': 'tv', 'title_ja': 'Test'}]
+        with mock.patch.object(playback, 'collect_items', return_value=media), \
+             mock.patch.object(catchup.ani_rss, 'state', return_value={}):
+            for ranges, expected in ((None, [2, 3, 4]), ({10: (1, 4)}, [1, 2, 3, 4]),
+                                     ({10: (3, 4)}, [3, 4]), ({10: (2.5, 3.5)}, [3])):
+                result, _, groups = catchup.queue(db_path, rows, {}, self.store, 1, ranges=ranges)
+                self.assertEqual(expected, [item.episode for item in result])
+                self.assertEqual([1, 2, 3, 4], groups[0]['availableEpisodes'])
+                self.assertEqual(before, self.store.get(1, 10))
+            self.assertRaises(ValueError, catchup.queue, db_path, rows, {}, self.store, 1, ranges={10: (0, 4)})
+            self.store.started(1, 10, 2, before['epoch'], 300, 'potplayer', position_ms=9900, duration_ms=10000)
+            self.assertEqual([3, 4], [x.episode for x in catchup.queue(db_path, rows, {}, self.store, 1)[0]])
+            self.store.started(1, 10, 2, before['epoch'], 300, 'potplayer', position_ms=2500, duration_ms=10000)
+            self.assertEqual([3, 4], [x.episode for x in catchup.queue(db_path, rows, {}, self.store, 1)[0]])
+
+    def test_stale_catchup_selection_omits_empty_work(self):
+        db_path = self.path / 'catalog.sqlite3'
+        with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+            db.execute('CREATE TABLE anime_work(id INTEGER,bgm_id INTEGER)')
+            db.execute('INSERT INTO anime_work VALUES(1,10)')
+        self.store.started(1, 10, 2, 0, 100, 'potplayer', position_ms=9900, duration_ms=10000)
+        media = [playback.PlaybackItem(playback.MediaLocator.local(self.path / f'{ep}.mp4'),
+                  'episode', ep, 100, 'managed') for ep in (1, 2)]
+        rows = [{'id': 1, 'bgm_id': 10, 'media_code': 'tv', 'title_ja': 'Test'}]
+        with mock.patch.object(playback, 'collect_items', return_value=media), \
+             mock.patch.object(catchup.ani_rss, 'state', return_value={}):
+            self.assertEqual(([], [], []), catchup.queue(db_path, rows, {}, self.store, 1, ranges={}))
+            self.assertEqual([1, 2], [item.episode for item in
+                catchup.queue(db_path, rows, {}, self.store, 1, ranges={10: (1, 2)})[0]])
+
+    def test_catchup_range_payload_validation(self):
+        self.assertEqual({}, catchup.episode_ranges([10], None))
+        self.assertEqual({10: (1., 4.)}, catchup.episode_ranges([10], [{'bgmId': 10, 'from': 1, 'to': 4}]))
+        for payload in ([{'bgmId': 10, 'from': 4, 'to': 1}], [{'bgmId': 10, 'from': True, 'to': 4}],
+                        [{'bgmId': 10, 'from': float('nan'), 'to': 4}], [{'bgmId': 999, 'from': 1, 'to': 4}],
+                        [{'bgmId': 10, 'from': 1, 'to': 4}] * 2, {'10': [1, 4]}):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                catchup.episode_ranges([10], payload)
+
     def test_episode_change_clears_position_and_media_access_preserves_same_file_position(self):
         self.store.started(1, 10, 1, 0, 100, "potplayer", position_ms=123000, duration_ms=1400000, media_key="file")
         self.store.started(1, 10, 1, 0, 200, "media", media_key="file")
@@ -144,11 +223,9 @@ class ViewingTests(unittest.TestCase):
     def test_catchup_requires_explicit_selection_and_preserves_stable_identity_order(self):
         rows = [{"id": 10, "bgm_id": 100}, {"id": 20, "bgm_id": 200}, {"id": 30, "bgm_id": 300}]
         self.assertEqual([rows[2], rows[0]], catchup.selected_rows(rows, [300, 100]))
-        # Hidden, unavailable, or no-longer-eligible works cannot be added back
-        # by a stale confirmation page, and unknown IDs never select everything.
-        self.assertEqual([rows[0]], catchup.selected_rows(rows, [999, 100]))
-        self.assertEqual([], catchup.selected_rows(rows, [999]))
-        for selection in (None, [], True, "100", [100, 100], [True], ["100"], [-1], [None], [[100]], list(range(1, 1002))):
+        # A stale selection must not silently play only the remaining works.
+        for selection in (None, [], True, "100", [100, 100], [True], ["100"], [-1], [None], [[100]],
+                          [999], [999, 100], list(range(1, 1002))):
             with self.subTest(selection=repr(selection)[:40]), self.assertRaises(ValueError):
                 catchup.selected_rows(rows, selection)
 
