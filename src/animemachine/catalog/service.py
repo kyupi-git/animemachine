@@ -5013,27 +5013,32 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             priority_set = set(priority)
             queue = priority + [value for value in all_ids if value not in priority_set]
             maintenance["images"] = {"state": "running", "done": 0, "total": len(queue), "priorityDone": 0, "priorityTotal": len(priority), "failed": 0}
-        network = image_network_config(config_store.read())
-        accepted = [anime_id for anime_id in queue if image_fetcher.enqueue(anime_id, network, refresh=True)]
-        rejected = len(queue) - len(accepted)
-        with maintenance_lock:
-            maintenance["images"]["failed"] = rejected
         def monitor() -> None:
-            while True:
-                remaining = sum(1 for anime_id in accepted if image_fetcher.pending(anime_id))
-                priority_remaining = sum(1 for anime_id in priority if image_fetcher.pending(anime_id))
+            try:
+                network = image_network_config(config_store.read())
+                accepted = [anime_id for anime_id in queue if image_fetcher.enqueue(anime_id, network, refresh=True)]
+                rejected = len(queue) - len(accepted)
                 with maintenance_lock:
-                    state = maintenance["images"]
-                    state["done"] = len(queue) - remaining
-                    state["priorityDone"] = len(priority) - priority_remaining
-                if not remaining:
-                    break
-                time.sleep(5)
-            with maintenance_lock:
-                maintenance["images"]["failed"] = rejected + sum(
-                    1 for anime_id in accepted if str(image_fetcher.result(anime_id) or "").startswith(("error", "unavailable")))
-                maintenance["images"]["state"] = "complete"
-            log_event("INFO", "image_refresh_complete", **maintenance["images"])
+                    maintenance["images"]["failed"] = rejected
+                while True:
+                    remaining = sum(1 for anime_id in accepted if image_fetcher.pending(anime_id))
+                    priority_remaining = sum(1 for anime_id in priority if image_fetcher.pending(anime_id))
+                    with maintenance_lock:
+                        state = maintenance["images"]
+                        state["done"] = len(queue) - remaining
+                        state["priorityDone"] = len(priority) - priority_remaining
+                    if not remaining:
+                        break
+                    time.sleep(5)
+                with maintenance_lock:
+                    maintenance["images"]["failed"] = rejected + sum(
+                        1 for anime_id in accepted if str(image_fetcher.result(anime_id) or "").startswith(("error", "unavailable")))
+                    maintenance["images"]["state"] = "complete"
+                log_event("INFO", "image_refresh_complete", **maintenance["images"])
+            except Exception as exc:
+                with maintenance_lock:
+                    maintenance["images"].update(state="failed", error=f"{type(exc).__name__}: {exc}")
+                log_event("ERROR", "image_refresh_failed", errorType=type(exc).__name__)
         threading.Thread(target=monitor, daemon=True, name="anm-image-refresh-monitor").start()
         return True
 

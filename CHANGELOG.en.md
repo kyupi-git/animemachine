@@ -17,7 +17,7 @@ Changes affecting everyday use, with the newest release first.
 - Improved release selection with separate Ani-RSS and Torrent sections. Subtitle-group dropdowns select platforms, subtitles and quality; subscriptions keep using the chosen version. Title details put playback first and merge duplicate folders and playback sources.
 - Improved airing-series Torrent matching with season and consecutive-episode checks, omitting wrong seasons, missing episodes and stale versions while preserving completed-title and film backfilling.
 - Improved Torrent Collector settings with separate per-work search and pool controls, shared resource preferences, configurable sources, result limits, time limits and automatic collection.
-- Improved covers with the current metadata cache, Ani-RSS image-cache reuse, parallel native sources and original image quality.
+- Improved covers with the current metadata cache, Ani-RSS image-cache reuse, parallel native sources and original image quality. Bulk refresh prepares its queue in the background.
 - Improved bundled first-run settings with separate generated passwords, download-queue tuning and fewer file moves after completion. Existing external services keep their settings.
 
 ### Fixed

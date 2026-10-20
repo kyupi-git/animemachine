@@ -415,7 +415,7 @@ class NetworkLayerTests(unittest.TestCase):
         self.assertEqual("profile-windows_system_proxy", success["network_id"])
 
     def test_health_learning_and_trends_are_isolated_by_network_route(self):
-        with tempfile.TemporaryDirectory() as raw:
+        with tempfile.TemporaryDirectory() as raw, mock.patch.object(health.time, "time", return_value=1_800_000_000.0):
             store = health.Store(Path(raw) / "health.sqlite3")
             for _ in range(4):
                 store.success("mirror-a", "binary", .2, 2 * 1024 * 1024, route_mode="direct")
