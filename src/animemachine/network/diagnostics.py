@@ -40,7 +40,7 @@ def _sample(db_path: Path) -> tuple[int | None, str]:
     bgm_id: int | None = None
     image_url = ""
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
             row = db.execute("SELECT bgm_id FROM anime_work WHERE bgm_id>0 ORDER BY start_month DESC,id DESC LIMIT 1").fetchone()
             if row:
                 bgm_id = int(row[0])

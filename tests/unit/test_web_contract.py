@@ -25,6 +25,39 @@ STATIC = PROJECT / "src" / "animemachine" / "web" / "static"
 
 
 class WebContractTests(unittest.TestCase):
+    def test_three_language_keys_are_complete_and_never_overwritten(self):
+        script = (STATIC / 'app.js').read_text(encoding='utf-8')
+        section = script[script.index('const i18n = {'):script.index('const values =')]
+        tokens = list(re.finditer(r'"(?:\\.|[^"\\])*"|[{}:\[\],]|[A-Za-z_$][\w$]*', section))
+        depth = 0
+        locale = ''
+        keys = {}
+        for index, match in enumerate(tokens):
+            token = match.group()
+            if token == '{':
+                depth += 1
+            elif token == '}':
+                depth -= 1
+            elif token == ':' and index:
+                key = tokens[index-1].group().strip('"')
+                if depth == 1:
+                    locale = key
+                    keys.setdefault(locale, set())
+                elif depth == 2:
+                    self.assertNotIn(key, keys[locale], f'{locale}: duplicate {key}')
+                    keys[locale].add(key)
+        self.assertEqual({'zh-Hans','en','ja'}, set(keys))
+        self.assertEqual(keys['zh-Hans'], keys['en'])
+        self.assertEqual(keys['zh-Hans'], keys['ja'])
+
+    def test_all_named_action_icons_have_a_shared_definition(self):
+        html = (STATIC / 'index.html').read_text(encoding='utf-8')
+        script = (STATIC / 'app.js').read_text(encoding='utf-8')
+        css = (STATIC / 'styles.css').read_text(encoding='utf-8')
+        icons = set(re.findall(r'data-icon=["\']([a-z-]+)["\']', html + script))
+        for icon in icons:
+            self.assertIn(f'[data-icon="{icon}"]', css, icon)
+
     def test_optional_connection_error_returns_json_and_server_remains_available(self):
         with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {
                 "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw) / "auth.sqlite3")}):
@@ -342,13 +375,13 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('factHtml("original-name-fact"', script)
         self.assertIn('factHtml("tags-fact"', script)
         self.assertIn('label("theme", code)', script)
-        self.assertIn('storageDirectories = [...new Set(group.members.map((item) => item.storageDirectory)', script)
+        self.assertIn('resourceChoices(x.torrents, aniResources, id)', script)
         self.assertNotIn('${esc(group.sample.name)}', script)
-        self.assertIn('<b>Ani-RSS</b>', script)
+        self.assertIn('group.provider === "ani-rss" ? "Ani-RSS" : "Torrent"', script)
         self.assertIn('resourceResolutionText = (value, scan = "p")', script)
         self.assertIn('["unknown", "other", "null", "0"].includes(lower)', script)
         self.assertIn('resourceResolutionText(y.resolution, y.scan)', script)
-        self.assertIn('resourceResolutionText(y.resolution)', script)
+        self.assertIn('class="resource-variant"', script)
         self.assertIn('stateOther: "状态待确认"', script)
         self.assertNotIn('unavailable: "暂无资源"', script)
         self.assertIn('library_state || "not_in_library"', script)
@@ -386,7 +419,7 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('value="recent_episode"', html)
         self.assertIn('recentEpisodeSort: "新作追更"', script)
         self.assertIn('radarTitleColumn: "标题"', script)
-        self.assertIn('radarMediaType: "媒介类型"', script)
+        self.assertIn('radarStart: "开始时间"', script)
         self.assertIn('radar: "1"', script)
         radar_render = script[script.index('async function loadRadar('):script.index('async function openRadarSubscription')]
         self.assertNotIn('secondaryTitle(item)', radar_render)
@@ -396,13 +429,16 @@ class WebContractTests(unittest.TestCase):
         self.assertIn('radarIsHighlighted(item)', radar_render)
         self.assertNotIn('markRadarSeen(', radar_render)
         self.assertIn('item?.hasUnwatched === true', script)
-        self.assertIn('item.viewing?.episode != null', radar_render)
+        self.assertIn('class="radar-watched"', radar_render)
+        self.assertIn('viewingButton(item.id, item.viewing, item.bgm_id, true)', radar_render)
+        self.assertIn('if (!$("radarResults").querySelector("table"))', radar_render)
         self.assertIn('sort = "recent_episode"', script)
         self.assertIn('recentEpisodeSortAvailable = true', script)
         self.assertIn('applyRecentEpisodeSortAvailability(aniState', script)
         self.assertIn('const available = data.aniRssAvailable', script)
         self.assertIn('$("sortDirection").hidden = random || recent', script)
-        self.assertIn('item.origin !== "ani-rss_api"', script)
+        self.assertIn('if (target.origin === "ani-rss_api") continue;', script)
+        self.assertIn('uniqueLibraryTargets(x.targets || [])', script)
         self.assertIn('id="playbackSource"', script)
         self.assertIn('detail-subtitle-tools', script)
         self.assertIn("showRelationGraph", script)

@@ -34,11 +34,11 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 | Windows 10 / 11 | [Releases](https://github.com/kyupi-git/animemachine/releases/latest) から Windows 用 ZIP をダウンロードし、展開して `AnimeMachine.cmd` をダブルクリックします。Python は同梱されています。 |
 | Linux | Python 3.11 以降をインストールし、対応する Linux 用パッケージを展開して `./AnimeMachine-Linux.sh` を実行します。 |
 | macOS | Python 3.11 以降をインストールし、対応する macOS 用パッケージを展開して `AnimeMachine-macOS.command` を開きます。 |
-| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。初心者向けの手順と構成選択は[Compose 導入ガイド](deploy/compose/README.ja.md)を参照してください。 |
+| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。構成の選択と手順は[Compose 導入ガイド](deploy/compose/README.ja.md)を参照してください。 |
 
 起動後は **<http://localhost:8787>** を開きます。別の機器から使う場合は、`localhost` を AnimeMachine が動いているパソコンや NAS のアドレスに置き換えてください。初回のアカウントと自動生成されたパスワードは、起動ウィンドウまたはコンテナのログに表示されます。
 
-作品データは自動で取り込まれ、カバーはバックグラウンドで順次追加されます。作品一覧が開いたら、作品を探したり、メディアフォルダーを設定したりできます。
+初回起動では今期の作品とカバーを先に準備します。一覧が表示されたら検索・購読・再生を利用でき、残りの資料はバックグラウンドで補完されます。更新時は既存の作品データを引き継ぎます。
 
 ```mermaid
 flowchart TB

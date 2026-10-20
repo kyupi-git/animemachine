@@ -19,7 +19,7 @@ services:
       - ${ANM_LIBRARY_DIR:-./library}:/Library
       - ${ANM_CONFIG_DIR:-./config}/incomplete:/downloads/incomplete
     ports:
-      - ${QBT_BIND_ADDRESS:-127.0.0.1}:${QBT_WEB_PORT:-8080}:8080
+      - ${QBT_BIND_ADDRESS:-0.0.0.0}:${QBT_WEB_PORT:-8080}:8080
       - ${QBT_LISTEN_PORT:-6881}:${QBT_LISTEN_PORT:-6881}/tcp
       - ${QBT_LISTEN_PORT:-6881}:${QBT_LISTEN_PORT:-6881}/udp
     security_opt: [no-new-privileges:true]
@@ -31,7 +31,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 6
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.1}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.0}
     restart: unless-stopped
     init: true
     environment:
@@ -89,7 +89,7 @@ services:
     depends_on:
       animemachine:
         condition: service_healthy
-    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.1}
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.0}
     restart: unless-stopped
     init: true
     environment:

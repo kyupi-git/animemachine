@@ -20,7 +20,7 @@ def inspect(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
         raise OSError("local_library_unavailable")
     proposals = []
     examined = 0
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         targets = list(db.execute("SELECT * FROM runtime_work ORDER BY target_unc"))
         by_anime: dict[int, list[sqlite3.Row]] = {}

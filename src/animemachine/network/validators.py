@@ -48,6 +48,20 @@ def json_bytes(data: bytes, *, limit: int = 16 * 1024 * 1024) -> Any:
     return json.loads(data.decode("utf-8-sig"))
 
 
+def bangumi_subject(payload: Any, subject_id: int) -> dict[str, Any]:
+    """Reject error/mismatched mirror responses before accepting a cover source."""
+    candidates = [payload]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if str(candidate.get("id")) == str(subject_id) and any(key in candidate for key in ("name", "name_cn")):
+            if candidate.get("images") is not None and not isinstance(candidate["images"], dict):
+                raise ValueError("invalid Bangumi cover metadata")
+            return candidate
+        candidates.extend(candidate[key] for key in ("data", "subject", "result") if isinstance(candidate.get(key), dict))
+    raise ValueError("Bangumi subject response does not match the requested title")
+
+
 def image_bytes(data: bytes, mime: str, *, limit: int = 12 * 1024 * 1024,
                 max_pixels: int = 40_000_000) -> tuple[bytes, str]:
     if not data or len(data) > limit or not data.startswith(IMAGE_MAGIC):

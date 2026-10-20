@@ -42,7 +42,8 @@ from ..config.policy import ConfigStore, NON_GROUPING_RELATIONS, STRICT_SERIES_R
 from ..config import credentials as credential_store
 from ..torrents import runtime as runtime_catalog
 from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup, managed_network
-from . import archive_update, relation_graph, metadata_repair
+from . import archive_update, relation_graph, metadata_repair, bootstrap as catalog_bootstrap
+from ..integrations import browser_launch
 from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
 from ..library import audit as library_audit, external as external_library, history as library_history, layout as library_layout, placeholders as library_placeholders
@@ -258,7 +259,7 @@ def instance_random_seed(db_path: Path) -> str:
     if not db_path.is_file():
         return ""
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=10)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)) as db:
             row = db.execute("SELECT value FROM metadata WHERE key='instance_random_seed'").fetchone()
             return str(row[0]) if row and row[0] else ""
     except sqlite3.Error:
@@ -405,7 +406,10 @@ def ensure_archive(archive_dir: Path, supplied: Path | None = None,
         path = supplied.resolve()
         if not path.is_file():
             raise FileNotFoundError(path)
-        receipt = path.with_suffix(path.suffix + ".verified.json")
+        # Imported files may be on a read-only mount. Verification state belongs
+        # to the writable application cache, never beside the user's source file.
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        receipt = archive_dir / (path.name + ".verified.json")
         stat = path.stat()
         actual_hash = file_sha256(path)
         verified_at = None
@@ -1412,13 +1416,21 @@ class BuildItem:
 
 
 def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] | None,
-                             wd: dict[str, dict[str, list[str] | str]]) -> list[BuildItem]:
+                             wd: dict[str, dict[str, list[str] | str]], *,
+                             basic_only: bool = False,
+                             selected_subjects: dict[int, dict[str, Any]] | None = None) -> list[BuildItem]:
     target_ids = {int(item["bgm_id"]) for item in (manifest or [])}
     manifest_by_id = {int(item["bgm_id"]): item for item in (manifest or [])}
     print(f"[archive] Reading {'all animation works' if manifest is None else f'{len(target_ids)} selected works'} from {archive_path.name}...", flush=True)
     with zipfile.ZipFile(archive_path) as archive:
+        def records(filename: str):
+            if basic_only and filename not in {"subject.jsonlines", "episode.jsonlines"}:
+                return iter(())
+            return iter_jsonlines(archive, filename)
+
         subjects: dict[int, dict[str, Any]] = {}
-        for row in iter_jsonlines(archive, "subject.jsonlines"):
+        source = selected_subjects.values() if selected_subjects is not None else records("subject.jsonlines")
+        for row in source:
             subject_id = int(row.get("id", -1))
             if (manifest is None and int(row.get("type", -1)) == 2) or subject_id in target_ids:
                 subjects[subject_id] = row
@@ -1433,7 +1445,7 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
             grouped: dict[int, list[tuple[int, ...]]] = {}
             selected = 0
             defaults = {"position": -1, "relation_type": 99}
-            for count, link in enumerate(iter_jsonlines(archive, filename), 1):
+            for count, link in enumerate(records(filename), 1):
                 sid = int(link.get("subject_id", -1))
                 if sid in target_ids:
                     grouped.setdefault(sid, []).append(tuple(int(link.get(key, defaults.get(key, 0)) or 0) for key in fields))
@@ -1453,7 +1465,7 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
         related_subjects = {sid: subjects[sid] for sid in related_ids if sid in subjects}
         missing_related = related_ids - subjects.keys()
         if missing_related:
-            for row in iter_jsonlines(archive, "subject.jsonlines"):
+            for row in records("subject.jsonlines"):
                 sid = int(row.get("id", -1))
                 if sid in missing_related:
                     related_subjects[sid] = {key: row.get(key) for key in (
@@ -1462,7 +1474,7 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
         episode_count: dict[int, int] = {}
         episode_start_number: dict[int, int] = {}
         selected_episodes = 0
-        for count, row in enumerate(iter_jsonlines(archive, "episode.jsonlines"), 1):
+        for count, row in enumerate(records("episode.jsonlines"), 1):
             sid = int(row.get("subject_id", -1))
             if sid in target_ids and int(row.get("type", -1)) == 0:
                 episode_count[sid] = episode_count.get(sid, 0) + 1
@@ -1481,9 +1493,9 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
         character_ids = {link[0] for links in chars_by_subject.values() for link in links}
         character_ids.update(link[1] for links in actors_by_subject.values() for link in links)
         people = {int(row["id"]): {"id": int(row["id"]), "name": row["name"]}
-                  for row in iter_jsonlines(archive, "person.jsonlines") if int(row.get("id", -1)) in person_ids}
+                  for row in records("person.jsonlines") if int(row.get("id", -1)) in person_ids}
         characters = {int(row["id"]): {"id": int(row["id"]), "name": row["name"]}
-                      for row in iter_jsonlines(archive, "character.jsonlines") if int(row.get("id", -1)) in character_ids}
+                      for row in records("character.jsonlines") if int(row.get("id", -1)) in character_ids}
     output: list[BuildItem] = []
     related_evidence_cache: dict[int, tuple[str, str]] = {}
     for bgm_id in sorted(target_ids):
@@ -1727,6 +1739,7 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                 ("release_event_source_version", RELEASE_EVENT_SOURCE_VERSION),
                 ("english_display_title_policy", "quality-v4")
             ]
+            metadata_rows.append(("catalog_scope", str((archive_meta or {}).get("scope") or "complete")))
             if archive_meta:
                 metadata_rows.extend([
                     ("archive_name", str(archive_meta.get("name") or "")),
@@ -1806,7 +1819,7 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
             def publish_progress(_status: int, _remaining: int, _total: int) -> None:
                 if time.monotonic() >= deadline:
                     raise TimeoutError("catalog publication waited too long for active readers")
-            with contextlib.closing(sqlite3.connect(f"file:{publish_path.as_posix()}?mode=ro", uri=True)) as source_db:
+            with contextlib.closing(sqlite3.connect(publish_path.resolve().as_uri() + "?mode=ro", uri=True)) as source_db:
                 with contextlib.closing(sqlite3.connect(path, timeout=30)) as target_db:
                     source_db.backup(target_db, pages=512, progress=publish_progress, sleep=.05)
             return
@@ -2163,7 +2176,7 @@ def ensure_catalog_features(db_path: Path) -> None:
                 and bool(title_policy and title_policy[0] == "quality-v4")
                 and bool(relation_table) and bool(release_table))
 
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         if ready(db):
             return
     with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db:
@@ -2178,7 +2191,7 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
     if not items:
         return items
     with contextlib.closing(sqlite3.connect(
-            f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+            db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         for item in items:
             row = db.execute(
                 "SELECT title_ja,title_zh_hans,title_en,original_language FROM anime_work WHERE id=?",
@@ -2196,7 +2209,7 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
 def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None,
                   *, hidden_bgm_ids: Iterable[int] = ()) -> dict[str, Any]:
     ensure_catalog_features(db_path)
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as feature_db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as feature_db:
         has_ani_rss_media_table = bool(feature_db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_media'").fetchone())
         has_ani_rss_episode_state_table = bool(feature_db.execute(
@@ -2601,7 +2614,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         ranked_prefix = f"SELECT w.* FROM anime_work w{predicate}"
         ranking_prefix = ""
         row_values = predicate_values
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         db.create_function("seeded_rank", 2, lambda anime_id, s: hashlib.sha256(f"{s}:{anime_id}".encode()).hexdigest(), deterministic=True)
         db.create_function("title_origin_language", 3, title_origin_language, deterministic=True)
@@ -2769,7 +2782,7 @@ def catalog_options(db_path: Path) -> dict[str, Any]:
         cached = OPTIONS_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         def distinct(sql: str) -> list[str]:
             return [str(x[0]) for x in db.execute(sql) if x[0]]
         result = {
@@ -2798,7 +2811,7 @@ def catalog_options(db_path: Path) -> dict[str, Any]:
 def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any], *, language: str | None = None) -> dict[str, Any] | None:
     """Return a normalized Archive relation graph enriched with local runtime state."""
     ensure_catalog_features(db_path)
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         payload = relation_graph.graph_rows(db, anime_id)
         if not payload:
@@ -2923,7 +2936,7 @@ def catalog_relation_graph(db_path: Path, anime_id: int, config: dict[str, Any],
 def people_options(db_path: Path, role: str, query: str = "", limit: int = 40) -> list[dict[str, Any]]:
     ensure_catalog_features(db_path)
     limit = min(max(int(limit), 1), 100)
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.create_function("search_name", 1, search_name, deterministic=True)
         if role == "director":
             sql, values = """SELECT name,COUNT(DISTINCT anime_id) n FROM anime_staff
@@ -2999,7 +3012,7 @@ def ranked_display_themes(theme_evidence: Iterable[dict[str, Any]], limit: int =
 def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None = None, *, language: str | None = None) -> dict[str, Any] | None:
     ensure_catalog_features(db_path)
     config = config or ConfigStore(DEFAULT_CONFIG, EXAMPLE_CONFIG).read()
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT * FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if not row:
@@ -3244,6 +3257,23 @@ def image_network_config(config: dict[str, Any]) -> dict[str, Any]:
     return network
 
 
+def subject_image_urls(bgm_id: int, network: dict[str, Any]) -> list[str]:
+    registered = network_registry.for_service("bangumi_subject_cache")
+    aliases = {value.rstrip('/'): item.base_url for item in registered for value in item.legacy_base_urls}
+    caches = dict.fromkeys([*(network.get("bangumiSubjectCacheEndpoints") or []),
+                           *(item.base_url for item in registered)])
+    apis = dict.fromkeys([*(network.get("bangumiApiEndpoints") or []),
+                         *(item.base_url for item in network_registry.for_service("bangumi_api"))])
+    result = []
+    for base in caches:
+        value = str(base).rstrip('/')
+        value = aliases.get(value, value)
+        result.append(value.replace('{id}', str(bgm_id)).replace('{bucket}', str(bgm_id)[0])
+                      if '{id}' in value else f"{value}/{str(bgm_id)[0]}/{bgm_id}.json")
+    result.extend(f"{str(base).rstrip('/')}/v0/subjects/{bgm_id}" for base in apis)
+    return list(dict.fromkeys(result))
+
+
 def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
                     network: dict[str, Any] | None = None,
                     log_timing: bool = True) -> tuple[bytes, str] | None:
@@ -3298,22 +3328,13 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
     except (OSError, ValueError, RuntimeError, sqlite3.Error):
         # Ani-RSS is an optimization, never a dependency for cover loading.
         pass
-    cache_bases = list(dict.fromkeys([
-        *(network_config.get("bangumiSubjectCacheEndpoints") or []),
-        *(item.base_url for item in network_registry.for_service("bangumi_subject_cache")),
-    ]))
-    bases = list(dict.fromkeys([
-        *(network_config.get("bangumiApiEndpoints") or []),
-        *(item.base_url for item in network_registry.for_service("bangumi_api")),
-    ]))
-    bucket = str(bgm_id)[0]
-    subject_urls = [f"{str(base).rstrip('/')}/{bucket}/{bgm_id}.json" for base in cache_bases]
-    subject_urls.extend(f"{str(base).rstrip('/')}/v0/subjects/{bgm_id}" for base in bases)
+    subject_urls = subject_image_urls(bgm_id, network_config)
     try:
         IMAGE_LIMITER.wait()
         subject, _ = network_sources.fetch_json(
             subject_urls, timeout=request_timeout,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"}, attempts=attempts,
+            validator=lambda payload: network_validators.bangumi_subject(payload, bgm_id),
             hedge_delays=(0, .2, .5, .9))
         cover_urls = _cover_urls_from_subject(subject)
         if not cover_urls:
@@ -3329,11 +3350,38 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
             urls.extend(urllib.parse.urlunparse((urllib.parse.urlparse(base).scheme, urllib.parse.urlparse(base).netloc,
                         parsed.path, parsed.params, parsed.query, parsed.fragment)) for base in image_bases)
         urls = list(dict.fromkeys(urls))
-        data, mime, final_url = network_sources.fetch_binary(
-            urls, timeout=request_timeout, cooldown=failure_cooldown, limit=12*1024*1024,
-            headers={"User-Agent": USER_AGENT, "Accept": "image/avif,image/webp,image/jpeg,image/png"},
-            validator=network_validators.image_bytes, attempts=attempts,
-            hedge_delays=(0, .15, .4, .8))
+        def native_cover():
+            return network_sources.fetch_binary(
+                urls, timeout=request_timeout, cooldown=failure_cooldown, limit=12*1024*1024,
+                headers={"User-Agent": USER_AGENT, "Accept": "image/avif,image/webp,image/jpeg,image/png"},
+                validator=network_validators.image_bytes, attempts=attempts,
+                hedge_delays=(0, .15, .4, .8))
+
+        if ani_key or (not credential_is_explicit and ani_rss._secret()):
+            # Race the local API/cache against native sources. A slow or offline
+            # integration must not add its timeout to every cover's critical path.
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="anm-cover-source")
+            futures = [pool.submit(ani_rss.proxy_cover, db_path, cover_urls[0], ani_config,
+                                   api_key=ani_key if credential_is_explicit else None), pool.submit(native_cover)]
+            result = None
+            last_error = None
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        result = future.result()
+                        if result is not None:
+                            break
+                    except Exception as exc:
+                        last_error = exc
+                if result is None:
+                    raise last_error or RuntimeError("No valid cover source responded")
+                data, mime, final_url = result
+            finally:
+                for future in futures:
+                    future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+        else:
+            data, mime, final_url = native_cover()
         fetched_at = dt.datetime.now(dt.timezone.utc).isoformat()
         with contextlib.closing(sqlite3.connect(db_path, timeout=30)) as db, db:
             db.execute("PRAGMA busy_timeout=30000")
@@ -3697,7 +3745,7 @@ class CatalogWarmup:
 
     def _catalog_marker(self) -> tuple[str, str, int] | None:
         try:
-            with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+            with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
                 values = dict(db.execute(
                     "SELECT key,value FROM metadata WHERE key IN ('instance_random_seed','archive_digest','record_count')"))
             seed = str(values.get("instance_random_seed") or "")
@@ -3728,7 +3776,7 @@ class CatalogWarmup:
         lower_month = f"{lower_index // 12:04d}-{lower_index % 12 + 1:02d}"
         upper_month = f"{upper_index // 12:04d}-{upper_index % 12 + 1:02d}"
         try:
-            with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+            with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
                 rows = db.execute(
                     "SELECT w.id,w.raw_date,w.start_month,i.fetched_at FROM anime_work w "
                     "JOIN anime_image i ON i.anime_id=w.id "
@@ -3749,7 +3797,7 @@ class CatalogWarmup:
     def _retry_due_ids(self, *, limit: int = 512) -> list[int]:
         """Return uncached covers that still need a low-priority retry."""
         try:
-            with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+            with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
                 rows = db.execute(
                     "SELECT w.id FROM anime_work w LEFT JOIN anime_image i ON i.anime_id=w.id "
                     "WHERE i.image_blob IS NULL AND (i.anime_id IS NULL OR COALESCE(i.error,'')<>'no_cover') "
@@ -3863,7 +3911,7 @@ class CatalogWarmup:
         placeholders = ",".join("?" for _ in values)
         try:
             with contextlib.closing(sqlite3.connect(
-                    f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+                    self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
                 row = db.execute(
                     f"SELECT MIN(start_month) FROM anime_work WHERE id IN ({placeholders}) "
                     "AND start_month IS NOT NULL AND start_month<>''", values,
@@ -3891,7 +3939,7 @@ class CatalogWarmup:
             title = f"#{anime_id}"
             title_fields: dict[str, Any] = {}
             try:
-                with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+                with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
                     columns = {str(row[1]) for row in db.execute("PRAGMA table_info(anime_work)")}
                     if {"title_ja", "title_zh_hans", "title_en", "original_language"}.issubset(columns):
                         row = db.execute(
@@ -4067,7 +4115,7 @@ class CatalogWarmup:
 
     def _direct_batches(self, where: str, values: tuple[Any, ...], batch_size: int,
                         *, missing_only: bool = False) -> tuple[int, Iterable[list[int]]]:
-        with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
             if missing_only and db.execute("SELECT 1 FROM sqlite_master WHERE name='anime_image'").fetchone():
                 where = f"({where}) AND NOT EXISTS(SELECT 1 FROM anime_image i WHERE i.anime_id=anime_work.id AND (i.image_blob IS NOT NULL OR i.error='no_cover'))"
             total = int(db.execute(f"SELECT COUNT(*) FROM anime_work WHERE {where}", values).fetchone()[0])
@@ -4081,7 +4129,7 @@ class CatalogWarmup:
                 return
             offset = 0
             while True:
-                with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+                with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
                     rows = db.execute(
                         f"SELECT id FROM anime_work WHERE {where} "
                         "ORDER BY CASE WHEN start_month IS NULL OR start_month='' THEN 1 ELSE 0 END, start_month DESC, id DESC "
@@ -4096,7 +4144,7 @@ class CatalogWarmup:
         return total, batches()
 
     def _cached_count(self, where: str, values: tuple[Any, ...]) -> int:
-        with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
             if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_image'").fetchone():
                 return 0
             row = db.execute(
@@ -4110,7 +4158,7 @@ class CatalogWarmup:
         if not values:
             return []
         placeholders = ",".join("?" for _ in values)
-        with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+        with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
             rows = db.execute(
                 f"SELECT w.id FROM anime_work w LEFT JOIN anime_image i ON i.anime_id=w.id "
                 f"WHERE w.id IN ({placeholders}) AND (i.anime_id IS NULL OR "
@@ -4121,7 +4169,7 @@ class CatalogWarmup:
 
     def _history_batches_by_month(self, before_month: str, batch_size: int) -> Iterable[tuple[int, list[int]]]:
         with contextlib.closing(sqlite3.connect(
-                f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+                self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
             months = [str(row[0]) for row in db.execute(
                 "SELECT DISTINCT start_month FROM anime_work "
                 "WHERE start_month<? AND start_month IS NOT NULL AND start_month<>'' "
@@ -4139,7 +4187,7 @@ class CatalogWarmup:
 
     def _future_batches_by_month(self, after_month: str, batch_size: int) -> Iterable[tuple[int, list[int]]]:
         with contextlib.closing(sqlite3.connect(
-                f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+                self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
             months = [str(row[0]) for row in db.execute(
                 "SELECT DISTINCT start_month FROM anime_work "
                 "WHERE start_month>? AND start_month IS NOT NULL AND start_month<>'' "
@@ -4230,7 +4278,7 @@ class CatalogWarmup:
                                    network=network, ani_enabled=ani_prefetch_enabled)
                 if ani_pool is not None:
                     marks = ",".join("?" for _ in anime_ids)
-                    with contextlib.closing(sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+                    with contextlib.closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
                         priority_recent = [int(row[0]) for row in db.execute(
                             f"SELECT id FROM anime_work WHERE id IN ({marks}) AND start_month>=? AND start_month<=? ORDER BY id",
                             [*anime_ids, start_month, end_month],
@@ -4886,11 +4934,21 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 environment.update(REQUEST_TIMEOUT_SECONDS="8", HTTP_MAX_RETRIES="1",
                                    TORRENT_COLLECTOR_CATALOG_PATH=str(db_path))
                 command = [sys.executable, "-m", "animemachine.torrents.search", "--db", str(db_path),
-                           "--anime-id", str(anime_id), "--out", str(directory), "--status", str(progress_file)]
+                           "--anime-id", str(anime_id), "--out", str(directory), "--status", str(progress_file),
+                           "--config", str(config_store.path)]
                 progress_file.unlink(missing_ok=True)
-                completed = subprocess.run(command, capture_output=True, timeout=180, env=environment)
-                if completed.returncode:
-                    raise RuntimeError("torrent_search_failed")
+                from ..config.collector import settings as collector_settings
+                try:
+                    completed = subprocess.run(command, capture_output=True,
+                        timeout=collector_settings(current)['search']['timeoutSeconds'] + 15, env=environment)
+                    if completed.returncode:
+                        raise RuntimeError("torrent_search_failed")
+                except subprocess.TimeoutExpired:
+                    partial = json.loads(progress_file.read_text(encoding='utf-8')) if progress_file.is_file() else {}
+                    if not partial.get('saved'):
+                        raise RuntimeError('torrent_search_failed') from None
+                    partial['sourcesFailed'] = max(1, int(partial.get('sourcesFailed', 0)))
+                    progress_file.write_text(json.dumps(partial), encoding='utf-8')
                 discovery = json.loads(progress_file.read_text(encoding="utf-8"))
                 with maintenance_lock:
                     maintenance["torrentSearch"][key].update(phase="torrent_mapping", **discovery)
@@ -5678,6 +5736,13 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             mapped.append({**record, "animeId": int(row[0])})
                 self.json_response({"items": mapped})
                 return
+            if parsed.path == "/api/playback/browser-permission-command":
+                try:
+                    origin = urllib.parse.parse_qs(parsed.query).get("origin", [""])[0]
+                    self.json_response({"command": browser_launch.permission_command(origin)})
+                except ValueError:
+                    self.json_response({"error": "invalid_site_origin"}, HTTPStatus.BAD_REQUEST)
+                return
             if parsed.path == "/api/playback/potplayer-extension.zip":
                 package = io.BytesIO()
                 folder = RESOURCES / "potplayer"
@@ -5916,7 +5981,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                                                   **({"Retry-After": "1"} if queued else {})})
                 return
             if parsed.path == "/api/stats":
-                with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+                with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
                     payload = dict(db.execute("SELECT key,value FROM metadata"))
                 payload["version"] = __version__
                 payload["runtime"] = runtime_catalog.runtime_stats(db_path)
@@ -6108,6 +6173,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if requires_admin("POST", parsed.path) and self.auth_session.role != "admin":
                 self.json_response({"error": "administrator_required"}, HTTPStatus.FORBIDDEN)
                 return
+            if parsed.path in {"/api/library/placeholders", "/api/library/layout-preview"}:
+                if catalog_bootstrap.metadata(db_path).get("catalog_scope") == "season":
+                    self.json_response({"error": "catalog_metadata_preparing"}, HTTPStatus.CONFLICT)
+                    return
             viewing_match = re.fullmatch(r"/api/anime/(\d+)/viewing", parsed.path)
             if viewing_match:
                 try:
@@ -6315,7 +6384,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 except (ValueError, OSError) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
-            subscribe_match = re.fullmatch(r"/api/ani-rss/resources/(ar-[0-9a-f]{24})/subscribe", parsed.path)
+            subscribe_match = re.fullmatch(r"/api/ani-rss/resources/(ar-[0-9a-f]{24}(?:~[0-9a-f]{16})?)/subscribe", parsed.path)
             if subscribe_match:
                 if not submission_is_enabled():
                     self.json_response({"error": "submission_disabled"}, HTTPStatus.FORBIDDEN)
@@ -6445,6 +6514,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     request = self.read_json()
                     current = config_store.read()
                     local_request, remote_jobs = ani_rss.partition_plan(db_path, request, current)
+                    if local_request.get("animeIds") and catalog_bootstrap.metadata(db_path).get("catalog_scope") == "season":
+                        raise ValueError("catalog_metadata_preparing")
                     skipped_works = local_request.pop("_skippedWorks", [])
                     plan = (runtime_catalog.create_plan(db_path, current, local_request, plan_dir)
                             if local_request.get("animeIds") else None)
@@ -6522,6 +6593,11 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             raise
                     # Post-commit diagnostics must never turn a completed save into an apparent failure.
                     invalidate_health_cache()
+                    try:
+                        from ..torrents.settings import publish as publish_collector_settings
+                        publish_collector_settings(db_path, config_store.read())
+                    except (OSError, ValueError) as exc:
+                        log_event("WARNING", "collector_settings_refresh_deferred", errorType=type(exc).__name__)
                     try:
                         transport.reset()
                     except Exception as exc:
@@ -6672,6 +6748,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             plan = runtime_catalog.get_plan(db_path, plan_id)
                             if not plan or plan.get("state") != "preview":
                                 raise ValueError("plan is missing, stale, or already submitted")
+                            if plan.get("jobs") and catalog_bootstrap.metadata(db_path).get("catalog_scope") == "season":
+                                raise ValueError("catalog_metadata_preparing")
                             reserve_submission_space(plan_id, plan)
                             try:
                                 runtime_catalog.stage_plan_submission(db_path, plan_id, plan_path)
@@ -6752,7 +6830,7 @@ def _catalog_access_metadata(db_path: Path) -> dict[str, str]:
     if not db_path.is_file():
         return {}
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
             return {
                 str(key): str(value)
                 for key, value in db.execute(
@@ -6768,24 +6846,14 @@ def _catalog_access_metadata(db_path: Path) -> dict[str, str]:
 def _startup_image_source_status(db_path: Path, config: dict[str, Any], *, timeout: float = 3.0) -> dict[str, int]:
     network = config.get("metadata", {}).get("network", {})
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
             row = db.execute(
                 "SELECT bgm_id FROM anime_work WHERE bgm_id IS NOT NULL ORDER BY start_month DESC,id DESC LIMIT 1"
             ).fetchone()
         bgm_id = int(row[0]) if row else 2
     except (OSError, ValueError, sqlite3.Error):
         bgm_id = 2
-    bucket = str(bgm_id)[0]
-    cache_bases = list(dict.fromkeys([
-        *(str(value).rstrip("/") for value in network.get("bangumiSubjectCacheEndpoints") or []),
-        *(item.base_url for item in network_registry.for_service("bangumi_subject_cache")),
-    ]))
-    api_bases = list(dict.fromkeys([
-        *(str(value).rstrip("/") for value in network.get("bangumiApiEndpoints") or []),
-        *(item.base_url for item in network_registry.for_service("bangumi_api")),
-    ]))
-    subject_urls = [f"{base}/{bucket}/{bgm_id}.json" for base in cache_bases]
-    subject_urls.extend(f"{base}/v0/subjects/{bgm_id}" for base in api_bases)
+    subject_urls = subject_image_urls(bgm_id, network)
 
     def subject_probe(url: str) -> tuple[bool, list[str]]:
         try:
@@ -6951,6 +7019,11 @@ def _print_access_info(host: str, port: int, config: dict[str, Any], db_path: Pa
     print("=========================================\n", flush=True)
 
 
+class CatalogHTTPServer(ThreadingHTTPServer):
+    # Cover requests and navigation can arrive together after opening a view.
+    request_queue_size = 128
+
+
 def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFIG,
           *, submission_enabled: bool = True, plan_dir: Path | None = None,
           ready_callback: Any | None = None,
@@ -6976,6 +7049,8 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
     # per-task image configuration below keeps later credential changes current.
     credential_store.load_into_environment(STATE_DIR)
     config_store = ConfigStore(config_path, EXAMPLE_CONFIG)
+    from ..torrents.settings import publish as publish_collector_settings
+    publish_collector_settings(db_path, config_store.read())
     image_fetcher = ImageFetcher(db_path)
     image_fetcher.start()
     access_reported = threading.Event()
@@ -6997,7 +7072,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
         startup_started_monotonic=startup_started_monotonic,
         restart_callback=restart_requested.set,
     )
-    server = ThreadingHTTPServer((host, port), handler)
+    server = CatalogHTTPServer((host, port), handler)
     stop_monitor = threading.Event()
     handler.recover_interrupted_submissions()
     handler.recover_interrupted_maintenance()

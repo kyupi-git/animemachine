@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from collections.abc import Callable
 
-from .catalog import service as catalog, metadata_repair
+from .catalog import service as catalog, metadata_repair, bootstrap as catalog_bootstrap
 from .torrents import runtime as runtime_catalog, mapper as torrent_mapper
 from .library import audit as library_audit, external as external_library
 from .integrations import ani_rss
@@ -169,7 +169,8 @@ def bootstrap_qbittorrent(config_dir: Path) -> None:
     password_value = f'"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(digest).decode()})"'
     path = config_dir / "qBittorrent" / "qBittorrent.conf"
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = path.read_text(encoding="utf-8-sig") if path.is_file() else "[Preferences]\n"
+    new_config = not path.is_file()
+    text = path.read_text(encoding="utf-8-sig") if not new_config else "[Preferences]\n"
     def set_value(section: str, key: str, value: str) -> None:
         nonlocal text
         if f"[{section}]" not in text:
@@ -187,8 +188,20 @@ def bootstrap_qbittorrent(config_dir: Path) -> None:
     incomplete_dir = os.getenv("ANM_INCOMPLETE_DIR", "/downloads/incomplete").strip() or "/downloads/incomplete"
     for key, value in ((r"Session\DefaultSavePath", library_dir),
                        (r"Session\TempPath", incomplete_dir),
-                       (r"Session\TempPathEnabled", "true")):
-        set_value("BitTorrent", key, value)
+                       (r"Session\TempPathEnabled", "false" if new_config else "true")):
+        if not re.search(rf"^{re.escape(key)}=", text, re.MULTILINE):
+            set_value("BitTorrent", key, value)
+    if new_config:
+        # Download in place and rename only on completion, avoiding a complete
+        # copy across Docker mounts. Media scanners ignore the .!qB suffix.
+        set_value("BitTorrent", r"Session\AddExtensionToIncompleteFiles", "true")
+    # Keep bounded concurrency while letting unavailable swarms release their
+    # queue slots. Explicit settings from an existing installation take precedence.
+    for key, value in ((r"Session\IgnoreSlowTorrentsForQueueing", "true"),
+                       (r"Session\MaxActiveDownloads", "5"),
+                       (r"Session\MaxActiveTorrents", "10")):
+        if not re.search(rf"^{re.escape(key)}=", text, re.MULTILINE):
+            set_value("BitTorrent", key, value)
     _persist_bootstrap_secret(path, text.rstrip("\n"))
 
 
@@ -212,6 +225,12 @@ def bootstrap_ani_rss(config_dir: Path) -> None:
     path = config_dir / "config.v2.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
+    if "login" not in data:
+        web_secret = _shared_bootstrap_secret(
+            config_dir, "web-password", "ANM_ANI_RSS_WEB_PASSWORD", "ANM_ANI_RSS_WEB_PASSWORD_FILE",
+            "/run/secrets/ani_rss_web_password", lambda: "ani_" + secrets.token_urlsafe(24),
+            lambda value: len(value) >= 12, "Ani-RSS Web password must contain at least 12 characters")
+        data["login"] = {"username": "admin", "password": hashlib.md5(web_secret.encode(), usedforsecurity=False).hexdigest()}
     data.update({
         "apiKey": ani_key,
         "downloadToolType": "qBittorrent",
@@ -480,14 +499,14 @@ def ensure_catalog_shell() -> bool:
     if DB.is_file():
         try:
             with contextlib.closing(sqlite3.connect(
-                    f"file:{DB.as_posix()}?mode=ro", uri=True, timeout=10)) as db:
+                    DB.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)) as db:
                 if not db.execute(
                         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone():
                     return False
                 values = dict(db.execute(
-                    "SELECT key,value FROM metadata WHERE key IN ('archive_name','record_count')"))
-                return (str(values.get("archive_name") or "") == "bootstrap-pending"
-                        and int(values.get("record_count") or 0) == 0)
+                    "SELECT key,value FROM metadata WHERE key IN ('archive_name','record_count','catalog_scope')"))
+                return (values.get("catalog_scope") == "season" or (
+                    values.get("archive_name") == "bootstrap-pending" and int(values.get("record_count") or 0) == 0))
         except (sqlite3.Error, ValueError):
             # An unrecognized or damaged database must not be silently replaced.
             return False
@@ -503,11 +522,12 @@ def ensure_catalog_shell() -> bool:
 def background_bootstrap(shell_created: bool, catalog_ready: threading.Event | None = None) -> None:
     """Build the real catalog first, then start prefetch before slower runtime sync."""
     try:
+        if shell_created:
+            catalog_bootstrap.prepare(
+                catalog, DB, ARCHIVE, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read().get("metadata", {}).get("network", {}),
+                ready=catalog_ready.set if catalog_ready is not None else lambda: None,
+                progress=lambda value: sync_status(str(value.get("phase") or "catalog_bootstrap"), details=value))
         with catalog.DATABASE_MAINTENANCE_LOCK:
-            if shell_created:
-                init_catalog(force=True, sync_after=False)
-                if catalog_ready is not None:
-                    catalog_ready.set()
             sync_runtime(scan_pool=True, sync_ani_rss=False)
         with catalog.background_task_lease("metadata") as allowed:
             if allowed:
@@ -526,6 +546,8 @@ def sync_runtime(*, scan_pool: bool = True, sync_ani_rss: bool = True) -> dict[s
     """
     result: dict[str, object] = {}
     current_config = ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read()
+    from .torrents.settings import publish as publish_collector_settings
+    publish_collector_settings(DB, current_config)
     performance = current_config.get("performance", {})
     torrent_pool = Path(str(current_config.get("deployment", {}).get("torrentPoolRoot") or TORRENT_POOL))
     sync_status("starting")
@@ -646,8 +668,13 @@ def periodic_sync(stop: threading.Event, bootstrap_finished: threading.Event | N
         if time.monotonic() - last_run < minutes * 60:
             continue
         try:
+            if catalog_bootstrap.pending(DB):
+                catalog_bootstrap.prepare(
+                    catalog, DB, ARCHIVE, current.get("metadata", {}).get("network", {}), ready=lambda: None,
+                    progress=lambda value: sync_status(str(value.get("phase") or "catalog_bootstrap"), details=value))
             with catalog.DATABASE_MAINTENANCE_LOCK:
-                sync_runtime(scan_pool=True, sync_ani_rss=False)
+                from .config.collector import settings as collector_settings
+                sync_runtime(scan_pool=collector_settings(current)['pool']['monitorEnabled'], sync_ani_rss=False)
             with catalog.background_task_lease("metadata", stop_event=stop) as allowed:
                 if allowed:
                     metadata_repair.run_batch(DB, ConfigStore(CONFIG, catalog.EXAMPLE_CONFIG).read(),
@@ -735,7 +762,7 @@ def main() -> int:
             stop = threading.Event()
             bootstrap_finished = threading.Event()
             catalog_ready = threading.Event()
-            if not shell_created:
+            if not shell_created or catalog_bootstrap.metadata(DB).get("catalog_scope") == "season":
                 catalog_ready.set()
             def bootstrap_after_web_ready() -> None:
                 # Let the first HTML/API requests complete before background writers

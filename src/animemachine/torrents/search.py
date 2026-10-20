@@ -17,12 +17,13 @@ from typing import Any, Callable
 import httpx
 
 from ..library.layout import portable_directory_component
+from ..config.collector import settings as collector_settings
 from .collector_filter import CatalogMatcher, parse_release_title
 from .metainfo import inspect_bytes
 
 
 def keywords(db_path: Path, anime_id: int) -> tuple[int, list[str]]:
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         work = db.execute("SELECT bgm_id,title_ja,title_zh_hans,title_en FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if work is None:
             raise ValueError("anime not found")
@@ -35,12 +36,15 @@ def keywords(db_path: Path, anime_id: int) -> tuple[int, list[str]]:
 def discover(db_path: Path, anime_id: int, directory: Path, *,
              sources: dict[str, Callable[..., Any]] | None = None,
              download: Callable[..., tuple[bytes, str]] | None = None,
-             progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+             progress: Callable[[dict[str, Any]], None] | None = None,
+             config: dict[str, Any] | None = None) -> dict[str, Any]:
     # Import in this dedicated process so per-request budgets do not mutate
     # the long-running Collector's configuration or global state.
     from . import collector
     bgm_id, terms = keywords(db_path, anime_id)
-    fetchers = sources or {name: collector.HISTORY_FETCHERS[name] for name in ("nyaa-desc", "mikan", "acgrip")}
+    options = collector_settings(config or {})['search']
+    source_names = {'nyaa': 'nyaa-desc', 'mikan': 'mikan', 'acgrip': 'acgrip'}
+    fetchers = sources if sources is not None else {source_names[name]: collector.HISTORY_FETCHERS[source_names[name]] for name in options['sources']}
     download = download or collector.download_native
     # Background cover/overlay writes must not reload every title alias for
     # every release. The requested stable identity is checked again at exit.
@@ -49,7 +53,7 @@ def discover(db_path: Path, anime_id: int, directory: Path, *,
     stats: dict[str, Any] = {"sourcesDone": 0, "sourcesTotal": len(fetchers), "found": 0,
                              "sourcesFailed": 0, "saved": 0, "failed": 0, "bgmId": bgm_id, "errors": []}
     directory.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + options['timeoutSeconds']
     def publish() -> None:
         if progress:
             progress(dict(stats))
@@ -57,16 +61,19 @@ def discover(db_path: Path, anime_id: int, directory: Path, *,
     def fetch(source: str, adapter: Callable[..., Any]) -> tuple[str, list[dict[str, Any]], list[str]]:
         rows, errors = [], []
         for term in terms[:2]:
+            if time.monotonic() >= deadline:
+                break
             try:
                 items, _ = adapter(term, 1)
-                rows.extend(items[:30])
+                rows.extend(items[:options['maxResults']])
             except (OSError, ValueError, RuntimeError, httpx.HTTPError) as exc:
                 errors.append(type(exc).__name__)
         return source, rows, errors
     rows = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="anm-title-source") as pool:
-        futures = [pool.submit(fetch, source, adapter) for source, adapter in fetchers.items()]
-        for future in concurrent.futures.as_completed(futures):
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(3, len(fetchers))), thread_name_prefix="anm-title-source")
+    futures = {pool.submit(fetch, source, adapter): source for source, adapter in fetchers.items()}
+    try:
+        for future in concurrent.futures.as_completed(futures, timeout=min(20, options['timeoutSeconds'] / 3)):
             source, items, errors = future.result()
             rows.extend((source, item) for item in items)
             stats["sourcesDone"] += 1
@@ -75,20 +82,34 @@ def discover(db_path: Path, anime_id: int, directory: Path, *,
                 if len(errors) == len(terms[:2]):
                     stats["sourcesFailed"] += 1
             publish()
+    except concurrent.futures.TimeoutError:
+        for future, source in futures.items():
+            if not future.done():
+                stats['sourcesFailed'] += 1
+                stats['errors'].append({'source': source, 'error': 'timeout'})
+        publish()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    # Round-robin sources so a large feed cannot consume the entire budget.
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for source, item in rows:
+        by_source.setdefault(source, []).append(item)
+    rows = [(source, items[index]) for index in range(max(map(len, by_source.values()), default=0))
+            for source, items in by_source.items() if index < len(items)]
     seen: set[str] = set()
     hashes: set[str] = set()
     attempted: dict[str, int] = {}
     for source, item in rows:
         title = str(item.get("title") or "")
         key = str(item.get("download_url") or item.get("details_url") or "")
-        if not key or key in seen or attempted.get(source, 0) >= 6:
+        if not key or key in seen or attempted.get(source, 0) >= options['maxResults']:
             continue
         seen.add(key)
         evidence = matcher.match(title, parse_release_title(title))
         if evidence.status != "exact" or evidence.anime_id != anime_id:
             continue
         stats["found"] += 1
-        if len(hashes) >= 16 or time.monotonic() > deadline:
+        if len(hashes) >= options['maxResults'] or time.monotonic() > deadline:
             break
         attempted[source] = attempted.get(source, 0) + 1
         try:
@@ -121,13 +142,17 @@ def main() -> None:
     parser.add_argument("--anime-id", required=True, type=int)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--status", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
     args = parser.parse_args()
     def progress(value: dict[str, Any]) -> None:
         args.status.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.status.with_suffix(".pending")
         temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         temporary.replace(args.status)
-    result = discover(args.db, args.anime_id, args.out, progress=progress)
+    from ..config.policy import ConfigStore
+    from ..config.loader import PACKAGE_ROOT
+    config = ConfigStore(args.config, PACKAGE_ROOT / 'resources/config.example.json').read() if args.config else None
+    result = discover(args.db, args.anime_id, args.out, progress=progress, config=config)
     progress(result)
 
 

@@ -21,7 +21,7 @@ Compose の主な変数は次のとおりです。パス変数には**ホスト�
 
 | 変数 | 既定値 / 用途 |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.4.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.0` |
 | `ANM_LIBRARY_DIR` | `./library`、コレクション |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`、Torrent プール |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`、既存メディア |
@@ -47,14 +47,21 @@ Compose でも `ANM_WEB_PORT` でホスト側のポートを変えます。コ�
 
 ### qBittorrent / Ani-RSS の管理画面
 
-同梱 Compose では qBittorrent の Web UI がローカルの `8080`、Ani-RSS が `7789` です。NAS のアドレスから開く場合は `.env` に記入します。
+同梱 Compose の管理画面は、既定で LAN から開けます。新規導入時にサービスごとにパスワードを生成します。
 
-```dotenv
-QBT_BIND_ADDRESS=0.0.0.0
-ANI_RSS_BIND_ADDRESS=0.0.0.0
+| サービス | アドレス | ユーザー名 | 初回パスワードの保存先（プロジェクト内） |
+| --- | --- | --- | --- |
+| qBittorrent | `http://NASのアドレス:8080` | `admin` | `config/qbittorrent/.animemachine/web-password` |
+| Ani-RSS | `http://NASのアドレス:7789` | `admin` | `config/ani-rss/.animemachine/web-password` |
+
+`compose.yaml` のあるフォルダーで、次のコマンドからも確認できます。
+
+```sh
+docker compose exec animemachine cat /QbtConfig/.animemachine/web-password
+docker compose exec animemachine cat /AniRssConfig/.animemachine/web-password
 ```
 
-`docker compose up -d` を実行し、`http://NASのアドレス:8080` または `http://NASのアドレス:7789` からログインします。qBittorrent の既定ユーザー名は `admin` です。自動生成されたパスワードは `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` で確認できます。Ani-RSS の既定アカウントは `admin` / `admin` です。**管理ポートを LAN に公開する前に**セキュリティ設定でパスワードを変更し、アクセス範囲を制限してください。
+更新時は既存のアカウントとパスワードを引き継ぎます。サービス内で変更した場合は変更後のパスワードを使います。旧版の Ani-RSS で初期パスワード `admin` を使っている場合は、セキュリティ設定で独自のパスワードを設定できます。ホスト上のみで利用する場合は、`.env` の `QBT_BIND_ADDRESS` と `ANI_RSS_BIND_ADDRESS` を `127.0.0.1` にして `docker compose up -d` を実行します。
 
 これらはブラウザー用のアドレスです。Compose 内の接続では `http://qbittorrent:8080`、`http://ani-rss:7789` を使います。ホスト側のサービスへは `host.docker.internal` を使えます。Linux の独自 Compose では、対応する `host-gateway` を設定します。
 
@@ -85,6 +92,23 @@ NO_PROXY=localhost,127.0.0.1,qbittorrent,ani-rss
 定期確認は **UTC+8** の木曜日 02:12、新版がない場合の再確認は金曜日 02:12 です。日本時間ではそれぞれ 03:12 に当たります。その後は次週の確認に移り、進捗と最近の結果は状態データに保存します。
 
 フル Compose 構成にはリソース収集サービスが含まれます。[単独の収集設定](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/compose.yaml)でも使えます。ソース、過去の検索、再試行、プロキシの設定は[詳細な環境変数の例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/.env.example)を参照してください。収集サービスが Torrent プールに保存し、AnimeMachine が走査して、確定した計画からダウンロードを送信します。
+
+### Torrent Collector の設定
+
+日常の設定は **設定 → 接続 → Torrent Collector** にあります。作品ごとの検索は AnimeMachine に内蔵し、qBittorrent の接続後に利用できます。自動収集は Compose の常駐 Collector が行います。
+
+![収集設定：作品ごとの検索とバックグラウンドの収集を管理](images/collector-settings.ja.png)
+
+| 設定 | 既定値と用途 |
+| --- | --- |
+| `components.torrentCollector.search.sources` | `mikan`、`nyaa`、`acgrip`：作品ごとの検索先 |
+| `components.torrentCollector.search.maxResults` | `80`：一回の検索で保存する Torrent メタデータの上限 |
+| `components.torrentCollector.search.timeoutSeconds` | `120`：検索の制限時間（秒） |
+| `components.torrentCollector.pool.monitorEnabled` | `true`：`components.discovery.pollMinutes` ごとにプールをスキャン |
+| `components.torrentCollector.pool.collectionEnabled` | `true`：プールを自動収集。無効でも作品ごとの手動検索は利用可能 |
+| `components.torrentCollector.pool.historyEnabled` | `true`：過去のリリースも収集。無効でも新着は収集 |
+
+Collector はリソースの設定を共有し、変更を自動で読み込みます。既存の Torrent とメディアは保持します。手動検索では、設定を個別に上書きして選択できる候補も表示します。
 
 ## データファイルと保守
 

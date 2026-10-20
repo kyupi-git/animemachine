@@ -1,7 +1,6 @@
 """Shared work-identity and physical-library layout policy.
 
-The product and the private-library maintenance scripts both import this
-module.  Archive subjects remain logical catalog records; only physical works
+Archive subjects remain logical catalog records; only physical works
 receive a directory and an acquisition target.
 """
 from __future__ import annotations

@@ -51,7 +51,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-animemachine = ["web/static/*", "resources/*.json", "resources/potplayer/*"]
+animemachine = ["web/static/*", "resources/*.json", "resources/potplayer/*", "resources/windows/*"]
 
 [tool.setuptools.dynamic]
 version = {file = ["VERSION"]}

@@ -460,7 +460,7 @@ def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str
     if not anime_ids:
         return latest
     remote_available = ani_rss.state_available(ani_rss.state(db_path, config))
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for offset in range(0, len(anime_ids), 400):
             chunk = anime_ids[offset:offset + 400]
@@ -507,7 +507,7 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
             raise ValueError("Ani-RSS playback source is invalid")
         bgm_id = viewing_identities(db_path, [anime_id])[anime_id]
         remote_items = ani_rss.playback_items(db_path, anime_id, config, remote_id)
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
             remote_items = [dataclasses.replace(item, episode=playback_episode(db, anime_id, item.episode)) for item in remote_items]
         items = [PlaybackItem(
             MediaLocator.remote(item.filename, item.name, item.extension, item.size, remote_id),
@@ -518,7 +518,7 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
         return items
 
     source_root = authorize_media_path(Path(source), config) if source else None
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         work = db.execute("SELECT bgm_id,title_ja,episode_count FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if not work:
@@ -642,7 +642,7 @@ def _m3u_text(value: str) -> str:
 def viewing_identities(db_path: Path, anime_ids: list[int]) -> dict[int, int]:
     if not anime_ids:
         return {}
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         result = {}
         for anime_id in set(anime_ids):
             row = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (anime_id,)).fetchone()

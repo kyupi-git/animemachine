@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterable
 
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
 from ..storage.sleep import require_awake
+from .layout import WORK_DIRECTORY_RE
 
 VIDEO = {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm", ".flv", ".wmv"}
 YEAR = re.compile(r"\s*[（(](?P<year>19\d{2}|20\d{2})[）)]\s*$")
@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS external_media_file(
 );
 CREATE INDEX IF NOT EXISTS ix_external_media_anime ON external_media_file(anime_id,match_state);
 """
-MATCH_RULE_VERSION = 2
+MATCH_RULE_VERSION = 3
 _SCAN_LOCKS_GUARD = threading.Lock()
 _SCAN_LOCKS: dict[str, threading.Lock] = {}
 
@@ -82,6 +83,9 @@ def _title_hint(root: Path, path: Path, kind: str) -> tuple[str, int | None, str
     else:
         raw = path.parent.name
         media = None
+    catalog_name = _catalog_directory_hint(raw)
+    if catalog_name is not None:
+        return catalog_name[0], catalog_name[1], media
     match = YEAR.search(raw)
     year = int(match.group("year")) if match else None
     title = YEAR.sub("", raw).strip()
@@ -97,7 +101,18 @@ def _episode_hint(name: str) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _catalog_directory_hint(value: str) -> tuple[str, int | None] | None:
+    match = WORK_DIRECTORY_RE.fullmatch(value)
+    if match is None:
+        return None
+    year = re.match(r"((?:19|20)\d{2})(?:_|-|$)", match.group("date"))
+    return match.group("title"), int(year[1]) if year else None
+
+
 def _clean_title(value: str) -> tuple[str, int | None]:
+    catalog_name = _catalog_directory_hint(value)
+    if catalog_name is not None:
+        return catalog_name
     match = YEAR.search(value)
     year = int(match.group("year")) if match else None
     value = YEAR.sub("", value)

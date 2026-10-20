@@ -39,7 +39,8 @@ class SlowCoverSource(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/v0/subjects/"):
             anime_id = self.path.rsplit("/", 1)[-1]
-            body = json.dumps({"images": {"large": f"http://127.0.0.1:{self.server.server_port}/cover/{anime_id}.png"}}).encode()
+            body = json.dumps({"id": int(anime_id), "name": f"Test {anime_id}",
+                               "images": {"large": f"http://127.0.0.1:{self.server.server_port}/cover/{anime_id}.png"}}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
             return
@@ -88,7 +89,7 @@ class ImageFetcherIsolationTests(unittest.TestCase):
             store.write(current)
             network = current["metadata"]["network"]
             handler = service.make_handler(web_db, store,
-                                           submission_enabled=False, image_fetcher=fetcher)
+                                           submission_enabled=False, image_fetcher=fetcher, start_warmup=False)
             handler.log_message = lambda *_args: None
             web = DaemonServer(("127.0.0.1", 0), handler)
             web_thread = threading.Thread(target=web.serve_forever, daemon=True); web_thread.start()

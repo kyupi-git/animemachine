@@ -65,7 +65,7 @@ Viewing records live separately in application data and use account IDs and stab
 
 ## Background tasks
 
-- **Title data**: the first launch downloads and builds the catalog. Weekly Archive checks run on Thursday at 02:12, UTC+8. If there is no new archive, one follow-up runs 24 hours later, followed by the next weekly cycle.
+- **Title data**: new installations prepare recent titles and episode metadata first and begin fetching covers. Full relationships and credits are built in the background and merged by stable identity. Existing complete catalogs remain available, and committed stages survive interruptions. Weekly Archive checks run on Thursday at 02:12, UTC+8; one follow-up runs 24 hours later if needed, followed by the next weekly cycle.
 - **Covers**: works you are browsing come first, followed by recent and older titles. You can use the library while images are loading.
 - **Media and resources**: scheduled folder scans and service syncs update collection status, episodes, and subscriptions.
 - **Ongoing tasks**: progress and recent valid results are saved. Unfinished work resumes after a restart; remote tasks retry when connectivity returns.

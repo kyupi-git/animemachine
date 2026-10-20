@@ -35,7 +35,7 @@ cp "$script_dir/$launcher" "$release/$launcher"
 mkdir -p "$release/tools/maintenance"
 cp "$script_dir/Clean-AnimeMachine.sh" "$root/scripts/clean_runtime.py" "$release/tools/maintenance/"
 
-cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$release/"
+cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$root/CONTRIBUTING.en.md" "$root/CONTRIBUTING.ja.md" "$release/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/" \;
 if [ -d "$root/docs/images" ]; then
     "$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$release/docs/images"

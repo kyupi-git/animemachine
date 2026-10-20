@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+from dataclasses import replace
 import httpx
 import hashlib
 import http.client
@@ -37,6 +38,8 @@ from .collector_state import CollectorState, namespaced_result_key
 from .metainfo import MAX_TORRENT_BYTES, inspect_bytes, read_torrent_file
 from ..network import tls as network_tls, transport as network_transport
 from ..network import registry as network_registry, hedging as network_hedging
+from ..config.collector import settings as collector_settings
+from . import settings as managed_settings
 
 
 def _env_bool(name: str, default: str) -> bool:
@@ -118,6 +121,37 @@ PRIMARY_SEARCH_TERMS = sorted(
     key=lambda item: (item.casefold(), item),
 )
 NATIVE_JOBSET = f"native-v6:{SEARCH_RULESET_ID}"
+_managed_config: dict[str, Any] | None = None
+_managed_checked_at = 0.0
+
+
+def _collection_allowed(*, history: bool = False) -> bool:
+    global _managed_config, _managed_checked_at
+    now = time.monotonic()
+    if now - _managed_checked_at >= 1:
+        _managed_config = managed_settings.read(catalog_path_from_env(), _managed_config)
+        _managed_checked_at = now
+    options = collector_settings(_managed_config or {})['pool']
+    return options['collectionEnabled'] and (not history or options['historyEnabled'])
+
+
+def _collection_generation() -> str | None:
+    generation = catalog_matcher.generation()
+    if _managed_config is None:
+        return generation
+    revision = hashlib.sha256(json.dumps({key: _managed_config.get(key, {}) for key in ('torrentPolicy', 'ui')}, sort_keys=True).encode()).hexdigest()[:16]
+    return f'{generation or ""}:{revision}'
+
+
+def _catalog_evidence(title, evidence):
+    catalog = catalog_matcher.match(title, evidence)
+    return replace(catalog, generation=_collection_generation()) if _managed_config is not None else catalog
+
+
+def _admission(decision, title, metadata):
+    if _managed_config is None or decision.decision != 'accept' or managed_settings.admitted(title, metadata, _managed_config):
+        return decision
+    return replace(decision, decision='defer', reason='resource_preferences', confidence='policy')
 state: CollectorState | None = None
 db = None
 catalog_matcher = CatalogMatcher(catalog_path_from_env())
@@ -832,6 +866,8 @@ def download_native(item: dict[str, Any], source: str) -> tuple[bytes, str]:
 
 
 def process_native_item(item: dict[str, Any], source: str, *, force: bool = False) -> int:
+    if not _collection_allowed():
+        return 0
     store = _require_state()
     key = store.record_discovery(source, item)
     existing = store.get_discovery(key)
@@ -839,7 +875,7 @@ def process_native_item(item: dict[str, Any], source: str, *, force: bool = Fals
         return 0
     title = str(item.get("title") or "")
     evidence = parse_release_title(title)
-    catalog = catalog_matcher.match(title, evidence)
+    catalog = _catalog_evidence(title, evidence)
     title_decision = decide_title(evidence, catalog)
     _bump("discovered")
     if title_decision.decision == "reject":
@@ -860,7 +896,7 @@ def process_native_item(item: dict[str, Any], source: str, *, force: bool = Fals
             item["download_url"] = resolved
             _bump("torrent_downloaded")
         metadata = inspect_bytes(raw, filename=title, include_files=True)
-        final = decide_final(evidence, metadata.get("manifestSummary"), catalog)
+        final = _admission(decide_final(evidence, metadata.get("manifestSummary"), catalog), title, metadata)
         if final.decision == "reject":
             store.record_decision(key, final, metadata=metadata)
             _bump("manifest_reject")
@@ -894,7 +930,7 @@ def process_native_item(item: dict[str, Any], source: str, *, force: bool = Fals
 
 def run_discovery_reevaluation() -> int:
     store = _require_state()
-    generation = catalog_matcher.generation()
+    generation = _collection_generation()
     rows = store.discoveries_needing_reevaluation(generation, REEVALUATION_BATCH_SIZE)
     saved = 0
     for row in rows:
@@ -929,7 +965,9 @@ def run_retry_queue() -> int:
 
 def _audit_classifier(title: str, metadata: dict[str, Any]):
     evidence = parse_release_title(title)
-    catalog = catalog_matcher.match(title, evidence)
+    catalog = _catalog_evidence(title, evidence)
+    # Existing pool audits keep their structural meaning. Preference changes
+    # must never quarantine a user's previously collected Torrent files.
     return decide_final(evidence, metadata.get("manifestSummary"), catalog)
 
 
@@ -948,6 +986,8 @@ def crawl_history_term(source, term, page_budget=HISTORY_PAGES_PER_JOB_PER_CYCLE
     pages_done = 0
     log(f"HISTORY {source}: term={term!r}, resume page={page}")
     while pages_done < page_budget:
+        if not _collection_allowed(history=True):
+            return saved, True
         try:
             items, has_next = fetcher(term, page)
         except HttpStatusError as e:
@@ -977,6 +1017,8 @@ def crawl_history_term(source, term, page_budget=HISTORY_PAGES_PER_JOB_PER_CYCLE
             log(f"WARN {source} pagination loop: page {page} repeats page {prior[0]}; checkpoint held")
             return saved, False
         for item in items:
+            if not _collection_allowed(history=True):
+                return saved, True
             saved += process_native_item(item, source.replace("nyaa-desc", "nyaa").replace("nyaa-asc", "nyaa").replace("nekobt-desc", "nekobt").replace("nekobt-asc", "nekobt"))
         remember_signature(source, term, page, sig)
         next_page = page + 1
@@ -995,6 +1037,8 @@ def run_native_history():
     jobs = 0
     for source in HISTORY_FETCHERS:
         for term in SEARCH_TERMS:
+            if not _collection_allowed(history=True):
+                return saved
             _page, _expected, done = native_job_get(source, term)
             if done:
                 continue
@@ -1033,6 +1077,8 @@ def crawl_full_history_source(source):
     pages_done = 0
     log(f"FULL HISTORY {source}: resume public page={page}")
     while pages_done < FULL_HISTORY_PAGES_PER_SOURCE_PER_CYCLE:
+        if not _collection_allowed(history=True):
+            return saved, True
         try:
             items, has_next = fetcher(page)
         except HttpStatusError as e:
@@ -1062,6 +1108,8 @@ def crawl_full_history_source(source):
             log(f"WARN {source} full-history pagination loop: page {page} repeats page {prior[0]}; checkpoint held")
             return saved, False
         for item in items:
+            if not _collection_allowed(history=True):
+                return saved, True
             saved += process_native_item(item, source)
         remember_signature(state_source, term, page, sig)
         next_page = page + 1
@@ -1100,6 +1148,8 @@ def run_native_incremental():
     for source, fetcher in INCREMENTAL_FETCHERS.items():
         previous_sig = None
         for page in range(1, NATIVE_INCREMENTAL_PAGES + 1):
+            if not _collection_allowed():
+                return saved
             try:
                 items, has_next = fetcher("", page)
             except Exception as e:
@@ -1171,7 +1221,7 @@ def _history_counts() -> tuple[bool, bool]:
 
 
 def main(*, self_test: bool = False, audit_only: bool = False, once: bool = False, restore_quarantine: int | None = None) -> int:
-    global state, db, _cycle_stats
+    global state, db, _cycle_stats, _managed_config
     run_parser_self_test()
     if self_test:
         print("torrent-collector self-test passed", flush=True)
@@ -1200,6 +1250,13 @@ def main(*, self_test: bool = False, audit_only: bool = False, once: bool = Fals
         log(f"search_terms={len(SEARCH_TERMS)}; audit={AUDIT_MODE}; network={'SOCKS5h '+PROXY_HOST+':'+str(PROXY_PORT)+' -> adaptive fallback' if PROXY_ENABLED else 'adaptive proxy/system/direct'}")
         next_native_incremental_at = 0.0
         while True:
+            _managed_config = managed_settings.read(catalog_path_from_env(), _managed_config)
+            options = collector_settings(_managed_config or {})['pool']
+            if not options['collectionEnabled']:
+                if once:
+                    return 0
+                time.sleep(30)
+                continue
             _cycle_stats = {}
             cycle_saved = 0
             rec = state.reconcile()
@@ -1211,18 +1268,18 @@ def main(*, self_test: bool = False, audit_only: bool = False, once: bool = Fals
             if now >= next_native_incremental_at:
                 cycle_saved += run_native_incremental()
                 next_native_incremental_at = time.monotonic() + POLL
-            if not full_history_complete():
+            if options['historyEnabled'] and not full_history_complete():
                 cycle_saved += run_full_history()
-            if not native_history_complete():
+            if options['historyEnabled'] and not native_history_complete():
                 cycle_saved += run_native_history()
             rec = state.reconcile()
             for key, value in rec.items():
                 _bump("pool_" + key, value)
             full_complete, keyword_complete = _history_counts()
             pending = db.execute("SELECT COUNT(*) FROM retry_queue WHERE state='retryable'").fetchone()[0]
-            reeval_pending = state.reevaluation_pending_count(catalog_matcher.generation())
+            reeval_pending = state.reevaluation_pending_count(_collection_generation())
             _cycle_stats["reevaluation_pending"] = reeval_pending
-            histories_complete = full_complete and keyword_complete
+            histories_complete = not options['historyEnabled'] or (full_complete and keyword_complete)
             if state.needs_legacy_discovery_crawl() and histories_complete:
                 state.mark_legacy_discovery_crawl_complete()
             sleep_for = min(POLL, HISTORY_RETRY_SECONDS) if not histories_complete or pending or reeval_pending else POLL
@@ -1231,7 +1288,13 @@ def main(*, self_test: bool = False, audit_only: bool = False, once: bool = Fals
             log(f"cycle complete: {summary} full_history={full_complete} keyword_history={keyword_complete} retryable={pending} next={sleep_for}s")
             if once:
                 return 0
-            time.sleep(sleep_for)
+            # Re-read UI settings promptly without presenting a stopped container.
+            wake_at = time.monotonic() + sleep_for
+            while time.monotonic() < wake_at:
+                time.sleep(min(30, max(0, wake_at - time.monotonic())))
+                latest = managed_settings.read(catalog_path_from_env(), _managed_config)
+                if latest != _managed_config:
+                    break
     finally:
         if state is not None:
             state.close()

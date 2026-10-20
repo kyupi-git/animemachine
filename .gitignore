@@ -11,7 +11,7 @@
 /config.json.*
 /state/
 /deploy/private/
-/deploy/compose/*/.env
+/deploy/compose/**/.env
 /tools/private-library/
 
 # Generated/local runtime data and secrets.

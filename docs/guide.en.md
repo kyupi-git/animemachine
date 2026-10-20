@@ -44,7 +44,7 @@ The launcher installs the required components. Open **<http://localhost:8787>**.
 
 Enable Docker or container management in your NAS app center, or install [Docker](https://docs.docker.com/get-started/get-docker/) on your computer. Use Docker Engine 24+ and Docker Compose **2.20.3+**.
 
-First-time Docker users can follow the [step-by-step Compose guide](../deploy/compose/README.en.md). Use the [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
+Follow the [step-by-step Compose guide](../deploy/compose/README.en.md). Use the [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
 
 | Deployment scenario | Configuration |
 | --- | --- |
@@ -70,7 +70,7 @@ docker compose logs animemachine
 
 Default folders and service connections are created automatically. Setups 03 and 04 configure qBittorrent; setup 04 also connects Ani-RSS. For setup 02, enter your existing downloader's details under [Connections](#connections).
 
-To store media on a particular drive, add a `.env` file before starting, as shown in [Folder paths](#folders). To open qBittorrent or Ani-RSS from another computer, configure [access to their web interfaces](reference.en.md#service-access).
+To store media on a particular drive, add a `.env` file before starting, as shown in [Folder paths](#folders). qBittorrent and Ani-RSS are available on the LAN by default; see [web interface access](reference.en.md#service-access) for addresses and initial passwords.
 
 Each setup needs only one `compose.yaml`. Accounts and service connections are created automatically on first launch, with no initialization script or API keys to enter. Restarts retain existing settings. The full stack checks Mikan and public metadata access, prefers official sources, and selects a working alternative when needed.
 
@@ -80,7 +80,7 @@ Each setup needs only one `compose.yaml`. Accounts and service connections are c
 
 ### Sign in and check the library
 
-The launch window or container logs show your address, initial username, and random password. After signing in, follow the initialization progress: downloading title data, building the catalog, and preparing covers. You can use the library as soon as titles appear; covers continue loading in the background.
+The launch window or container logs show your address, initial username, and random password. After signing in, follow the preparation progress: download and verify the Archive, prepare seasonal and recent titles and covers, then complete the remaining metadata in the background. Browsing, subscriptions and playback are available first; collection folders and local download plans become available when the full metadata is ready. Preparation resumes after interruptions. Upgrades use an existing complete catalog immediately.
 
 Create accounts for other people under **Settings → Users**. You can also create your own administrator account, sign in with it, and disable the initial account.
 
@@ -135,11 +135,11 @@ Releases excluded by your language, subgroup, or quality preferences show the re
 
 Films with a BD release this season also appear in the radar, with the BD date below the premiere date. When no explicit BD date is available, the search also checks films that premiered within the past year. Their earliest resource publication reported by Ani-RSS determines the season and appears as a “Release” date.
 
-The latest count in “Latest / total episodes” prioritizes Ani-RSS resource and subscription records. “Episode updated” appears when a timestamp is available. Click a column such as “Premiere date” to sort the entire season; click again to reverse the order.
+The latest count in “Latest / total episodes” prioritizes Ani-RSS resource and subscription records. “Episode updated” appears when a timestamp is available. “Start date” combines date and format, for example `2026-10-05 (TV)`. Click a column such as “Start date” to sort the entire season; click again to reverse the order.
 
 Open the Subscribed or Paused menu to pause, resume, or unsubscribe. Unsubscribing keeps downloaded files; deleting the subscription and files has a separate confirmation. New subscriptions move forward within their group, subject to the home page date filters.
 
-The radar shows progress beside titles you have watched. Pale green marks playable new episodes for subscribed titles or titles with media. Playing the latest episode or correcting your record updates the highlight; opening title details does not clear it.
+The radar’s **Watched episode** column shows your last played episode. Click its number or dash to edit it. Pale green marks playable new episodes for subscribed titles or titles with media. Playing the latest episode or correcting your record updates the highlight; opening title details does not clear it.
 
 Choose **Hide title** from a title’s subscription menu to remove it from this account’s radar, title lists, and newly generated Continue watching playlists. Subscriptions and downloads continue. Open **Hidden titles** at the top of the radar to search and restore titles; the home page’s title search can also find them.
 
@@ -149,7 +149,7 @@ Choose a season in **Release radar**, click **Continue watching**, select the ti
 
 ![Continue watching: review playable episodes and saved positions](images/continue-watching.en.png)
 
-Records belong to your account and are shared by title details and the radar. Click **Continue: Ep X** to change the starting episode or position, mark a title as not started, or undo a change. Opening a playlist or editing an episode range does not change viewing records. Actual playback updates the record: ≥99% of an episode counts as completed, while ≤1% does not count as watched. Players with the position extension also save precise playback time; you can correct entries as needed. With sign-in disabled, all devices share one record.
+Records belong to your account and are shared by title details and the radar. Click **Watched episode** in the radar or **Continue: Ep X** in title details to change the starting episode or position, mark a title as not started, or undo a change. Opening a playlist or editing an episode range does not change viewing records. Actual playback updates the record: ≥99% of an episode counts as completed, while ≤1% does not count as watched. Players with the position extension also save precise playback time; you can correct entries as needed. With sign-in disabled, all devices share one record.
 
 ![Correct a viewing record by setting the starting episode and position](images/viewing-record.en.png)
 
@@ -159,11 +159,19 @@ Records belong to your account and are shared by title details and the radar. Cl
 
 **VLC**: the PotPlayer extension is not needed. AnimeMachine records episodes by default. Resume positions saved locally by VLC are managed by VLC separately from your AnimeMachine account.
 
+If Edge or Chrome on Windows asks for confirmation every time, choose **Copy permission command**, press `Win + R`, enter `cmd`, press Enter, then paste and run the command, then reopen the browser. The command adds PotPlayer and VLC permissions for this site and keeps existing permissions.
+
 ### Fill gaps and download
 
 After connecting qBittorrent, click **Search Torrents** in title details. When the search finishes, the view moves to the release choices. Select one and click **Preview download plan**, then check the files and save location before submitting. Releases with an unconfirmed title match show an explanation and cannot be submitted yet.
 
-Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. Its options are in the [collector configuration example](../deploy/compose/advanced/collector/.env.example).
+**Ani-RSS subscriptions** and **Torrent downloads** have separate sections. Torrents start collapsed and expand after a search. Each subtitle group has a dropdown for platform, subtitles and quality, such as Baha / CR, simplified / traditional Chinese and 1080p / 720p. Choose a version, select the release, then confirm. Ani-RSS uses only that group and version for future releases; changing versions keeps existing files, the save directory and progress.
+
+![Release selection: choose platform, subtitles and quality within each group](images/resource-variants.en.png)
+
+Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. **Settings → Connections → Torrent Collector** lets you choose per-work search sources and limits, and control scheduled scans, automatic collection and older-release collection. Admission and ranking follow your existing resource preferences.
+
+For currently airing series, candidates must match the season and include consecutive episodes starting at episode 1, at most one episode behind Ani-RSS. Versions with gaps or episodes beyond the known latest release are omitted. Completed works and films remain available for backfilling.
 
 1. Find a title and check candidate releases and existing files in its details.
 2. Select the works to collect, generate a plan, and review the files and destination folders.
