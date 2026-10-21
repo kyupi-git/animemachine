@@ -24,14 +24,37 @@ jobs:
       - run: python -m pip install -e .
       - run: python scripts/test_all.py
 
-  release-windows:
+  prepare-covers:
     needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: 'RELEASE_PYTHON_VERSION'
+      - run: python -m pip install -e .
+      - name: Prepare verified seasonal covers
+        run: python scripts/build_cover_pack.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: seasonal-covers
+          path: |
+            src/animemachine/resources/season-covers.zip
+            src/animemachine/resources/season-covers.zip.sha256
+          if-no-files-found: error
+
+  release-windows:
+    needs: [validate, prepare-covers]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version-file: 'RELEASE_PYTHON_VERSION'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: seasonal-covers
+          path: src/animemachine/resources
       - name: Build Windows Release
         shell: pwsh
         run: |
@@ -46,7 +69,7 @@ jobs:
           if-no-files-found: error
 
   release-unix:
-    needs: validate
+    needs: [validate, prepare-covers]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -56,6 +79,10 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version-file: 'RELEASE_PYTHON_VERSION'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: seasonal-covers
+          path: src/animemachine/resources
       - name: Build local Release
         run: |
           ./scripts/unix/build-release.sh
@@ -68,13 +95,17 @@ jobs:
           if-no-files-found: error
 
   release-app:
-    needs: validate
+    needs: [validate, prepare-covers]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version-file: 'RELEASE_PYTHON_VERSION'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: seasonal-covers
+          path: src/animemachine/resources
       - name: Build Docker online-update layer
         run: |
           python -m pip install "setuptools>=75" wheel
@@ -91,13 +122,17 @@ jobs:
           if-no-files-found: error
 
   container:
-    needs: validate
+    needs: [release-windows, release-unix, release-app, prepare-covers]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: seasonal-covers
+          path: src/animemachine/resources
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

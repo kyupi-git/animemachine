@@ -80,7 +80,7 @@ Each setup needs only one `compose.yaml`. Accounts and service connections are c
 
 ### Sign in and check the library
 
-The launch window or container logs show your address, initial username, and random password. After signing in, follow the preparation progress: download and verify the Archive, prepare seasonal and recent titles and covers, then complete the remaining metadata in the background. Browsing, subscriptions and playback are available first; collection folders and local download plans become available when the full metadata is ready. Preparation resumes after interruptions. Upgrades use an existing complete catalog immediately.
+The launch window or container logs show your address, initial username, and random password. After signing in, follow the preparation progress: download and verify the Archive, prepare seasonal and recent titles, and use the seasonal covers included in the release. Remaining metadata and images load in the background. Browsing, subscriptions and playback are available first; collection folders and local download plans become available when the full metadata is ready. Preparation resumes after interruptions. Upgrades use an existing complete catalog immediately.
 
 Create accounts for other people under **Settings → Users**. You can also create your own administrator account, sign in with it, and disable the initial account.
 

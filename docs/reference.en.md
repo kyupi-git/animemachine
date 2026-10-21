@@ -138,3 +138,5 @@ Source installations use Python 3.11+. Download the repository and run `scripts/
 | [scripts](https://github.com/kyupi-git/animemachine/tree/main/scripts) | Checks, builds, releases, launchers |
 
 Run `python scripts/test_all.py` for project checks and `python scripts/check_quality.py` for quality checks. See [Contributing](../CONTRIBUTING.md) before working on changes.
+
+The Release workflow prepares one seasonal cover bundle for all platforms. For a local release build, run `python scripts/build_cover_pack.py` before the platform build script.

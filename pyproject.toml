@@ -51,7 +51,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-animemachine = ["web/static/*", "resources/*.json", "resources/potplayer/*", "resources/windows/*"]
+animemachine = ["web/static/*", "resources/*.json", "resources/season-covers.zip", "resources/season-covers.zip.sha256", "resources/potplayer/*", "resources/windows/*"]
 
 [tool.setuptools.dynamic]
 version = {file = ["VERSION"]}

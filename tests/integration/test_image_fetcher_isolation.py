@@ -56,6 +56,47 @@ class SlowCoverSource(BaseHTTPRequestHandler):
 
 
 class ImageFetcherIsolationTests(unittest.TestCase):
+    def test_completed_slow_foreground_does_not_permanently_throttle_background(self):
+        SlowCoverSource.release = threading.Event(); SlowCoverSource.active = 0
+        source = DaemonServer(("127.0.0.1",0),SlowCoverSource)
+        source_thread=threading.Thread(target=source.serve_forever,daemon=True);source_thread.start()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            database=self.database(raw)
+            fetcher=ImageFetcher(database,workers=4,host_limit=2)
+            timer=None
+            try:
+                fetcher.enqueue(1,{'bangumiApiEndpoints':[f'http://127.0.0.1:{source.server_port}'],
+                                   'probeTimeoutSeconds':5},priority='foreground')
+                deadline=time.monotonic()+8
+                while not SlowCoverSource.active and time.monotonic()<deadline:
+                    time.sleep(.05)
+                self.assertGreater(SlowCoverSource.active,0)
+                timer=threading.Timer(2,SlowCoverSource.release.set);timer.start()
+                deadline=time.monotonic()+8
+                while fetcher.pending(1) and time.monotonic()<deadline:
+                    time.sleep(.05)
+                self.assertEqual('available',fetcher.result(1))
+                metric_deadline=time.monotonic()+2
+                observed=fetcher.snapshot()['budget'].get('foregroundLatencySeconds')
+                while observed is None and time.monotonic()<metric_deadline:
+                    time.sleep(.02)
+                    observed=fetcher.snapshot()['budget'].get('foregroundLatencySeconds')
+                self.assertIsNotNone(observed)
+                self.assertGreaterEqual(observed,1.5)
+                deadline=time.monotonic()+18
+                while time.monotonic()<deadline:
+                    budget=fetcher.snapshot()['budget']
+                    if budget.get('foregroundLatencySeconds') is None and 'foreground_latency' not in budget.get('reason',''):
+                        break
+                    time.sleep(.1)
+                self.assertIsNone(budget.get('foregroundLatencySeconds'))
+                self.assertNotIn('foreground_latency',budget['reason'])
+            finally:
+                SlowCoverSource.release.set()
+                if timer is not None:timer.cancel();timer.join(1)
+                fetcher.close()
+        source.shutdown();source.server_close();source_thread.join(2)
+
     def database(self, root: str) -> Path:
         path = Path(root) / "catalog.sqlite3"
         with contextlib.closing(sqlite3.connect(path)) as db, db:

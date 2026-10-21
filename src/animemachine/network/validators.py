@@ -11,6 +11,7 @@ from typing import Any
 
 
 IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"RIFF")
+IMAGE_ACCEPT = "image/webp,image/jpeg,image/png,image/gif"
 
 
 def service_endpoint(value: str) -> str:

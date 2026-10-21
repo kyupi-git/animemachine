@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import concurrent.futures
 import hashlib
 import ipaddress
 import os
@@ -21,7 +22,10 @@ from . import connectivity, tls
 
 
 _LOCK = threading.RLock()
-_CLIENTS: dict[str, httpx.Client] = {}
+_CLIENTS: dict[tuple[str, str, int], httpx.Client] = {}
+_CLIENT_USERS: dict[httpx.Client, int] = {}
+_MAX_IDLE_CLIENTS = 32
+_CLIENT_LANES = 4
 _PROXY_SIGNATURE: tuple[tuple[str, str], ...] | None = None
 _PROXY_REVISION = 0
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
@@ -358,8 +362,22 @@ def _proxy_for_url(url: str, proxies: dict[str, str]) -> str | None:
     return None if bypassed else _proxy_value(url, proxies)
 
 
-def _client_for(proxy: str | None, _revision: int) -> httpx.Client:
-    key = proxy or "__direct__"
+def _origin(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parsed.scheme.casefold(), parsed.netloc.casefold(), "", "", ""))
+
+
+def _prune_clients() -> None:
+    for key, old in list(_CLIENTS.items()):
+        if len(_CLIENTS) <= _MAX_IDLE_CLIENTS:
+            break
+        if not _CLIENT_USERS.get(old):
+            _CLIENTS.pop(key)
+            old.close()
+
+
+def _client_for(proxy: str | None, _revision: int, origin: str = "", lane: int = 0) -> httpx.Client:
+    key = (proxy or "__direct__", origin, lane)
     with _LOCK:
         current = _CLIENTS.get(key)
         if current is None:
@@ -368,15 +386,19 @@ def _client_for(proxy: str | None, _revision: int) -> httpx.Client:
                 follow_redirects=True,
                 trust_env=False,
                 proxy=proxy,
-                verify=tls.ssl_context(),
+                # truststore serializes handshakes within a context. Share it
+                # only within this origin/route so a blocked host cannot lock
+                # healthy mirrors, integrations or foreground navigation.
+                verify=tls.new_ssl_context(),
                 limits=httpx.Limits(max_connections=24, max_keepalive_connections=12),
                 event_hooks={"request": [_offline_request_guard]},
             )
-            _CLIENTS[key] = current
+        _CLIENTS.pop(key, None)
+        _CLIENTS[key] = current
         return current
 
 
-def client(url: str | None = None, *, route_mode: str | None = None) -> httpx.Client:
+def client(url: str | None = None, *, route_mode: str | None = None, lane: int = 0) -> httpx.Client:
     """Return a pooled client selected from live proxy settings for this request."""
     if url:
         if route_mode is None:
@@ -390,7 +412,38 @@ def client(url: str | None = None, *, route_mode: str | None = None) -> httpx.Cl
     else:
         _environment, _system, revision = _proxy_snapshot()
         proxy = None
-    return _client_for(proxy, revision)
+    return _client_for(proxy, revision, _origin(url) if url else "", lane)
+
+
+@contextlib.contextmanager
+def _borrow_client(url: str, route_mode: str, proxy_url: str | None):
+    with _LOCK:
+        def candidate(lane: int):
+            return (client(url, route_mode=route_mode, lane=lane) if proxy_url is None
+                    else _client_for(proxy_url or None, proxy_revision(), _origin(url), lane))
+        selected = candidate(0)
+        if _CLIENT_USERS.get(selected, 0):
+            # A few independently verified TLS contexts also prevent a slow
+            # handshake within one origin from serializing all its requests.
+            # Reuse idle lanes first, and keep the number of pools bounded.
+            for lane in range(1, _CLIENT_LANES):
+                alternative = candidate(lane)
+                if _CLIENT_USERS.get(alternative, 0) < _CLIENT_USERS.get(selected, 0):
+                    selected = alternative
+                if not _CLIENT_USERS.get(selected, 0):
+                    break
+        _CLIENT_USERS[selected] = _CLIENT_USERS.get(selected, 0) + 1
+        _prune_clients()
+    try:
+        yield selected
+    finally:
+        with _LOCK:
+            remaining = _CLIENT_USERS.get(selected, 1) - 1
+            if remaining:
+                _CLIENT_USERS[selected] = remaining
+            else:
+                _CLIENT_USERS.pop(selected, None)
+            _prune_clients()
 
 
 def reset() -> None:
@@ -399,6 +452,7 @@ def reset() -> None:
         for current in _CLIENTS.values():
             current.close()
         _CLIENTS.clear()
+        _CLIENT_USERS.clear()
         _PROXY_SIGNATURE = None
         _PROXY_REVISION = 0
         _NETWORK_BASE_CACHE = None
@@ -440,17 +494,43 @@ def _throttle(byte_count: int) -> None:
         time.sleep(delay)
 
 
+def _check_request_budget(url: str, deadline: float | None, cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise concurrent.futures.CancelledError()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise httpx.TimeoutException("request time budget exhausted", request=httpx.Request("GET", url))
+
+
+def _bounded_timeout(url: str, timeout: float | httpx.Timeout, deadline: float | None) -> float | httpx.Timeout:
+    if deadline is None:
+        return timeout
+    _check_request_budget(url, deadline, None)
+    remaining = max(.001, deadline - time.monotonic())
+    if not isinstance(timeout, httpx.Timeout):
+        return min(float(timeout), remaining)
+    return httpx.Timeout(**{key: min(value, remaining) if value is not None else remaining
+                           for key, value in timeout.as_dict().items()})
+
+
 @contextlib.contextmanager
-def host_slot(url: str):
+def host_slot(url: str, *, deadline: float | None = None, cancel: threading.Event | None = None):
     host = urllib.parse.urlparse(url).netloc.casefold()
     with _HOST_LOCK:
         semaphore = None if not _HOST_LIMIT else _HOST_SEMAPHORES.setdefault(
             host, threading.BoundedSemaphore(_HOST_LIMIT))
     if semaphore is None:
+        _check_request_budget(url, deadline, cancel)
         yield
         return
-    semaphore.acquire()
+    while True:
+        try:
+            _check_request_budget(url, deadline, cancel)
+        except httpx.TimeoutException as exc:
+            raise httpx.PoolTimeout("host request queue time budget exhausted", request=exc.request) from exc
+        if semaphore.acquire(timeout=.05):
+            break
     try:
+        _check_request_budget(url, deadline, cancel)
         yield
     finally:
         semaphore.release()
@@ -470,7 +550,8 @@ def _request_headers(headers: dict[str, str] | None, *, allow_credentials: bool)
 @contextlib.contextmanager
 def stream(method: str, url: str, *, headers: dict[str, str] | None = None, content: bytes | None = None,
            timeout: float | httpx.Timeout = 15, allow_credentials: bool = False,
-           follow_redirects: bool | None = None, proxy_url: str | None = None):
+           follow_redirects: bool | None = None, proxy_url: str | None = None,
+           deadline: float | None = None, cancel: threading.Event | None = None):
     """Open a streaming response, falling back across live proxy/system/direct routes before yielding."""
     values = _request_headers(headers, allow_credentials=allow_credentials)
     local_target = _local_target(url)
@@ -489,51 +570,62 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
                   [{"mode": "environment_proxy" if proxy_url else "direct", "proxy": proxy_url or None}])
         attempts: list[dict[str, Any]] = []
         last_error: Exception | None = None
-        with host_slot(url):
+        with host_slot(url, deadline=deadline, cancel=cancel):
             for index, route in enumerate(routes):
-                kwargs: dict[str, Any] = {"headers": values, "content": content, "timeout": timeout}
+                _check_request_budget(url, deadline, cancel)
+                kwargs: dict[str, Any] = {"headers": values, "content": content,
+                                          "timeout": _bounded_timeout(url, timeout, deadline)}
                 if follow_redirects is not None:
                     kwargs["follow_redirects"] = follow_redirects
                 try:
-                    selected_client = (client(url, route_mode=str(route["mode"])) if proxy_url is None
-                                       else _client_for(proxy_url or None, proxy_revision()))
-                    manager = selected_client.stream(method, url, **kwargs)
-                    response = manager.__enter__()
+                    lease = _borrow_client(url, str(route["mode"]), proxy_url)
+                    selected_client = lease.__enter__()
                 except (httpx.RequestError, httpx.InvalidURL, OSError, TimeoutError, ValueError, ImportError) as exc:
                     last_error = exc
                     attempts.append({"mode": str(route["mode"]), "status": "", "error": type(exc).__name__})
                     remember(route, ok=False)
                     continue
-                status = int(response.status_code)
-                if not local_target and status < 500 and status != 407 and (
-                    not connectivity.recovery_allowed() or opportunistic
-                ):
-                    connectivity.note_online_activity()
-                if status in _ROUTE_FALLBACK_STATUS and index + 1 < len(routes):
-                    attempts.append({"mode": str(route["mode"]), "status": status, "error": f"HTTP {status}"})
-                    remember(route, ok=False)
-                    manager.__exit__(None, None, None)
-                    continue
-                route_info = {**route, "proxy": _safe_proxy(route.get("proxy"))}
-                attempts.append({"mode": str(route["mode"]), "status": status,
-                                 "error": f"HTTP {status}" if status in _ROUTE_FALLBACK_STATUS else ""})
-                extensions = getattr(response, "extensions", None)
-                if isinstance(extensions, dict):
-                    extensions["animemachine_proxy_route"] = route_info
-                    extensions["animemachine_route_attempts"] = list(attempts)
-                if status in _ROUTE_FALLBACK_STATUS:
-                    remember(route, ok=False)
                 try:
-                    yield response
-                except (httpx.RequestError, OSError, TimeoutError):
-                    remember(route, ok=False)
-                    raise
-                else:
-                    if status not in _ROUTE_FALLBACK_STATUS:
-                        remember(route, ok=True)
+                    try:
+                        manager = selected_client.stream(method, url, **kwargs)
+                        response = manager.__enter__()
+                    except (httpx.RequestError, httpx.InvalidURL, OSError, TimeoutError, ValueError, ImportError) as exc:
+                        last_error = exc
+                        attempts.append({"mode": str(route["mode"]), "status": "", "error": type(exc).__name__})
+                        remember(route, ok=False)
+                        continue
+                    status = int(response.status_code)
+                    if not local_target and status < 500 and status != 407 and (
+                        not connectivity.recovery_allowed() or opportunistic
+                    ):
+                        connectivity.note_online_activity()
+                    if status in _ROUTE_FALLBACK_STATUS and index + 1 < len(routes):
+                        attempts.append({"mode": str(route["mode"]), "status": status, "error": f"HTTP {status}"})
+                        remember(route, ok=False)
+                        manager.__exit__(None, None, None)
+                        continue
+                    route_info = {**route, "proxy": _safe_proxy(route.get("proxy"))}
+                    attempts.append({"mode": str(route["mode"]), "status": status,
+                                     "error": f"HTTP {status}" if status in _ROUTE_FALLBACK_STATUS else ""})
+                    extensions = getattr(response, "extensions", None)
+                    if isinstance(extensions, dict):
+                        extensions["animemachine_proxy_route"] = route_info
+                        extensions["animemachine_route_attempts"] = list(attempts)
+                    if status in _ROUTE_FALLBACK_STATUS:
+                        remember(route, ok=False)
+                    try:
+                        yield response
+                    except (httpx.RequestError, OSError, TimeoutError):
+                        remember(route, ok=False)
+                        raise
+                    else:
+                        if status not in _ROUTE_FALLBACK_STATUS:
+                            remember(route, ok=True)
+                    finally:
+                        manager.__exit__(None, None, None)
+                    return
                 finally:
-                    manager.__exit__(None, None, None)
-                return
+                    lease.__exit__(None, None, None)
         if last_error is not None:
             raise last_error
         raise httpx.ConnectError("no usable network route", request=httpx.Request(method, url))
@@ -542,11 +634,13 @@ def stream(method: str, url: str, *, headers: dict[str, str] | None = None, cont
 def request(method: str, url: str, *, headers: dict[str, str] | None = None, content: bytes | None = None,
             timeout: float | httpx.Timeout = 15, max_bytes: int = 16 * 1024 * 1024,
             allow_credentials: bool = False, proxy_url: str | None = None,
-            follow_redirects: bool | None = None) -> httpx.Response:
+            follow_redirects: bool | None = None, deadline: float | None = None,
+            cancel: threading.Event | None = None) -> httpx.Response:
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
     with stream(method, url, headers=headers, content=content, timeout=timeout,
-                allow_credentials=allow_credentials, proxy_url=proxy_url, follow_redirects=follow_redirects) as streamed:
+                allow_credentials=allow_credentials, proxy_url=proxy_url, follow_redirects=follow_redirects,
+                deadline=deadline, cancel=cancel) as streamed:
         streamed.raise_for_status()
         declared = streamed.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > max_bytes:
@@ -554,6 +648,7 @@ def request(method: str, url: str, *, headers: dict[str, str] | None = None, con
         chunks: list[bytes] = []
         received = 0
         for chunk in streamed.iter_bytes():
+            _check_request_budget(url, deadline, cancel)
             _throttle(len(chunk))
             received += len(chunk)
             if received > max_bytes:

@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from . import connectivity, registry, sources, transport
+from . import connectivity, registry, sources, transport, validators
 from .health import Store
 
 
@@ -165,7 +165,7 @@ def _probe_image(item: dict[str, str], store: Store, timeout: float) -> dict[str
     network_id = str(profile["id"])
     try:
         response = transport.request(
-            "GET", url, headers={"Accept": "image/avif,image/webp,image/jpeg,image/png"}, timeout=timeout,
+            "GET", url, headers={"Accept": validators.IMAGE_ACCEPT}, timeout=timeout,
             max_bytes=12 * 1024 * 1024,
         )
         mime = str(response.headers.get("content-type") or "").split(";", 1)[0].casefold()

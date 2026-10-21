@@ -6,6 +6,8 @@ import threading
 import time
 from typing import Callable, TypeVar
 
+import httpx
+
 from .health import Store
 from .registry import Endpoint, may_send_credentials
 from . import transport
@@ -55,7 +57,7 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
             store.failure(item.id, capability_name, str(attempt.get("error") or "route_failure"),
                           route_mode=route_mode, network_id=str(profile["id"]))
 
-    def request_candidate(item: Endpoint):
+    def request_candidate(item: Endpoint, deadline: float):
         safe_headers = headers if (not credentials or may_send_credentials(item)) else {}
         attempts = max(1, min(8, int(attempts_per_endpoint)))
         last_error: Exception | None = None
@@ -70,6 +72,7 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
                 network_id = profile["id"]
                 response = transport.request("GET", target_url, headers=safe_headers, timeout=timeout,
                                              max_bytes=max_bytes,
+                                             deadline=deadline, cancel=winner,
                                              allow_credentials=bool(credentials and may_send_credentials(item)))
                 result = validator(response.content, response.headers.get("content-type", ""))
                 extensions = getattr(response, "extensions", {}) or {}
@@ -90,11 +93,17 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
                 extensions = getattr(response, "extensions", {}) or {}
                 record_route_failures(item, target_url, capability, extensions.get("animemachine_route_attempts"))
                 failed_profile = transport.network_profile(target_url)
-                store.failure(item.id, capability, type(exc).__name__,
-                              route_mode=str(failed_profile["routeMode"]), network_id=str(failed_profile["id"]))
+                # Local contention or a missing title/size does not mean that
+                # this origin is unavailable for every other work.
+                missing_resource = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {404, 410}
+                if not isinstance(exc, httpx.PoolTimeout) and not missing_resource:
+                    store.failure(item.id, capability, type(exc).__name__,
+                                  route_mode=str(failed_profile["routeMode"]), network_id=str(failed_profile["id"]))
                 if attempt + 1 >= attempts or not transport.is_retryable(exc):
                     break
-                time.sleep(max(0.0, retry_backoff) * (2 ** attempt))
+                delay = min(max(0.0, retry_backoff) * (2 ** attempt), max(0.0, deadline - time.monotonic()))
+                if winner.wait(delay):
+                    raise concurrent.futures.CancelledError()
         assert last_error is not None
         raise last_error
 
@@ -102,13 +111,20 @@ def first_valid(endpoints: list[Endpoint], path: str = "", *, capability: str = 
         if delay and winner.wait(delay):
             raise concurrent.futures.CancelledError()
         last_error: Exception | None = None
+        attempts = max(1, min(8, int(attempts_per_endpoint)))
+        # Alternative paths and proxy routes share one origin budget. An
+        # unreachable host must not consume a fresh full timeout for every size.
+        routes = max(1, len(transport.route_candidates(item.base_url + path)))
+        deadline = time.monotonic() + max(.001, timeout) * attempts * routes + max(0.0, retry_backoff) * (2 ** (attempts - 1) - 1)
         # An origin shares route health across requests, but its alternative
         # resource paths remain ordered rather than overwriting each other.
         for candidate in alternatives[item.id]:
             if winner.is_set():
                 raise concurrent.futures.CancelledError()
+            if time.monotonic() >= deadline:
+                break
             try:
-                return request_candidate(candidate)
+                return request_candidate(candidate, deadline)
             except concurrent.futures.CancelledError:
                 raise
             except Exception as exc:

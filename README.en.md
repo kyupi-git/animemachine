@@ -38,7 +38,7 @@ Select a launch method for your device. Detailed steps are in the [setup and usa
 
 After launch, open **<http://localhost:8787>**. From another device, replace `localhost` with the address of the computer or NAS running AnimeMachine. Your initial account and randomly generated password appear in the launch window or container logs.
 
-Startup prepares seasonal titles and covers first. Once the list appears, you can browse, subscribe and play while the remaining catalog is built in the background. Upgrades keep your existing catalog.
+Startup prepares seasonal titles first, then displays the seasonal covers included in the release. Remaining metadata and images load in the background. Upgrades keep your existing catalog and image cache.
 
 ```mermaid
 flowchart TB

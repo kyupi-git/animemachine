@@ -6,6 +6,8 @@ import io
 import sqlite3
 import tempfile
 import time
+import threading
+import concurrent.futures
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -22,6 +24,92 @@ class FakeResponse:
 
 
 class NetworkLayerTests(unittest.TestCase):
+    def test_proxy_timeout_keeps_a_budget_for_direct_fallback(self):
+        endpoint=registry.Endpoint('budget','x','https://budget.invalid/cover.jpg','official')
+        def client_for(proxy,_revision,_origin='',_lane=0):
+            def handler(request):
+                if proxy:
+                    time.sleep(.25)
+                    raise httpx.ReadTimeout('proxy did not respond',request=request)
+                return httpx.Response(200,json={'direct':True},request=request)
+            return httpx.Client(transport=httpx.MockTransport(handler))
+        transport.reset()
+        with tempfile.TemporaryDirectory() as raw, \
+                mock.patch.object(transport,'_environment_proxies',return_value={'https':'http://localhost:9'}), \
+                mock.patch.object(transport,'_system_proxies',return_value={}), \
+                mock.patch.object(transport.urllib.request,'proxy_bypass',return_value=False), \
+                mock.patch.object(transport,'network_profile',return_value={'routeMode':'direct','id':'test'}), \
+                mock.patch.object(transport,'_client_for',side_effect=client_for):
+            payload,_,_=hedging.first_valid([endpoint],timeout=.2,
+                validator=lambda body,_:json.loads(body),health=health.Store(Path(raw)/'h.sqlite3'))
+            self.assertEqual({'direct':True},payload)
+        transport.reset()
+
+    def test_local_contention_and_missing_resources_do_not_poison_source_health(self):
+        endpoint=registry.Endpoint('healthy','x','https://healthy.invalid/cover.jpg','official')
+        request=httpx.Request('GET',endpoint.base_url)
+        errors=[httpx.PoolTimeout('local pool busy')]+[
+            httpx.HTTPStatusError('missing work or image size',request=request,response=httpx.Response(status,request=request))
+            for status in (404,410)]
+        for error in errors:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as raw, \
+                mock.patch.object(transport,'network_profile',return_value={'routeMode':'direct','id':'test'}), \
+                mock.patch.object(transport,'request',side_effect=error):
+                store=health.Store(Path(raw)/'h.sqlite3')
+                with self.assertRaises(RuntimeError):
+                    hedging.first_valid([endpoint],validator=lambda body,_:body,health=store)
+                self.assertEqual(0,store.snapshot('healthy','json','direct','test')['samples'])
+
+    def test_host_queue_wait_is_bounded_and_cancellable(self):
+        transport.configure_host_limit(1)
+        target = 'https://held.invalid/cover.jpg'
+        cancel = threading.Event()
+        try:
+            with transport.host_slot(target), concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                def wait_for_slot(deadline=None, cancel=None):
+                    with transport.host_slot(target, deadline=deadline, cancel=cancel):
+                        self.fail('A busy host slot must not be acquired')
+                timed = pool.submit(wait_for_slot, time.monotonic()+.15)
+                with self.assertRaises(httpx.TimeoutException):
+                    timed.result(timeout=1)
+                cancelled = pool.submit(wait_for_slot, None, cancel)
+                cancel.set()
+                with self.assertRaises(concurrent.futures.CancelledError):
+                    cancelled.result(timeout=1)
+        finally:
+            cancel.set()
+            transport.configure_host_limit(0)
+
+    def test_hedge_winner_cancels_requests_waiting_for_a_busy_host(self):
+        transport.configure_host_limit(1)
+        target = 'https://held.invalid/cover.jpg'
+        cancelled = threading.Event()
+        original_request = transport.request
+        def request(method, url, **kwargs):
+            try:
+                return original_request(method, url, **kwargs)
+            except concurrent.futures.CancelledError:
+                cancelled.set()
+                raise
+        client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={'ok':True})))
+        try:
+            with tempfile.TemporaryDirectory() as raw, transport.host_slot(target), \
+                    mock.patch.object(transport, 'network_profile', return_value={'routeMode':'direct','id':'test'}), \
+                    mock.patch.object(transport, '_client_for', return_value=client), \
+                    mock.patch.object(transport, 'request', side_effect=request):
+                endpoints = [registry.Endpoint('held','x',target,'official'),
+                             registry.Endpoint('fast','x','https://fast.invalid/cover.jpg','community_mirror')]
+                started = time.monotonic()
+                payload, selected, _ = hedging.first_valid(endpoints, timeout=5, hedge_delays=(0,.1),
+                    validator=lambda body,_:json.loads(body), health=health.Store(Path(raw)/'health.sqlite3'))
+                self.assertEqual({'ok':True},payload)
+                self.assertEqual('fast',selected.id)
+                self.assertLess(time.monotonic()-started,1)
+                self.assertTrue(cancelled.wait(1), 'Discard losing queued requests before releasing the busy host')
+        finally:
+            client.close()
+            transport.configure_host_limit(0)
+
     def test_all_sources_in_cooldown_are_reprobed_after_network_recovers(self):
         endpoints = [registry.Endpoint('one', 'update', 'https://one.invalid', 'official'),
                      registry.Endpoint('two', 'update', 'https://two.invalid', 'community_mirror')]
@@ -237,7 +325,7 @@ class NetworkLayerTests(unittest.TestCase):
     def test_route_failover_uses_system_proxy_when_environment_proxy_is_broken(self):
         transport.reset()
         calls = []
-        def client_for(proxy, _revision):
+        def client_for(proxy, _revision, _origin="", _lane=0):
             def handler(request):
                 calls.append(proxy or "direct")
                 if proxy == "http://127.0.0.1:8080":
@@ -260,7 +348,7 @@ class NetworkLayerTests(unittest.TestCase):
         connectivity.reset()
         connectivity.note_probe(False, now=100.0)
         calls = []
-        def client_for(proxy, _revision):
+        def client_for(proxy, _revision, _origin="", _lane=0):
             def handler(request):
                 calls.append(proxy or "direct")
                 if proxy:
@@ -280,7 +368,7 @@ class NetworkLayerTests(unittest.TestCase):
     def test_route_failover_reaches_direct_when_both_proxy_routes_are_broken(self):
         transport.reset()
         calls = []
-        def client_for(proxy, _revision):
+        def client_for(proxy, _revision, _origin="", _lane=0):
             def handler(request):
                 calls.append(proxy or "direct")
                 if proxy:
@@ -302,7 +390,7 @@ class NetworkLayerTests(unittest.TestCase):
         transport.reset()
         calls = []
 
-        def client_for(proxy, _revision):
+        def client_for(proxy, _revision, _origin="", _lane=0):
             calls.append(proxy or "direct")
             if proxy:
                 raise httpx.InvalidURL("Invalid proxy")
@@ -326,7 +414,7 @@ class NetworkLayerTests(unittest.TestCase):
         transport.reset()
         calls = []
 
-        def client_for(proxy, _revision):
+        def client_for(proxy, _revision, _origin="", _lane=0):
             calls.append(proxy or "direct")
             if proxy:
                 raise ImportError("socksio unavailable")

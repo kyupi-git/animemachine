@@ -138,3 +138,5 @@ Archive 导入支持官方 `dump-*.zip`。可通过设置页选取文件，也�
 | [scripts](https://github.com/kyupi-git/animemachine/tree/main/scripts) | 检查、构建、发布与启动工具 |
 
 开发检查使用 `python scripts/test_all.py`；质量检查使用 `python scripts/check_quality.py`。参与修改前请阅读[贡献说明](../CONTRIBUTING.md)。
+
+正式发布由 Release 工作流统一准备当季封面包。本地构建时，先运行 `python scripts/build_cover_pack.py`，再运行对应系统的构建脚本。

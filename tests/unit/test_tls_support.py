@@ -2,6 +2,7 @@ import os
 import ssl
 import tempfile
 import unittest
+import contextlib
 from pathlib import Path
 from unittest import mock
 
@@ -11,6 +12,61 @@ from animemachine.network import transport
 
 
 class TlsSupportTests(unittest.TestCase):
+    def test_concurrent_same_origin_requests_use_bounded_independent_lanes(self):
+        created=[]
+        def factory(**kwargs):
+            value=mock.Mock();value.context=kwargs['verify'];created.append(value);return value
+        with mock.patch.object(transport,'_environment_proxies',return_value={}), \
+                mock.patch.object(transport,'_system_proxies',return_value={}), \
+                mock.patch.object(transport.httpx,'Client',side_effect=factory):
+            transport.reset()
+            with contextlib.ExitStack() as stack:
+                clients=[stack.enter_context(transport._borrow_client('https://covers.invalid/image.jpg','direct',None))
+                         for _ in range(24)]
+                self.assertEqual(4,len(created))
+                self.assertEqual(4,len({id(client.context) for client in clients}))
+                self.assertTrue(all(transport._CLIENT_USERS[client]==6 for client in created))
+            self.assertFalse(transport._CLIENT_USERS)
+            with transport._borrow_client('https://covers.invalid/next.jpg','direct',None) as reused:
+                self.assertIs(created[0],reused)
+            self.assertEqual(4,len(created))
+            transport.reset()
+
+    def test_origins_and_proxy_routes_have_independent_verified_tls_contexts(self):
+        with mock.patch.object(transport, '_environment_proxies', return_value={}), \
+                mock.patch.object(transport, '_system_proxies', return_value={}), \
+                mock.patch.object(transport.httpx, 'Client') as factory:
+            transport.reset()
+            first = transport.client('https://blocked.invalid/first')
+            self.assertIs(first,transport.client('https://blocked.invalid/second'))
+            transport.client('https://healthy.invalid/image.jpg')
+            transport._client_for('http://localhost:7890',0,'https://blocked.invalid')
+            contexts = [call.kwargs['verify'] for call in factory.call_args_list]
+            self.assertEqual(3,len(contexts))
+            self.assertEqual(3,len({id(context) for context in contexts}))
+            self.assertTrue(all(context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED for context in contexts))
+            transport.reset()
+
+    def test_client_pool_prunes_idle_origins_without_closing_active_streams(self):
+        created = []
+        def factory(**_kwargs):
+            value=mock.Mock();created.append(value);return value
+        with mock.patch.object(transport,'_MAX_IDLE_CLIENTS',2), \
+                mock.patch.object(transport,'_environment_proxies',return_value={}), \
+                mock.patch.object(transport,'_system_proxies',return_value={}), \
+                mock.patch.object(transport.httpx,'Client',side_effect=factory):
+            transport.reset()
+            with transport._borrow_client('https://active.invalid','direct',None) as active:
+                with transport._borrow_client('https://idle.invalid','direct',None):
+                    pass
+                with transport._borrow_client('https://new.invalid','direct',None):
+                    pass
+                active.close.assert_not_called()
+                created[1].close.assert_called_once()
+                self.assertEqual(2,len(transport._CLIENTS))
+            self.assertFalse(transport._CLIENT_USERS)
+            transport.reset()
+
     def tearDown(self):
         tls_support.ssl_context.cache_clear()
 

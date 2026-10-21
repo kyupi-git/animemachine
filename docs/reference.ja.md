@@ -138,3 +138,5 @@ Python 3.11 以降を使います。リポジトリをダウンロードし、OS
 | [scripts](https://github.com/kyupi-git/animemachine/tree/main/scripts) | 検証、ビルド、リリース、ランチャー |
 
 プロジェクトの確認には `python scripts/test_all.py`、品質確認には `python scripts/check_quality.py` を実行します。変更に参加する場合は[貢献ガイド](../CONTRIBUTING.md)を参照してください。
+
+正式リリースでは Release ワークフローが全プラットフォーム共通の今期カバーを準備します。ローカルで配布パッケージをビルドする場合は、先に `python scripts/build_cover_pack.py` を実行してください。

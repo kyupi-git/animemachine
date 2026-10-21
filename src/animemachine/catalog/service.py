@@ -42,7 +42,7 @@ from ..config.policy import ConfigStore, NON_GROUPING_RELATIONS, STRICT_SERIES_R
 from ..config import credentials as credential_store
 from ..torrents import runtime as runtime_catalog
 from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup, managed_network
-from . import archive_update, relation_graph, metadata_repair, bootstrap as catalog_bootstrap
+from . import archive_update, relation_graph, metadata_repair, cover_pack, bootstrap as catalog_bootstrap
 from ..integrations import browser_launch
 from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
@@ -3335,7 +3335,7 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
             subject_urls, timeout=request_timeout,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"}, attempts=attempts,
             validator=lambda payload: network_validators.bangumi_subject(payload, bgm_id),
-            hedge_delays=(0, .2, .5, .9))
+            hedge_delays=(0, .2, .5, .9), honor_cooldown=True)
         cover_urls = _cover_urls_from_subject(subject)
         if not cover_urls:
             raise LookupError("no_cover")
@@ -3353,9 +3353,9 @@ def get_anime_image(db_path: Path, anime_id: int, *, refresh: bool = False,
         def native_cover():
             return network_sources.fetch_binary(
                 urls, timeout=request_timeout, cooldown=failure_cooldown, limit=12*1024*1024,
-                headers={"User-Agent": USER_AGENT, "Accept": "image/avif,image/webp,image/jpeg,image/png"},
+                headers={"User-Agent": USER_AGENT, "Accept": network_validators.IMAGE_ACCEPT},
                 validator=network_validators.image_bytes, attempts=attempts,
-                hedge_delays=(0, .15, .4, .8))
+                hedge_delays=(0, .15, .4, .8), honor_cooldown=True)
 
         if ani_key or (not credential_is_explicit and ani_rss._secret()):
             # Race the local API/cache against native sources. A slow or offline
@@ -4201,6 +4201,12 @@ class CatalogWarmup:
         ani_pool: concurrent.futures.ThreadPoolExecutor | None = None
         ani_scan_lease: Any = None
         try:
+            try:
+                imported = cover_pack.seed(self.db_path)
+                if imported:
+                    log_event("INFO", "seasonal_covers_prepared", count=imported)
+            except (OSError, ValueError, KeyError, zipfile.BadZipFile, sqlite3.Error) as exc:
+                log_event("WARNING", "seasonal_cover_pack_invalid", errorType=type(exc).__name__)
             config = self.config_store.read()
             raw_page_size = config.get("ui", {}).get("pageSize", 12)
             try:
@@ -4753,16 +4759,18 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         qbt = current.get("components", {}).get("downloadClient", {})
         configured_submission = qbt.get("submissionEnabled")
         qbt_enabled = bool(submission_enabled if configured_submission is None else configured_submission)
+        qbt_configured = qbt_enabled and qbt_runtime.configured(current)
+        observed: dict[str, Any] = {}
         if not qbt_enabled:
             qbt_summary = {"id": "qbittorrent", "status": "normal", "detail": "disabled"}
-        elif not str(qbt.get("endpoint") or "").strip():
-            qbt_summary = {"id": "qbittorrent", "status": "warning", "detail": "unavailable"}
+        elif not qbt_configured:
+            qbt_summary = {"id": "qbittorrent", "status": "normal", "detail": "not_configured"}
         else:
             with runtime_health_lock:
                 observed = dict(runtime_health.get("qbittorrent") or {})
             qbt_summary = {"id": "qbittorrent", "status": observed.get("status", "warning"),
                            "detail": observed.get("detail", "unknown")}
-        qbt_summary["info"] = {"enabled": qbt_enabled, "updatedAt": float(observed.get("updatedAt") or 0) if qbt_enabled and str(qbt.get("endpoint") or "").strip() else 0}
+        qbt_summary["info"] = {"enabled": qbt_enabled, "updatedAt": float(observed.get("updatedAt") or 0) if qbt_enabled and qbt_configured else 0}
         items.append(qbt_summary)
 
         try:
@@ -6894,7 +6902,7 @@ def _startup_image_source_status(db_path: Path, config: dict[str, Any], *, timeo
     def image_probe(url: str) -> bool:
         try:
             response = transport.request(
-                "GET", url, headers={"User-Agent": USER_AGENT, "Accept": "image/avif,image/webp,image/jpeg,image/png"},
+                "GET", url, headers={"User-Agent": USER_AGENT, "Accept": network_validators.IMAGE_ACCEPT},
                 timeout=timeout, max_bytes=12 * 1024 * 1024,
             )
             network_validators.image_bytes(response.content, response.headers.get("content-type", ""))
@@ -6917,7 +6925,7 @@ def _startup_self_check(db_path: Path, config: dict[str, Any]) -> dict[str, Any]
 
     qbt = config.get("components", {}).get("downloadClient", {})
     qbt_endpoint = str(qbt.get("endpoint") or "").strip()
-    if qbt_endpoint:
+    if qbt_runtime.configured(config):
         try:
             result["qbittorrent"] = connectivity.probe("qbittorrent", qbt_endpoint)
         except (OSError, ValueError, RuntimeError, httpx.HTTPError):
@@ -7029,6 +7037,46 @@ class CatalogHTTPServer(ThreadingHTTPServer):
     request_queue_size = 128
 
 
+def _monitor_qbt(db_path: Path, config_store: ConfigStore, stop: threading.Event,
+                 set_health: Callable[..., None], *, submission_enabled: bool,
+                 ready: threading.Event | None = None) -> None:
+    signature: tuple[Any, ...] | None = None
+    failures = 0
+    retry_at = last_warning = 0.0
+    while not stop.is_set():
+        try:
+            if ready is None or ready.is_set():
+                current = config_store.read()
+                settings = current.get("components", {}).get("downloadClient", {})
+                enabled = settings.get("submissionEnabled", submission_enabled)
+                credential = qbt_runtime._secret() if enabled and str(settings.get("endpoint") or "").strip() else ""
+                connection = (settings.get("endpoint"), settings.get("category"),
+                              credential, os.getenv("ANM_QBT_ALLOW_AUTH_BYPASS"), bool(enabled))
+                if connection != signature:
+                    signature, failures, retry_at, last_warning = connection, 0, 0.0, 0.0
+                if not enabled or not qbt_runtime.configured(current):
+                    set_health("qbittorrent", status="normal", detail="disabled" if not enabled else "not_configured")
+                elif time.monotonic() >= retry_at:
+                    refreshed = qbt_runtime.refresh(db_path, str(settings["endpoint"]), str(settings.get("category") or "anm"))
+                    failures = 0
+                    set_health("qbittorrent", status="normal", detail="ready")
+                    completed_ids = [int(value) for value in refreshed.get("completedAnimeIds", [])]
+                    if completed_ids:
+                        with DATABASE_MAINTENANCE_LOCK:
+                            library_audit.audit(db_path, current, anime_ids=completed_ids,
+                                                throttle=lambda: time.sleep(0.08))
+        except Exception as exc:
+            failures += 1
+            now = time.monotonic()
+            retry_at = now + min(300.0, 30.0 * (2 ** min(failures - 1, 4)))
+            set_health("qbittorrent", status="warning", detail="unavailable")
+            if failures == 1 or now - last_warning >= 300.0:
+                log_event("WARNING", "qbt_state_refresh_failed", error=f"{type(exc).__name__}: {exc}")
+                last_warning = now
+        if stop.wait(10):
+            break
+
+
 def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFIG,
           *, submission_enabled: bool = True, plan_dir: Path | None = None,
           ready_callback: Any | None = None,
@@ -7135,25 +7183,8 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                 break
 
     def monitor_qbt() -> None:
-        while not stop_monitor.is_set():
-            try:
-                if background_ready is None or background_ready.is_set():
-                    current = config_store.read()
-                    configured = current.get("components", {}).get("downloadClient", {}).get("submissionEnabled")
-                    if bool(submission_enabled if configured is None else configured):
-                        with DATABASE_MAINTENANCE_LOCK:
-                            refreshed = qbt_runtime.refresh(db_path, current["components"]["downloadClient"]["endpoint"],
-                                                            current["components"]["downloadClient"]["category"])
-                            handler.set_runtime_health("qbittorrent", status="normal", detail="ready")
-                            completed_ids = [int(value) for value in refreshed.get("completedAnimeIds", [])]
-                            if completed_ids:
-                                library_audit.audit(db_path, current, anime_ids=completed_ids,
-                                                    throttle=lambda: time.sleep(0.08))
-            except Exception as exc:
-                handler.set_runtime_health("qbittorrent", status="warning", detail="unavailable")
-                log_event("ERROR", "qbt_state_refresh_failed", error=f"{type(exc).__name__}: {exc}")
-            if stop_monitor.wait(10):
-                break
+        _monitor_qbt(db_path, config_store, stop_monitor, handler.set_runtime_health,
+                     submission_enabled=submission_enabled, ready=background_ready)
 
     managed_network_changed = threading.Event()
 

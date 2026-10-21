@@ -518,6 +518,7 @@ const i18n = {
     healthDegraded: "近期异常",
     healthUnavailable: "不可用",
     healthDisabled: "已关闭",
+    healthNotConfigured: "未配置",
     healthManual: "手动模式",
     healthWarming: "后台准备中",
     healthWarm: "准备完成",
@@ -1162,6 +1163,7 @@ const i18n = {
     healthDegraded: "Recently degraded",
     healthUnavailable: "Unavailable",
     healthDisabled: "Disabled",
+    healthNotConfigured: "Not configured",
     healthManual: "Manual mode",
     healthWarming: "Warming",
     healthWarm: "Warm",
@@ -1806,6 +1808,7 @@ const i18n = {
     healthDegraded: "直近で異常",
     healthUnavailable: "利用不可",
     healthDisabled: "無効",
+    healthNotConfigured: "未設定",
     healthManual: "手動モード",
     healthWarming: "準備中",
     healthWarm: "準備完了",
@@ -2659,7 +2662,7 @@ async function search({ background = false } = {}) {
   searchController?.abort();
   const controller = new AbortController();
   searchController = controller;
-  results.setAttribute("aria-busy", "true");
+  if (!background) results.setAttribute("aria-busy", "true");
   if (!background) { $("prevPage").disabled = $("nextPage").disabled = true; $("catalogLoading").hidden = false; }
   if (!items.length) {
     results.innerHTML = `<div class="empty">${t("loading")}</div>`;
@@ -2926,18 +2929,30 @@ function setCoverState(target, state = "available") {
   target.dataset.coverStateLabel = labels[state] ? t(labels[state]) : "";
   target.classList.toggle("cover-unavailable", state === "no_image" || state === "error" || state === "missing");
 }
-function applyCoverBlob(target, blob, batch = coverBatch) {
+async function applyCoverBlob(target, blob, batch = coverBatch) {
   if (!target || !target.isConnected) return;
-  const previous = target.dataset.coverObjectUrl;
-  if (previous) {
-    URL.revokeObjectURL(previous);
-    batch?.objectUrls?.delete(previous);
-  }
   const url = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
+  if (!target.isConnected || (batch && coverBatch !== batch)) {
+    URL.revokeObjectURL(url);
+    return;
+  }
+  const previous = target.dataset.coverObjectUrl;
   batch?.objectUrls?.set(url, target);
   target.dataset.coverObjectUrl = url;
   if (target.tagName === "IMG") target.src = url;
   target.style.setProperty("--cover", `url('${url}')`);
+  if (previous) {
+    URL.revokeObjectURL(previous);
+    batch?.objectUrls?.delete(previous);
+  }
 }
 async function reloadCoverImage(button) {
   const target = button.closest("[data-cover]");
@@ -2959,7 +2974,7 @@ async function reloadCoverImage(button) {
     });
     if (!response.ok) throw new Error(`cover ${response.status}`);
     const status = response.headers.get("X-AnimeMachine-Image-Status") || "available";
-    applyCoverBlob(target, await response.blob());
+    if (status === "available") await applyCoverBlob(target, await response.blob());
     setCoverState(target, status);
     if (status === "available") reportPerformanceEvent("firstCover");
     target.dataset.coverAttempt = "0";
@@ -2998,7 +3013,7 @@ function pumpCoverLoads(batch) {
     const modal = topModalDialog();
     if (modal && !modal.contains(target)) { target.dataset.coverQueued = "0"; continue; }
     batch.active += 1;
-    setCoverState(target, Number(target.dataset.coverAttempt || 0) > 0 ? "retrying" : "loading");
+    if (!target.dataset.coverObjectUrl) setCoverState(target, "loading");
     const suffix = coverVersion ? `?v=${coverVersion}` : "";
     fetch(`/api/anime/${target.dataset.cover}/image${suffix}`, {
       signal: batch.controller.signal,
@@ -3008,18 +3023,21 @@ function pumpCoverLoads(batch) {
       if (!response.ok) throw new Error(`cover ${response.status}`);
       return { blob: await response.blob(), status: response.headers.get("X-AnimeMachine-Image-Status") || "available",
         pending: response.headers.get("X-AnimeMachine-Image-Pending") === "1", etag: response.headers.get("ETag") };
-    }).then(({ blob, status, pending, etag }) => {
+    }).then(async ({ blob, status, pending, etag }) => {
       if (coverBatch !== batch || !target.isConnected) return;
       const modal = topModalDialog();
       if (modal && !modal.contains(target)) {
         target.dataset.coverQueued = "0";
         return;
       }
-      if (!etag || !target.dataset.coverObjectUrl || target.dataset.coverEtag !== etag) {
-        applyCoverBlob(target, blob, batch);
+      // Loading polls carry the same SVG placeholder. Keep the existing paint
+      // surface until a real cover has decoded, including during cache upgrades.
+      if (status === "available" && (!etag || !target.dataset.coverObjectUrl || target.dataset.coverEtag !== etag)) {
+        await applyCoverBlob(target, blob, batch);
+        if (coverBatch !== batch || !target.isConnected) return;
         target.dataset.coverEtag = etag || "";
       }
-      setCoverState(target, status);
+      setCoverState(target, target.dataset.coverObjectUrl ? "available" : status);
       if (status === "available") reportPerformanceEvent("firstCover");
       if (pending || status === "loading" || status === "retrying") {
         const attempt = Number(target.dataset.coverAttempt || 0) + 1;
@@ -6759,6 +6777,8 @@ function logMessage(message) {
     torrent_search_complete: ["Torrent 检索已完成", "Torrent search completed", "Torrent 検索が完了しました"],
     torrent_search_failed: ["Torrent 检索未完成", "Torrent search did not complete", "Torrent 検索を完了できませんでした"],
     qbt_state_refresh_failed: ["下载器状态暂不可用", "Downloader status is unavailable", "ダウンローダーの状態を取得できません"],
+    seasonal_covers_prepared: ["当季封面已就绪", "Seasonal covers are ready", "今期のカバーを準備しました"],
+    seasonal_cover_pack_invalid: ["预置封面未通过校验", "The bundled cover check failed", "同梱カバーの検証に失敗しました"],
     application_update_check_failed: ["暂时无法检查新版", "Update check is unavailable", "更新を確認できませんでした"],
     archive_schedule_failed: ["底包检查未完成", "Catalog update check did not complete", "カタログの更新を確認できませんでした"],
   };
@@ -7028,7 +7048,7 @@ function renderPlaybackDiagnostics(payload) {
 function systemHealthLabels() {
   return {
     names: { network: t("healthNetwork"), aniRss: t("healthAniRss"), qbittorrent: t("healthQbittorrent"), storage: t("healthStorage"), imagePreload: t("healthImagePreload"), playback: t("healthPlayback") },
-    details: { ready: t("healthReady"), sleeping: t("librarySleeping"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
+    details: { ready: t("healthReady"), sleeping: t("librarySleeping"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), not_configured: t("healthNotConfigured"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
   };
 }
 function systemHealthExtra(item) {

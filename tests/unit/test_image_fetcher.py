@@ -7,16 +7,41 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from animemachine.catalog.image_fetcher import (
     IMAGE_PRIORITY_MAINTENANCE,
     ImageFetcher,
     _clear_transient_negative_cache,
+    _fetch_cover,
 )
 
 
 class ImageFetcherTests(unittest.TestCase):
+    def test_transient_cover_failure_retries_once_but_absent_covers_and_offline_do_not(self):
+        from animemachine.catalog import service
+        from animemachine.network import connectivity
+        with tempfile.TemporaryDirectory() as raw:
+            path=Path(raw)/'catalog.sqlite3'
+            with contextlib.closing(sqlite3.connect(path)) as db,db:
+                db.execute('CREATE TABLE anime_image(anime_id INTEGER PRIMARY KEY,error TEXT)')
+                db.execute("INSERT INTO anime_image VALUES(1,'temporary network failure')")
+            for offline,error,expected_calls,expected in (
+                    (False,'temporary network failure',2,'available'),
+                    (False,'no_cover',1,'no_image'),(True,'temporary network failure',1,'error:remote')):
+                with self.subTest(offline=offline,error=error):
+                    with contextlib.closing(sqlite3.connect(path)) as db,db:
+                        db.execute('UPDATE anime_image SET error=?',(error,))
+                    with mock.patch.object(connectivity,'is_offline',return_value=offline), \
+                            mock.patch.object(service,'get_anime_image',side_effect=[service.placeholder_image(),(b'image','image/png')]) as fetch:
+                        self.assertEqual(expected,_fetch_cover(path,1,{},refresh=False))
+                    self.assertEqual(expected_calls,fetch.call_count)
+            with mock.patch.object(service,'get_anime_image',return_value=service.placeholder_image()) as fetch, \
+                    mock.patch.object(connectivity,'is_offline',return_value=False):
+                self.assertEqual('error:remote',_fetch_cover(path,1,{},refresh=False))
+                self.assertEqual(2,fetch.call_count,'Retries must remain bounded')
+
     def test_service_restart_clears_only_transient_negative_cache(self):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "catalog.sqlite3"

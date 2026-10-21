@@ -402,7 +402,7 @@ textarea:focus {
   background: transparent;
   cursor: pointer;
   transition:
-    background 0.16s,
+    background-color 0.16s,
     transform 0.16s;
 }
 .card.with-cover {
