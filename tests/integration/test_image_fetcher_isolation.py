@@ -39,7 +39,8 @@ class SlowCoverSource(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/v0/subjects/"):
             anime_id = self.path.rsplit("/", 1)[-1]
-            body = json.dumps({"images": {"large": f"http://127.0.0.1:{self.server.server_port}/cover/{anime_id}.png"}}).encode()
+            body = json.dumps({"id": int(anime_id), "name": f"Test {anime_id}",
+                               "images": {"large": f"http://127.0.0.1:{self.server.server_port}/cover/{anime_id}.png"}}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
             return
@@ -55,6 +56,47 @@ class SlowCoverSource(BaseHTTPRequestHandler):
 
 
 class ImageFetcherIsolationTests(unittest.TestCase):
+    def test_completed_slow_foreground_does_not_permanently_throttle_background(self):
+        SlowCoverSource.release = threading.Event(); SlowCoverSource.active = 0
+        source = DaemonServer(("127.0.0.1",0),SlowCoverSource)
+        source_thread=threading.Thread(target=source.serve_forever,daemon=True);source_thread.start()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
+            database=self.database(raw)
+            fetcher=ImageFetcher(database,workers=4,host_limit=2)
+            timer=None
+            try:
+                fetcher.enqueue(1,{'bangumiApiEndpoints':[f'http://127.0.0.1:{source.server_port}'],
+                                   'probeTimeoutSeconds':5},priority='foreground')
+                deadline=time.monotonic()+8
+                while not SlowCoverSource.active and time.monotonic()<deadline:
+                    time.sleep(.05)
+                self.assertGreater(SlowCoverSource.active,0)
+                timer=threading.Timer(2,SlowCoverSource.release.set);timer.start()
+                deadline=time.monotonic()+8
+                while fetcher.pending(1) and time.monotonic()<deadline:
+                    time.sleep(.05)
+                self.assertEqual('available',fetcher.result(1))
+                metric_deadline=time.monotonic()+2
+                observed=fetcher.snapshot()['budget'].get('foregroundLatencySeconds')
+                while observed is None and time.monotonic()<metric_deadline:
+                    time.sleep(.02)
+                    observed=fetcher.snapshot()['budget'].get('foregroundLatencySeconds')
+                self.assertIsNotNone(observed)
+                self.assertGreaterEqual(observed,1.5)
+                deadline=time.monotonic()+18
+                while time.monotonic()<deadline:
+                    budget=fetcher.snapshot()['budget']
+                    if budget.get('foregroundLatencySeconds') is None and 'foreground_latency' not in budget.get('reason',''):
+                        break
+                    time.sleep(.1)
+                self.assertIsNone(budget.get('foregroundLatencySeconds'))
+                self.assertNotIn('foreground_latency',budget['reason'])
+            finally:
+                SlowCoverSource.release.set()
+                if timer is not None:timer.cancel();timer.join(1)
+                fetcher.close()
+        source.shutdown();source.server_close();source_thread.join(2)
+
     def database(self, root: str) -> Path:
         path = Path(root) / "catalog.sqlite3"
         with contextlib.closing(sqlite3.connect(path)) as db, db:
@@ -88,7 +130,7 @@ class ImageFetcherIsolationTests(unittest.TestCase):
             store.write(current)
             network = current["metadata"]["network"]
             handler = service.make_handler(web_db, store,
-                                           submission_enabled=False, image_fetcher=fetcher)
+                                           submission_enabled=False, image_fetcher=fetcher, start_warmup=False)
             handler.log_message = lambda *_args: None
             web = DaemonServer(("127.0.0.1", 0), handler)
             web_thread = threading.Thread(target=web.serve_forever, daemon=True); web_thread.start()
@@ -141,7 +183,8 @@ class ImageFetcherIsolationTests(unittest.TestCase):
             def result(self, _anime_id): return None
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw, mock.patch.dict(os.environ, {
-                "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw) / "auth.sqlite3")}, clear=False):
+                "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw) / "auth.sqlite3")}, clear=False), \
+                mock.patch.object(service, "image_network_config", return_value={}):
             db_path = self.database(raw)
             store = ConfigStore(Path(raw) / "config.json", service.EXAMPLE_CONFIG)
             handler = service.make_handler(db_path, store, submission_enabled=False,
@@ -171,6 +214,55 @@ class ImageFetcherIsolationTests(unittest.TestCase):
                 self.assertEqual(50, state.get("failed"))
                 self.assertEqual(2, state.get("priorityDone"))
             finally:
+                web.shutdown(); web.server_close(); thread.join(2)
+
+    def test_bulk_image_refresh_keeps_http_responsive_during_setup_and_reports_setup_failure(self):
+        release, entered = threading.Event(), threading.Event()
+        def blocked_network(_config):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release image setup")
+            return {}
+        fetcher = mock.Mock(spec=("enqueue", "pending", "result"))
+        fetcher.enqueue.return_value = False
+        fetcher.pending.return_value = False
+        fetcher.result.return_value = None
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw, mock.patch.dict(os.environ, {
+                "ANM_AUTH_ENABLED": "false", "ANM_AUTH_DB": str(Path(raw) / "auth.sqlite3")}, clear=False):
+            database = self.database(raw)
+            store = ConfigStore(Path(raw) / "config.json", service.EXAMPLE_CONFIG)
+            handler = service.make_handler(database, store, image_fetcher=fetcher, start_warmup=False)
+            handler.log_message = lambda *_args: None
+            web = DaemonServer(("127.0.0.1", 0), handler)
+            thread = threading.Thread(target=web.serve_forever, daemon=True); thread.start()
+            base = f"http://127.0.0.1:{web.server_port}"
+            def refresh():
+                request = urllib.request.Request(base + "/api/images/refresh", method="POST", data=b'{}',
+                                                 headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(request, timeout=2) as response:
+                    self.assertEqual(202, response.status)
+            def wait_state(expected):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    with urllib.request.urlopen(base + "/api/maintenance/status", timeout=2) as response:
+                        state = json.load(response)["images"]
+                    if state["state"] == expected:
+                        return state
+                    time.sleep(.02)
+                self.fail(f"Image refresh did not reach {expected}")
+            try:
+                with mock.patch.object(service, "image_network_config", side_effect=blocked_network):
+                    refresh()
+                    self.assertTrue(entered.wait(1))
+                    with urllib.request.urlopen(base + "/api/health/live", timeout=1) as response:
+                        self.assertEqual(200, response.status)
+                    release.set()
+                    self.assertEqual(50, wait_state("complete")["failed"])
+                with mock.patch.object(service, "image_network_config", side_effect=ValueError("invalid test network")):
+                    refresh()
+                    self.assertIn("ValueError", wait_state("failed")["error"])
+            finally:
+                release.set()
                 web.shutdown(); web.server_close(); thread.join(2)
 
     def test_single_worker_still_services_background_prefetch(self):

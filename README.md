@@ -8,7 +8,7 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 
 ## 主要功能
 
-- **新番追更**：通过新作雷达查看开播日期和最新话数，检索季度资源，选择字幕组并添加 Ani-RSS 订阅。
+- **新番追更**：通过新作雷达查看开播日期和最新集数，检索季度资源，选择字幕组并添加 Ani-RSS 订阅。
 - **收藏管理**：识别已有媒体，比较 Torrent 资源与本地文件，生成补齐计划；按作品和系列组织目录。
 - **作品检索**：按年代、类型、制作公司、主题和收藏状态筛选，支持中文、英文和日文名称搜索。
 - **系列关系**：通过作品关系图查看前作、续作、剧场版和番外。
@@ -34,11 +34,11 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 | Windows 10 / 11 | 从 [Releases](https://github.com/kyupi-git/animemachine/releases/latest) 下载 Windows ZIP，解压后双击 `AnimeMachine.cmd`。发布包包含 Python 运行环境。 |
 | Linux | 安装 Python 3.11 或更新版本，下载对应的 Linux 发布包，解压后运行 `./AnimeMachine-Linux.sh`。 |
 | macOS | 安装 Python 3.11 或更新版本，下载对应的 macOS 发布包，解压后打开 `AnimeMachine-macOS.command`。 |
-| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，在文件所在目录执行 `docker compose up -d`。新手可按照[Docker Compose 分步指南](deploy/compose/README.md)选择方案。 |
+| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，在文件所在目录执行 `docker compose up -d`。部署方案与步骤见[Docker Compose 指南](deploy/compose/README.md)。 |
 
 启动后打开 **<http://localhost:8787>**。从其他设备访问时，将 `localhost` 替换为运行 AnimeMachine 的电脑或 NAS 地址。初始账户和随机密码显示在启动窗口或容器日志中。
 
-首次启动会自动下载作品资料并建立作品库，封面在后台逐步补齐。作品列表加载完成后，即可浏览作品和配置媒体目录。
+首次启动优先准备当季作品，资料就绪后直接显示发行包预置的当季封面，其余资料和图片在后台补全。升级沿用已有作品库和图片缓存。
 
 ```mermaid
 flowchart TB

@@ -66,6 +66,11 @@ class FakeAniRss(BaseHTTPRequestHandler):
             ]
         elif path == "/api/addAni":
             self.subscriptions.append(body); data = True
+        elif path == "/api/setAni":
+            for item in self.subscriptions:
+                if item.get("id") == body.get("id"):
+                    item.update(body)
+            data = True
         elif path == "/api/deleteAni":
             type(self).delete_paths.append(self.path)
             ids = set(body or []); type(self).subscriptions = [item for item in self.subscriptions if item.get("id") not in ids]; data = True
@@ -166,6 +171,56 @@ class AniRssTest(unittest.TestCase):
         self.server.shutdown(); self.server.server_close(); self.tmp.cleanup()
         if self.old_key is None: os.environ.pop("ANM_ANI_RSS_API_KEY", None)
         else: os.environ["ANM_ANI_RSS_API_KEY"] = self.old_key
+
+    def test_exact_versions_remain_separate_and_subscription_tracks_the_selection(self):
+        import re
+        FakeAniRss.resource_items = [
+            {'title': '[SubsPlease] Work - 01 [Baha][1080p][CHS][HEVC-10bit]', 'episode': 1},
+            {'title': '[SubsPlease] Work - 02 [Baha][1080p][CHS][HEVC-10bit]', 'episode': 2},
+            {'title': '[SubsPlease] Work - 01 [CR][1080p][HEVC-10bit]', 'episode': 1}]
+        ani_rss.sync(self.db_path, self.config)
+        ani_rss.search(self.db_path, 1, self.config)
+        choices = ani_rss.resources(self.db_path, 1, self.config)
+        self.assertEqual(2, len(choices))
+        baha = next(item for item in choices if item['releaseVariant']['platform'] == 'Baha')
+        cr = next(item for item in choices if item['releaseVariant']['platform'] == 'CR')
+        self.assertNotEqual(baha['resourceId'], cr['resourceId'])
+        result = ani_rss.subscribe(self.db_path, baha['resourceId'], self.config)
+        self.assertFalse(result['idempotent'])
+        self.assertTrue(ani_rss.subscribe(self.db_path, baha['resourceId'], self.config)['idempotent'])
+        remote = FakeAniRss.subscriptions[0]
+        self.assertTrue(all(re.search(pattern, FakeAniRss.resource_items[0]['title']) for pattern in remote['match']))
+        self.assertFalse(all(re.search(pattern, FakeAniRss.resource_items[2]['title']) for pattern in remote['match']))
+        remote.update(customDownloadPathTemplate='/keep', currentEpisodeNumber=2)
+        ani_rss.subscribe(self.db_path, cr['resourceId'], self.config)
+        self.assertEqual(1, len(FakeAniRss.subscriptions))
+        self.assertEqual('/keep', remote['customDownloadPathTemplate'])
+        self.assertEqual(2, remote['currentEpisodeNumber'])
+        self.assertTrue(all(re.search(pattern, FakeAniRss.resource_items[2]['title']) for pattern in remote['match']))
+
+    def test_stale_version_requires_reselection_without_any_remote_change(self):
+        ani_rss.sync(self.db_path, self.config)
+        ani_rss.search(self.db_path, 1, self.config)
+        token = ani_rss.resources(self.db_path, 1)[0]['resourceId']
+        FakeAniRss.resource_items = [{'title':'[SubsPlease] Work - 01 [720p][CHT]', 'episode':1}]
+        ani_rss.search(self.db_path, 1, self.config)
+        with self.assertRaisesRegex(ValueError, 'resource_variant_changed'):
+            ani_rss.subscribe(self.db_path, token, self.config)
+        self.assertFalse(FakeAniRss.subscriptions)
+
+    def test_resource_choices_remain_current_and_readable_during_another_write(self):
+        ani_rss.sync(self.db_path, self.config)
+        ani_rss.search(self.db_path, 1, self.config)
+        self.config['torrentPolicy']['contentClasses'] = {'webrip': False}
+        with contextlib.closing(sqlite3.connect(self.db_path)) as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            with mock.patch.object(ani_rss, 'refresh_resource_policy', side_effect=AssertionError('GET must stay read-only')):
+                rows = ani_rss.resources(self.db_path, 1, self.config)
+            self.assertTrue(rows)
+            self.assertFalse(rows[0]['eligible'])
+            self.assertTrue(rows[0]['canOverride'])
+            self.assertEqual('source_class_disabled', rows[0]['eligibilityReason'])
+            writer.rollback()
 
     def test_state_reads_without_trying_to_take_a_resource_policy_writer_lock(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
@@ -298,20 +353,34 @@ class AniRssTest(unittest.TestCase):
             db.execute('INSERT INTO ani_rss_resource VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', (legacy, 2, *row[2:]))
         ani_rss.search(self.db_path, 1, self.config)
         self.assertEqual([item['resourceId'] for item in before], [item['resourceId'] for item in ani_rss.resources(self.db_path, 1)])
-        self.assertIn(legacy, [item['resourceId'] for item in ani_rss.resources(self.db_path, 2)])
+        self.assertIn(legacy, [item['resourceId'].split('~')[0] for item in ani_rss.resources(self.db_path, 2)])
 
     def test_different_subtitle_rss_reuses_same_work_and_season(self):
         ani_rss.search(self.db_path, 1, self.config)
         resource = ani_rss.resources(self.db_path, 1)[0]
         client = mock.Mock()
-        client.call.return_value = {"id": "new-id", "url": "https://mikan.test/new-rss", "bgmUrl": "https://bgm.tv/subject/123", "season": 2}
+        feed = 'https://mikan.test/RSS/Bangumi?subgroupid=1'
+        def call(path, **kwargs):
+            if path == 'rssToAni':
+                return {"id": "new-id", "url": feed, "bgmUrl": "https://bgm.tv/subject/123", "season": 2}
+            if path == 'setAni':
+                client.subscriptions.return_value[1].update(kwargs['body'])
+                return True
+            raise AssertionError(path)
+        client.call.side_effect = call
         client.subscriptions.return_value = [
             {"id": "prior-season", "url": "https://mikan.test/prior", "bgmUrl": "https://bgm.tv/subject/123", "season": 1},
-            {"id": "existing-id", "url": "https://mikan.test/other-rss", "bgmUrl": "https://bgm.tv/subject/123", "season": 2}]
+            {"id": "existing-id", "url": "https://mikan.test/other-rss", "bgmUrl": "https://bgm.tv/subject/123", "season": 2,
+             "customDownloadPathTemplate": '/keep/my/files', "currentEpisodeNumber": 5, "enable": False}]
         with mock.patch.object(ani_rss, "_client", return_value=client), mock.patch.object(ani_rss, "sync"):
             result = ani_rss.subscribe(self.db_path, resource["resourceId"], self.config)
         self.assertEqual(result["remoteId"], "existing-id")
-        self.assertEqual([call.args[0] for call in client.call.call_args_list], ["rssToAni"])
+        self.assertEqual([call.args[0] for call in client.call.call_args_list], ["rssToAni", "setAni"])
+        changed = client.subscriptions.return_value[1]
+        self.assertEqual('/keep/my/files', changed['customDownloadPathTemplate'])
+        self.assertEqual(5, changed['currentEpisodeNumber'])
+        self.assertTrue(changed['enable'])
+        self.assertEqual(feed, changed['url'])
 
     def test_collection_resolves_destination_and_remains_idempotent_without_subscription(self):
         FakeAniRss.resource_items = [{"title": "[SubsPlease] Work Complete Batch (1080p) [WEB-DL]", "size": 100,
@@ -474,11 +543,14 @@ class AniRssTest(unittest.TestCase):
             self.assertTrue(row['eligible'])
             self.assertEqual('eligible', row['eligibilityReason'])
             with contextlib.closing(sqlite3.connect(self.db_path)) as db:
-                self.assertEqual(1, db.execute('SELECT eligible FROM ani_rss_resource').fetchone()[0])
-                before = db.execute('SELECT * FROM metadata').fetchall()
+                self.assertEqual(0, db.execute('SELECT eligible FROM ani_rss_resource').fetchone()[0])
+                before = db.execute('SELECT name,sql FROM sqlite_master ORDER BY name').fetchall()
             ani_rss.resources(self.db_path, 1, self.config)
             with contextlib.closing(sqlite3.connect(self.db_path)) as db:
-                self.assertEqual(before, db.execute('SELECT * FROM metadata').fetchall())
+                self.assertEqual(before, db.execute('SELECT name,sql FROM sqlite_master ORDER BY name').fetchall())
+            ani_rss.refresh_resource_policy(self.db_path, self.config)
+            with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+                self.assertEqual(1, db.execute('SELECT eligible FROM ani_rss_resource').fetchone()[0])
             policy['serialSubtitle']['enabledByLanguage']['zh'] = []
             row = ani_rss.resources(self.db_path, 1, self.config)[0]
             self.assertFalse(row['eligible'])
@@ -908,6 +980,51 @@ class AniRssTest(unittest.TestCase):
         after = [item.filename for item in ani_rss.playback_items(self.db_path, 1, self.config, "remote-a")]
         self.assertEqual(1, failed["mediaFailures"])
         self.assertEqual(before, after)
+
+    def test_unsubscribed_cover_uses_authenticated_image_cache_without_forwarding_key(self):
+        import httpx
+        from PIL import Image
+        output = io.BytesIO()
+        Image.new('RGB', (16, 24), (20, 40, 60)).save(output, 'PNG')
+        ani_rss.sync(self.db_path, self.config)
+        image = 'https://lain.bgm.tv/r/1000/pic/cover/l/test.png'
+        response = httpx.Response(200, content=output.getvalue(), headers={'Content-Type':'image/png'},
+                                  request=httpx.Request('GET', self.config['components']['aniRss']['endpoint'] + '/api/proxyImage'))
+        with mock.patch.object(ani_rss.network_transport, 'request', return_value=response) as request:
+            result = ani_rss.proxy_cover(self.db_path, image, self.config)
+        self.assertEqual(output.getvalue(), result[0])
+        args, kwargs = request.call_args
+        self.assertTrue(args[1].startswith(self.config['components']['aniRss']['endpoint'] + '/api/proxyImage?'))
+        self.assertFalse(kwargs['follow_redirects'])
+        self.assertEqual('secret-test', kwargs['headers']['api-key'])
+        self.assertNotIn('secret-test', args[1])
+        self.assertEqual(image, base64.b64decode(urllib.parse.parse_qs(urllib.parse.urlsplit(args[1]).query)['imgUrl'][0]).decode())
+        with mock.patch.object(ani_rss.network_transport, 'request') as request:
+            self.assertIsNone(ani_rss.proxy_cover(self.db_path, 'https://127.0.0.1/private', self.config))
+        request.assert_not_called()
+
+    def test_slow_anirss_image_proxy_does_not_delay_a_fast_native_cover(self):
+        import time
+        from PIL import Image
+        output = io.BytesIO()
+        Image.new('RGB', (16, 24), (20, 40, 60)).save(output, 'PNG')
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute('CREATE TABLE anime_image(anime_id INTEGER PRIMARY KEY,mime_type TEXT,image_blob BLOB,source_url TEXT,etag TEXT,fetched_at TEXT,error TEXT)')
+        release = threading.Event()
+        def slow(*args, **kwargs):
+            release.wait(3)
+            return None
+        try:
+            with mock.patch.object(ani_rss, 'cached_cover', return_value=None), \
+                 mock.patch.object(ani_rss, 'proxy_cover', side_effect=slow), \
+                 mock.patch.object(service.network_sources, 'fetch_json', return_value=({'id':123,'images':{'large':'https://lain.bgm.tv/pic/cover/l/test.png'}},'metadata')), \
+                 mock.patch.object(service.network_sources, 'fetch_binary', return_value=(output.getvalue(),'image/png','https://lain.bgm.tv/pic/cover/l/test.png')):
+                started = time.monotonic()
+                result = service.get_anime_image(self.db_path, 1, log_timing=False)
+                self.assertLess(time.monotonic()-started, 1, 'The winning native path must not wait for the slow integration')
+            self.assertEqual(output.getvalue(), result[0])
+        finally:
+            release.set()
 
     def test_anirss_cover_is_copied_before_external_image_fallback_and_not_replaced_implicitly(self):
         import io

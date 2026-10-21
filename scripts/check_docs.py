@@ -14,6 +14,7 @@ LINK_RE = re.compile(r"!?\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+['\"][^'\"]*['
 HEADING_RE = re.compile(r"^(#{1,6})\s+", re.MULTILINE)
 TRANSLATED_FAMILIES = (
     ("README.md", "README.en.md", "README.ja.md"),
+    ("CONTRIBUTING.md", "CONTRIBUTING.en.md", "CONTRIBUTING.ja.md"),
     ("docs/guide.md", "docs/guide.en.md", "docs/guide.ja.md"),
     ("docs/architecture.md", "docs/architecture.en.md", "docs/architecture.ja.md"),
     ("docs/reference.md", "docs/reference.en.md", "docs/reference.ja.md"),

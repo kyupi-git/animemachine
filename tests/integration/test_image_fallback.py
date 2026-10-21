@@ -224,7 +224,7 @@ class ImageFallbackTests(unittest.TestCase):
                 "ANM_AUTH_ENABLED":"false", "ANM_AUTH_DB":str(Path(raw)/"auth.sqlite3")}):
             db=self.database(raw)
             handler=service.make_handler(db,ConfigStore(Path(raw)/"config.json",service.EXAMPLE_CONFIG),
-                                         submission_enabled=False,image_fetcher=Fetcher())
+                                         submission_enabled=False,image_fetcher=Fetcher(),start_warmup=False)
             server=ThreadingHTTPServer(("127.0.0.1",0),handler)
             thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
             try:

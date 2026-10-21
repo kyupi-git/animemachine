@@ -81,6 +81,26 @@ class ViewingHTTPTests(unittest.TestCase):
             self.assertFalse(radar()['hasUnwatched'])
             self.assertEqual(3, radar()['viewing']['episode'])
 
+    def test_subscription_http_accepts_exact_variants_and_preserves_policy_override(self):
+        cfg = self.config.read()
+        cfg['components']['downloadClient']['submissionEnabled'] = True
+        self.config.write(cfg)
+        parent = 'ar-' + 'a' * 24
+        variant = parent + '~' + 'b' * 16
+        with mock.patch.object(service.ani_rss, 'subscribe', return_value={'remoteId': 'verified'}) as subscribe:
+            for resource, override in ((parent, False), (variant, True)):
+                with self.request(f'/api/ani-rss/resources/{resource}/subscribe', {'policyOverride': override}) as response:
+                    self.assertEqual(202, response.status)
+                    self.assertEqual('verified', json.load(response)['remoteId'])
+                self.assertEqual(resource, subscribe.call_args.args[1])
+                self.assertEqual(override, subscribe.call_args.kwargs['policy_override'])
+            for resource in (variant + 'b', parent + '~invalid'):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.request(f'/api/ani-rss/resources/{resource}/subscribe', {})
+                with error.exception as response:
+                    self.assertEqual(404, response.code)
+            self.assertEqual(2, subscribe.call_count)
+
     def test_hide_search_restore_retains_identity_and_viewing(self):
         with contextlib.closing(sqlite3.connect(self.database)) as db:
             title = db.execute("SELECT title_ja FROM anime_work WHERE id=?", (self.anime_id,)).fetchone()[0]

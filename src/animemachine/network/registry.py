@@ -19,6 +19,7 @@ class Endpoint:
     credentials: str = "never"
     capabilities: tuple[str, ...] = ()
     enabled: bool = True
+    legacy_base_urls: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, value: dict) -> "Endpoint":
@@ -27,7 +28,8 @@ class Endpoint:
             raise ValueError(f"invalid endpoint trust: {trust}")
         return cls(str(value["id"]), str(value["service"]), str(value["baseUrl"]).rstrip("/"),
                    trust, str(value.get("credentials", "never")),
-                   tuple(map(str, value.get("capabilities", ()))), bool(value.get("enabled", True)))
+                   tuple(map(str, value.get("capabilities", ()))), bool(value.get("enabled", True)),
+                   tuple(map(str, value.get("legacyBaseUrls", ()))))
 
 
 def load(path: Path | None = None, additions: Iterable[dict] = ()) -> tuple[list[Endpoint], dict]:

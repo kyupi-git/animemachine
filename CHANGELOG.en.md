@@ -5,6 +5,30 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.5.0
+
+0.5.0 speeds up initial title preparation and cover fetching, adds precise release selection and viewing controls, and improves Collector settings, bundled deployment and player actions. Upgrades retain existing catalogs, settings and records.
+
+### Added and improved
+
+- Added season-first initialization: new installations prepare recent titles and begin fetching covers before completing the remaining metadata in the background. Usable data survives interruptions; existing complete catalogs remain available.
+- Added verified seasonal covers to releases, ready for use once title metadata is prepared. Existing images stay in place while remaining covers load in the background.
+- Added an editable Watched episode column in the radar, shared with viewing records and Continue watching. Date and format now share the Start date column.
+- Added a Windows player-permission command that runs directly in cmd, allowing the current site to launch PotPlayer and VLC through Edge or Chrome. Playback controls use a two-row, three-column layout.
+- Improved release selection with separate Ani-RSS and Torrent sections. Subtitle-group dropdowns select platforms, subtitles and quality; subscriptions keep using the chosen version. Title details put playback first and merge duplicate folders and playback sources.
+- Improved airing-series Torrent matching with season and consecutive-episode checks, omitting wrong seasons, missing episodes and stale versions while preserving completed-title and film backfilling.
+- Improved Torrent Collector settings with separate per-work search and pool controls, shared resource preferences, configurable sources, result limits, time limits and automatic collection.
+- Improved covers with Ani-RSS and public metadata-cache reuse, isolated connection waits for slow servers, parallel sources, and priority for the first screen and nearby pages, preserving original image quality.
+- Improved bundled first-run settings with separate generated passwords, download-queue tuning and fewer file moves after completion. Existing external services keep their settings.
+
+### Fixed
+
+- Fixed brief radar table jumps during background refresh; existing content stays visible until new data is ready.
+- Fixed repeated card flicker while covers load and repeated downloader errors before a downloader has been configured.
+- Fixed title details failing while the full catalog is published; improved database access in paths with special characters and read-only recognition of existing collection folders.
+- Fixed bundled Ani-RSS and qBittorrent interfaces being inaccessible over the LAN by default, and aligned deployment instructions and component documentation across three languages.
+- Fixed known security issues in image-processing and certificate dependencies, and updated development-check dependencies.
+
 ## 0.4.1
 
 0.4.1 adds hidden titles and restoration, simplifies the bundled deployment, and improves source selection, resource search, and activity records. Existing subscriptions, media, and viewing records are retained.

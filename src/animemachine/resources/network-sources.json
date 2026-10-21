@@ -7,7 +7,7 @@
     {"id":"bangumi-api-official","service":"bangumi_api","baseUrl":"https://api.bgm.tv","trust":"official","credentials":"never","capabilities":["json"],"enabled":true},
     {"id":"bangumi-api-anibt","service":"bangumi_api","baseUrl":"https://bgmapi.anibt.net","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
     {"id":"bangumi-api-pro","service":"bangumi_api","baseUrl":"https://api.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
-    {"id":"bangumi-subject-cache-ani-rss","service":"bangumi_subject_cache","baseUrl":"https://bgm-cache.wushuo.top","trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
+    {"id":"bangumi-subject-cache-ani-rss","service":"bangumi_subject_cache","baseUrl":"https://cache.wushuo.top/bgm/subjects/{id}","legacyBaseUrls":["https://bgm-cache.wushuo.top"],"trust":"community_mirror","credentials":"never","capabilities":["json"],"enabled":true},
     {"id":"bangumi-image-official","service":"bangumi_image","baseUrl":"https://lain.bgm.tv","trust":"official","credentials":"never","capabilities":["image"],"enabled":true},
     {"id":"bangumi-image-anibt","service":"bangumi_image","baseUrl":"https://bgmimg.anibt.net","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true},
     {"id":"bangumi-image-pro","service":"bangumi_image","baseUrl":"https://lain.bangumi.pro","trust":"community_mirror","credentials":"never","capabilities":["image"],"enabled":true},

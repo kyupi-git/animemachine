@@ -11,7 +11,7 @@
 /config.json.*
 /state/
 /deploy/private/
-/deploy/compose/*/.env
+/deploy/compose/**/.env
 /tools/private-library/
 
 # Generated/local runtime data and secrets.
@@ -33,6 +33,7 @@
 **/*.sqlite*
 !/tests/fixtures/anime-catalog.sqlite3
 *.zip
+/src/animemachine/resources/season-covers.zip.sha256
 
 # Local IDE/OS state.
 .DS_Store

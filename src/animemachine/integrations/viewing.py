@@ -91,7 +91,7 @@ class Store:
         from ..catalog.episodes import playback_episode
         changed = 0
         with contextlib.closing(self._connect()) as db, db, contextlib.closing(sqlite3.connect(
-                f"file:{catalog.as_posix()}?mode=ro", uri=True)) as metadata:
+                catalog.resolve().as_uri() + "?mode=ro", uri=True)) as metadata:
             rows = db.execute("SELECT user_id,bgm_id,episode FROM viewing_anchor WHERE episode IS NOT NULL").fetchall()
             for row in rows:
                 work = metadata.execute("SELECT id FROM anime_work WHERE bgm_id=?", (row["bgm_id"],)).fetchone()

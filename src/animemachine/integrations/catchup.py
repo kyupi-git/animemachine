@@ -74,7 +74,7 @@ def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
     groups: list[dict[str, Any]] = []
     remote_available = ani_rss.state_available(ani_rss.state(db_path, config))
     language = language or str(config.get("ui", {}).get("language") or "en")
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for row in rows:
             if row.get("media_code") != "tv":

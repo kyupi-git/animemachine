@@ -21,7 +21,7 @@ Compose 常用变量如下。路径变量指定**宿主机目录**，容器内�
 
 | 变量 | 默认值 / 用途 |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.4.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.0` |
 | `ANM_LIBRARY_DIR` | `./library`，收藏库 |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`，Torrent 池 |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`，已有媒体 |
@@ -47,14 +47,21 @@ Compose 的 `.env` 也使用 `ANM_WEB_PORT` 调整宿主机端口，容器内仍
 
 ### qBittorrent / Ani-RSS 管理页面
 
-托管 Compose 中，qBittorrent Web UI 默认是本机 `8080`，Ani-RSS 是本机 `7789`。需要通过 NAS 的地址访问时，在 `.env` 中设置：
+托管 Compose 的管理页面默认可从局域网访问，首次部署自动生成独立密码：
 
-```dotenv
-QBT_BIND_ADDRESS=0.0.0.0
-ANI_RSS_BIND_ADDRESS=0.0.0.0
+| 服务 | 地址 | 用户名 | 初始密码文件（项目目录内） |
+| --- | --- | --- | --- |
+| qBittorrent | `http://NAS地址:8080` | `admin` | `config/qbittorrent/.animemachine/web-password` |
+| Ani-RSS | `http://NAS地址:7789` | `admin` | `config/ani-rss/.animemachine/web-password` |
+
+也可以在保存 `compose.yaml` 的目录运行以下命令查看：
+
+```sh
+docker compose exec animemachine cat /QbtConfig/.animemachine/web-password
+docker compose exec animemachine cat /AniRssConfig/.animemachine/web-password
 ```
 
-执行 `docker compose up -d`，然后用 `http://NAS地址:8080` 或 `http://NAS地址:7789` 登录。qBittorrent 默认用户名为 `admin`，自动生成的密码可通过 `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password` 查看；Ani-RSS 默认账户为 `admin` / `admin`，**必须在通过局域网公开管理端口前**登录其安全设置修改密码，并限制网络访问范围。
+升级沿用原账号和密码；在服务内修改密码后，以修改后的密码为准。旧版 Ani-RSS 仍使用 `admin` 初始密码时，可在其安全设置中改为独立密码。仅需本机访问时，在 `.env` 将 `QBT_BIND_ADDRESS`、`ANI_RSS_BIND_ADDRESS` 设为 `127.0.0.1`，再运行 `docker compose up -d`。
 
 以上地址用于浏览器访问。Compose 内的服务连接使用 `http://qbittorrent:8080`、`http://ani-rss:7789`。连接宿主机服务可使用 `host.docker.internal`；Linux 自定义 Compose 需配置对应的 `host-gateway` 映射。
 
@@ -86,6 +93,23 @@ Archive 导入支持官方 `dump-*.zip`。可通过设置页选取文件，也�
 
 资源采集器由完整 Compose 组合提供，也可使用[独立采集器配置](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/compose.yaml)。来源、历史扫描、重试和代理参数见[高级环境示例](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/.env.example)。采集器写入 Torrent 池，AnimeMachine 扫描其内容，再按用户确认的计划提交下载任务。
 
+### Torrent Collector 设置
+
+日常选项位于 **设置 → 连接 → Torrent Collector**。单作品检索内置于 AnimeMachine，连接 qBittorrent 后即可使用；自动采集由 Compose 中的常驻采集器运行。
+
+![采集设置：分别管理作品检索和后台资源池](images/collector-settings.png)
+
+| 配置项 | 默认值与用途 |
+| --- | --- |
+| `components.torrentCollector.search.sources` | `mikan`、`nyaa`、`acgrip`，单作品检索来源 |
+| `components.torrentCollector.search.maxResults` | `80`，每次检索最多保存的 Torrent 元数据数量 |
+| `components.torrentCollector.search.timeoutSeconds` | `120`，检索时限，秒 |
+| `components.torrentCollector.pool.monitorEnabled` | `true`，按 `components.discovery.pollMinutes` 定时扫描资源池 |
+| `components.torrentCollector.pool.collectionEnabled` | `true`，自动补充资源池；关闭后仍可手动检索作品 |
+| `components.torrentCollector.pool.historyEnabled` | `true`，采集历史资源；关闭后仍采集新发布资源 |
+
+采集器共用资源偏好，设置变更后自动读取；已有 Torrent 和媒体文件保留。单作品检索也展示可手动覆盖偏好的候选。
+
 ## 数据文件与维护
 
 运行状态目录中的主要内容如下：
@@ -114,3 +138,5 @@ Archive 导入支持官方 `dump-*.zip`。可通过设置页选取文件，也�
 | [scripts](https://github.com/kyupi-git/animemachine/tree/main/scripts) | 检查、构建、发布与启动工具 |
 
 开发检查使用 `python scripts/test_all.py`；质量检查使用 `python scripts/check_quality.py`。参与修改前请阅读[贡献说明](../CONTRIBUTING.md)。
+
+正式发布由 Release 工作流统一准备当季封面包。本地构建时，先运行 `python scripts/build_cover_pack.py`，再运行对应系统的构建脚本。

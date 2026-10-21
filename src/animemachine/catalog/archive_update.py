@@ -231,7 +231,7 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
         db.execute("PRAGMA busy_timeout=120000")
         db.execute("PRAGMA foreign_keys=ON")
         current = dict(db.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at')"))
-        with contextlib.closing(sqlite3.connect(f"file:{incoming.as_posix()}?mode=ro", uri=True)) as source:
+        with contextlib.closing(sqlite3.connect(incoming.resolve().as_uri() + "?mode=ro", uri=True)) as source:
             candidate = dict(source.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at')"))
         current_time = archive_release_time(current.get('archive_name'), current.get('archive_created_at'))
         incoming_time = archive_release_time(candidate.get('archive_name'), candidate.get('archive_created_at'))
@@ -281,7 +281,7 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
             catalog_module.rebuild_studio_clusters(db)
             catalog_module.rebuild_theme_clusters(db)
             for key in ("archive_name", "archive_created_at", "archive_digest", "record_count", "built_at",
-                        "release_event_source_version"):
+                        "release_event_source_version", "catalog_scope"):
                 db.execute("INSERT INTO metadata(key,value) SELECT key,value FROM incoming.metadata WHERE key=? ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key,))
             catalog_module.relation_graph.rebuild(db, force=True)
             catalog_module.rebuild_physical_layout(db)

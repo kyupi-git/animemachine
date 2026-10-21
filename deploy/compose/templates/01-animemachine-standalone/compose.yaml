@@ -9,7 +9,7 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 6
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.4.1}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.0}
     restart: unless-stopped
     init: true
     environment:

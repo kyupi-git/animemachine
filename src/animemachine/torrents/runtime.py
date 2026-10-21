@@ -26,6 +26,8 @@ from ..config.loader import (archive_group_enabled, canonical_resolution, manual
                         region_policy_enabled, serial_group_matches, serial_profile_language,
                         serial_rule_enabled, source_family)
 from . import differential as differential_plan
+from . import season_guard
+from .variants import release_variant
 from ..library import external as external_library
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
 
@@ -736,7 +738,7 @@ def acquisition_fingerprint(item: dict[str, Any]) -> tuple[Any, ...]:
     """Identity of a release stream that may be safely continued/stitched."""
     subtitle = None if item.get("sourceFamily") == "archive" else item.get("subtitle")
     return (item.get("sourceFamily"), item.get("sourceClass"), item.get("resourceGroup"), subtitle,
-            item.get("resolution"), item.get("scan"), item.get("bitDepth"), item.get("releaseUnit"))
+            item.get("resolution"), item.get("scan"), item.get("bitDepth"), item.get("releaseUnit"), item.get("releaseVariantKey", ""))
 
 
 def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -813,6 +815,8 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
             reason = "eligible"
         result.append({
             "infoHash": row["info_hash"], "name": row["info_name"], "sourceClass": row["source_class"],
+            "releaseVariant": release_variant(str(row["info_name"] or "")).as_dict(),
+            "releaseVariantKey": release_variant(str(row["info_name"] or "")).stream,
             "storageDirectory": str(Path(str(row["torrent_path"])).parent) if row["torrent_path"] else "",
             "resourceGroup": row["effective_group"], "subtitle": row["language_hint"], "priorityRank": row["priority_rank"],
             "sourceFamily": family, "serialLanguage": serial_language,
@@ -833,6 +837,8 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
             "canOverride": bool(not eligible and region_enabled and scope_ok and row["scan_state"] != "reject"
                                 and row["metadata_state"] == "available" and manifest_count and exact_partition),
         })
+
+    result = season_guard.filter_streams(db, anime_id, result, acquisition_fingerprint, config)
 
     def contiguous(values: set[int]) -> int:
         current = 0
@@ -977,7 +983,7 @@ def runtime_stats(db_path: Path) -> dict[str, Any]:
         "submissions": 0, "reviewItems": 0, "previewPlans": 0,
     }
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=10)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)) as db:
             db.row_factory = sqlite3.Row
             tables = {str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             queries = {
@@ -1063,8 +1069,11 @@ def _create_plan_connected(db: sqlite3.Connection, config: dict[str, Any], reque
         selected_hash = explicit.get(anime_id)
         aliases = [value for value in requested_ids if physical_anime_id(db, value) == anime_id]
         override = bool(selected_hash and manual_policy_override(request, (anime_id, *aliases), f"torrent:{selected_hash}"))
-        torrents = [item for item in torrents_for_anime(db, anime_id, config) if item["eligible"] or (
-            override and item.get("canOverride") and item["infoHash"] == selected_hash)]
+        candidates = torrents_for_anime(db, anime_id, config)
+        anchor = next((item for item in candidates if item['infoHash'] == selected_hash), None)
+        torrents = [item for item in candidates if item["eligible"] or (
+            override and anchor and item.get("canOverride") and
+            acquisition_fingerprint(item) == acquisition_fingerprint(anchor))]
         if selected_hash:
             selected = next((item for item in torrents if item["infoHash"] == selected_hash), None)
             if not selected:
@@ -1077,13 +1086,14 @@ def _create_plan_connected(db: sqlite3.Connection, config: dict[str, Any], reque
         # Episode/volume selections represent an exact release stream. Expand
         # that stream with every non-overlapping unit sharing its fingerprint;
         # the UI presents this atomic set as one multi-episode/multi-volume row.
-        if not torrents[0].get("policyOverride") and torrents[0].get("releaseUnit") in {"episode", "volume"}:
+        if torrents[0].get("releaseUnit") in {"episode", "volume"}:
             top = torrents[0]
             sequence_key = "episodeSequence" if top["releaseUnit"] == "episode" else "volumeSequence"
             seen = set(top.get(sequence_key) or [])
             for candidate in torrents[1:]:
                 sequence = set(candidate.get(sequence_key) or [])
                 if acquisition_fingerprint(candidate) == acquisition_fingerprint(top) and sequence and sequence.isdisjoint(seen):
+                    candidate['policyOverride'] = bool(override and not candidate['eligible'])
                     chosen_items.append(candidate); seen.update(sequence)
         for chosen in chosen_items:
             work = db.execute("""SELECT rw.* FROM runtime_torrent_work tw JOIN runtime_work rw ON rw.private_work_id=tw.private_work_id

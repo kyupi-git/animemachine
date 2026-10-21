@@ -21,7 +21,7 @@ Common Compose variables are listed below. Path variables specify **host folders
 
 | Variable | Default / purpose |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.4.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.0` |
 | `ANM_LIBRARY_DIR` | `./library`, collected media |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`, Torrent pool |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`, existing media |
@@ -47,14 +47,21 @@ Compose uses `ANM_WEB_PORT` for the host port; the container still uses 8787. `A
 
 ### qBittorrent / Ani-RSS web interfaces
 
-In managed Compose setups, qBittorrent's Web UI uses local port `8080`, and Ani-RSS uses local port `7789`. To reach them through your NAS address, add this to `.env`:
+Managed Compose interfaces are available on the LAN by default. New deployments generate separate passwords:
 
-```dotenv
-QBT_BIND_ADDRESS=0.0.0.0
-ANI_RSS_BIND_ADDRESS=0.0.0.0
+| Service | Address | Username | Initial password file in the project folder |
+| --- | --- | --- | --- |
+| qBittorrent | `http://YOUR-NAS-ADDRESS:8080` | `admin` | `config/qbittorrent/.animemachine/web-password` |
+| Ani-RSS | `http://YOUR-NAS-ADDRESS:7789` | `admin` | `config/ani-rss/.animemachine/web-password` |
+
+You can also read the passwords from the folder containing `compose.yaml`:
+
+```sh
+docker compose exec animemachine cat /QbtConfig/.animemachine/web-password
+docker compose exec animemachine cat /AniRssConfig/.animemachine/web-password
 ```
 
-Run `docker compose up -d`, then sign in at `http://YOUR-NAS-ADDRESS:8080` or `http://YOUR-NAS-ADDRESS:7789`. qBittorrent uses `admin` as its default username. Read its generated password with `docker compose exec animemachine cat /QbtConfig/.animemachine/web-password`. Ani-RSS defaults to `admin` / `admin`; **change this password in its security settings before opening the admin port to your LAN**, and restrict network access.
+Upgrades keep existing accounts and passwords. If you changed a password inside a service, use that password. Older Ani-RSS installations still using the initial `admin` password can set a separate password in Security settings. For access from the host only, set `QBT_BIND_ADDRESS` and `ANI_RSS_BIND_ADDRESS` to `127.0.0.1` in `.env`, then run `docker compose up -d`.
 
 Those addresses are for browsers. Services within Compose use `http://qbittorrent:8080` and `http://ani-rss:7789`. Use `host.docker.internal` for host services; a custom Linux Compose setup needs the matching `host-gateway` entry.
 
@@ -86,6 +93,23 @@ Scheduled checks use **UTC+8**: Thursday at 02:12, with one Friday 02:12 follow-
 
 The full Compose stack includes the resource collector. It is also available as a [standalone collector configuration](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/compose.yaml). See the [advanced environment example](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/advanced/collector/.env.example) for sources, history scans, retries, and proxies. The collector writes to the Torrent pool; AnimeMachine scans it and submits downloads from confirmed plans.
 
+### Torrent Collector settings
+
+Everyday options are under **Settings → Connections → Torrent Collector**. Per-work search is built into AnimeMachine and becomes available after connecting qBittorrent. Automatic collection runs in the persistent Compose Collector service.
+
+![Collector settings: per-work search and background pool controls](images/collector-settings.en.png)
+
+| Setting | Default and purpose |
+| --- | --- |
+| `components.torrentCollector.search.sources` | `mikan`, `nyaa`, `acgrip`: per-work search providers |
+| `components.torrentCollector.search.maxResults` | `80`: maximum Torrent metadata files saved per search |
+| `components.torrentCollector.search.timeoutSeconds` | `120`: search time limit in seconds |
+| `components.torrentCollector.pool.monitorEnabled` | `true`: scan the pool every `components.discovery.pollMinutes` |
+| `components.torrentCollector.pool.collectionEnabled` | `true`: add releases automatically; manual per-work searches remain available when off |
+| `components.torrentCollector.pool.historyEnabled` | `true`: collect older releases; new releases are still collected when off |
+
+The Collector shares your resource preferences and picks up changes automatically. Existing Torrent and media files remain in place. Manual search also shows candidates whose preferences can be overridden explicitly.
+
 ## Data files and maintenance
 
 Important locations inside the state folder:
@@ -114,3 +138,5 @@ Source installations use Python 3.11+. Download the repository and run `scripts/
 | [scripts](https://github.com/kyupi-git/animemachine/tree/main/scripts) | Checks, builds, releases, launchers |
 
 Run `python scripts/test_all.py` for project checks and `python scripts/check_quality.py` for quality checks. See [Contributing](../CONTRIBUTING.md) before working on changes.
+
+The Release workflow prepares one seasonal cover bundle for all platforms. For a local release build, run `python scripts/build_cover_pack.py` before the platform build script.

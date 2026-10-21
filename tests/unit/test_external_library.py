@@ -9,6 +9,33 @@ from animemachine.library import external as external_library
 
 
 class ExternalLibraryTests(unittest.TestCase):
+    def test_catalog_named_folders_retain_year_and_remap_older_unmatched_records(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_path = root / 'catalog.sqlite3'
+            media = root / 'media' / '『2026_10』『夜曲』'
+            media.mkdir(parents=True)
+            video = media / '01.mp4'
+            video.write_bytes(b'media')
+            before = video.stat()
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.executescript('''CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,
+                    title_en TEXT,start_month TEXT,media_code TEXT);
+                    CREATE TABLE anime_title(anime_id INTEGER,title TEXT);''')
+                db.executemany("INSERT INTO anime_work VALUES(?,'夜曲',NULL,NULL,?,'tv')", [(1,'2025-10'),(2,'2026-10')])
+                db.executemany("INSERT INTO anime_title VALUES(?,'夜曲')", [(1,),(2,)])
+            source = {'id':'external','enabled':True,'path':str(root/'media'),'readOnly':True}
+            self.assertEqual(1, external_library.scan(db_path,[source])['verified'])
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                self.assertEqual(2,db.execute('SELECT anime_id FROM external_media_file').fetchone()[0])
+                db.execute("UPDATE external_media_file SET anime_id=NULL,match_state='unmatched'")
+                db.execute('UPDATE external_library_source SET evidence_json=\'{"matchRuleVersion":2}\'')
+            self.assertEqual(1, external_library.scan(db_path,[source])['verified'])
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                self.assertEqual(2,db.execute('SELECT anime_id FROM external_media_file').fetchone()[0])
+            self.assertEqual(before.st_mtime_ns,video.stat().st_mtime_ns)
+            self.assertEqual(b'media',video.read_bytes())
+
     def test_ani_rss_scan_is_read_only_and_maps_exact_title(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

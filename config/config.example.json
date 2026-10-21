@@ -12,6 +12,10 @@
       "pollMinutes": 30,
       "deepReconcileDays": 14
     },
+    "torrentCollector": {
+      "search": {"sources": ["mikan", "nyaa", "acgrip"], "maxResults": 80, "timeoutSeconds": 120},
+      "pool": {"monitorEnabled": true, "collectionEnabled": true, "historyEnabled": true}
+    },
     "downloadClient": {
       "kind": "qbittorrent",
       "mode": "managed",
@@ -170,7 +174,7 @@
         "https://api.bgm.tv"
       ],
       "bangumiSubjectCacheEndpoints": [
-        "https://bgm-cache.wushuo.top"
+        "https://cache.wushuo.top/bgm/subjects/{id}"
       ],
       "useSystemProxy": true
     },

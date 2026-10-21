@@ -261,7 +261,7 @@
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div class="radar-shell">
         <div class="radar-heading">
-          <h2 id="radarTitle" data-i18n="radar">新作雷达</h2>
+          <h2 id="radarTitle" data-icon="radar" data-i18n="radar">新作雷达</h2>
           <div class="radar-actions">
             <button id="radarCatchup" class="text-button radar-button" type="button" data-icon="play" data-i18n="catchup">一键继续观看</button>
             <button id="radarSync" class="text-button radar-button" type="button" data-i18n-title="radarSync" data-i18n-aria-label="radarSync"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1a8 8 0 0 1 13.2 3.2M17.9 17.9A8 8 0 0 1 4.7 14.7"/></svg><span data-i18n="radarSyncShort">同步状态</span></button>
@@ -285,7 +285,7 @@
     <dialog id="hiddenWorksDialog" aria-labelledby="hiddenWorksTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <div class="hidden-works-shell">
-        <h2 id="hiddenWorksTitle" data-i18n="hiddenWorks">已隐藏作品</h2>
+        <h2 id="hiddenWorksTitle" data-icon="hidden" data-i18n="hiddenWorks">已隐藏作品</h2>
         <p class="muted" data-i18n="hiddenWorksHint">隐藏仅影响当前账号的列表和一键继续观看，原订阅与下载保持不变。</p>
         <input id="hiddenWorksSearch" type="search" data-i18n-placeholder="findRecords" placeholder="搜索记录" aria-label="Search hidden works" data-i18n-aria-label="hiddenWorks" />
         <p id="hiddenWorksStatus" class="muted" role="status" aria-live="polite"></p>
@@ -295,7 +295,7 @@
     </dialog>
     <dialog id="catchupDialog" aria-labelledby="catchupTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
-      <h2 id="catchupTitle" data-i18n="catchup">一键继续观看</h2>
+      <h2 id="catchupTitle" data-icon="play" data-i18n="catchup">一键继续观看</h2>
       <p id="catchupStatus" class="muted" role="status" aria-live="polite"></p>
       <p id="catchupSelectionHint" class="muted" data-i18n="catchupSelectHint" hidden>勾选作品、调整集数范围，拖动排序。</p>
       <div id="catchupList"></div>
@@ -304,7 +304,7 @@
     <dialog id="viewingDialog" aria-labelledby="viewingTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="viewingForm">
-        <h2 id="viewingTitle" data-i18n="viewingEdit">修改续看集数</h2>
+        <h2 id="viewingTitle" data-icon="activity" data-i18n="viewingEdit">修改续看集数</h2>
         <p id="viewingWork"></p>
         <label><span data-i18n="viewingEpisode">下次从这一集开始（包含本集）</span><input id="viewingEpisode" type="number" min="0" max="100000" step="any" list="viewingEpisodes" inputmode="decimal"><datalist id="viewingEpisodes"></datalist></label>
         <label><span data-i18n="viewingPosition">播放位置（时:分:秒）</span><input id="viewingPosition" type="text" placeholder="00:00:00" pattern="[0-9]{1,3}:[0-5][0-9]:[0-5][0-9]" inputmode="numeric"></label>
@@ -314,7 +314,7 @@
     </dialog>
     <dialog id="layoutPreviewDialog" aria-labelledby="layoutPreviewTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
-      <h2 id="layoutPreviewTitle" data-i18n="layoutPreview">目录调整预览</h2>
+      <h2 id="layoutPreviewTitle" data-icon="folder" data-i18n="layoutPreview">目录调整预览</h2>
       <p id="layoutPreviewStatus" class="muted" role="status" aria-live="polite"></p>
       <div id="layoutPreviewResults" class="table-wrap"></div>
       <button id="layoutPreviewExport" type="button" class="tool dark-tool" data-icon="download" data-i18n="layoutPreviewExport" hidden>下载预览</button>
@@ -322,7 +322,7 @@
     <dialog id="radarSubscribeDialog" aria-labelledby="radarSubscribeTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="radarSubscribeForm">
-        <h2 id="radarSubscribeTitle" data-i18n="radarSubscribe">订阅</h2>
+        <h2 id="radarSubscribeTitle" data-icon="subscribe" data-i18n="radarSubscribe">订阅</h2>
         <p id="radarSubscribeWork" class="subscription-work"></p>
         <p id="radarSubscribeStatus" class="muted" role="status"></p>
         <label><span data-i18n="radarChooseResource">选择订阅资源</span><select id="radarResource" required></select></label>
@@ -355,7 +355,7 @@
     <dialog id="settingsDialog">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="settingsForm">
-        <h2 data-i18n="settings">设置</h2>
+        <h2 data-icon="settings" data-i18n="settings">设置</h2>
         <nav role="tablist" class="settings-tabs" aria-label="Settings sections" data-i18n-aria-label="settingsSectionsLabel">
           <button
             type="button"
@@ -468,9 +468,6 @@
             <legend data-i18n="automation">自动化与容量</legend>
             <div class="settings-grid">
               <label
-                ><span data-i18n="pollMinutes">资源池扫描间隔（分钟）</span
-                ><input id="pollMinutes" type="number" min="5" /></label
-              ><label
                 ><span data-i18n="minimumFree">最低保留空间（TiB）</span
                 ><input
                   id="minimumFree"
@@ -540,10 +537,7 @@
             ><label
               ><span data-i18n="qbtLibraryPath">qBittorrent 容器内路径</span
               ><input id="qbtLibraryPath" type="text" /></label
-            ><label
-              ><span data-i18n="torrentPoolPath">Torrent 池路径</span
-              ><input id="torrentPoolPath" type="text" /></label
-            ><p class="explain" data-i18n="torrentPoolHint">将 .torrent 文件放入此目录，AnimeMachine 会自动读取。</p>
+            >
             <button
               id="testQbt" data-icon="link"
               type="button"
@@ -562,6 +556,29 @@
               <label><span data-i18n="librarySleepEnd">结束时间</span><input id="librarySleepEnd" type="time" value="08:00" /></label>
             </div>
             <p class="explain" data-i18n="librarySleepHint">按运行设备的本地时间，可跨午夜。期间暂停本地库探测、扫描、播放及写入，保留缓存状态；Ani-RSS 和其它路径的外部库继续运行。</p>
+          </fieldset>
+          <fieldset id="collectorSettings">
+            <legend>Torrent Collector</legend>
+            <h4 data-i18n="collectorWorkSearch">作品资源检索</h4>
+            <div id="collectorSearchSources" class="checks">
+              <label class="check"><input type="checkbox" value="mikan" checked /><span>Mikan</span></label>
+              <label class="check"><input type="checkbox" value="nyaa" checked /><span>Nyaa</span></label>
+              <label class="check"><input type="checkbox" value="acgrip" checked /><span>ACG.RIP</span></label>
+            </div>
+            <details><summary data-i18n="collectorSearchLimits">检索数量与时限</summary>
+              <div class="settings-grid">
+                <label><span data-i18n="collectorMaxResults">最多保存资源数</span><input id="collectorMaxResults" type="number" min="10" max="200" required /></label>
+                <label><span data-i18n="collectorTimeout">检索时限（秒）</span><input id="collectorTimeout" type="number" min="30" max="180" required /></label>
+              </div>
+            </details>
+            <h4 data-i18n="collectorPool">Torrent 资源池</h4>
+            <label><span data-i18n="torrentPoolPath">Torrent 池路径</span><input id="torrentPoolPath" type="text" /></label>
+            <p class="explain" data-i18n="torrentPoolHint">将 .torrent 文件放入此目录，AnimeMachine 会自动读取。</p>
+            <label class="check"><input id="collectorMonitor" type="checkbox" /><span data-i18n="collectorMonitor">定时扫描资源池</span></label>
+            <label><span data-i18n="pollMinutes">资源池扫描间隔（分钟）</span><input id="pollMinutes" type="number" min="5" required /></label>
+            <label class="check"><input id="collectorCollection" type="checkbox" /><span data-i18n="collectorCollection">自动采集 Torrent</span></label>
+            <label class="check"><input id="collectorHistory" type="checkbox" /><span data-i18n="collectorHistory">补充历史资源</span></label>
+            <p class="explain" data-i18n="collectorHint">作品检索可直接使用；自动采集由联合部署中的 Torrent Collector 执行。资源收录与排序沿用“通用”和“资源组”中的偏好。</p>
           </fieldset>
           <fieldset>
             <legend>Ani-RSS</legend>

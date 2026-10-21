@@ -30,8 +30,9 @@ from typing import Any, Iterable
 import httpx
 from ..network import tls as tls_support
 from ..network import transport as network_transport
-from ..network import validators as network_validators
+from ..network import validators as network_validators, registry as network_registry
 from ..torrents import runtime as runtime_catalog
+from ..torrents.variants import release_variant
 from ..catalog.episodes import _episode_number, _episode_start_number, _local_episode_number
 from .. import __version__
 
@@ -255,7 +256,7 @@ def automatic_search_ids(db_path: Path, *, today: dt.date | None = None) -> list
     recent_start = f"{recent_start_index // 12:04d}-{recent_start_index % 12 + 1:02d}"
     season_start = f"{current.year:04d}-{((current.month - 1) // 3) * 3 + 1:02d}"
     cutoff = f"{cutoff_index // 12:04d}-{cutoff_index % 12 + 1:02d}"
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(anime_work)")}
         tv = "media_code='tv'" if "media_code" in columns else "1"
         recent = [int(row[0]) for row in db.execute(
@@ -604,7 +605,7 @@ def playback_items(db_path: Path, anime_id: int, config: dict[str, Any], remote_
     current_state = state(db_path, config)
     if not state_available(current_state):
         raise ValueError("Ani-RSS playback source is unavailable")
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_subscription'").fetchone():
             raise ValueError("Ani-RSS playback source is unavailable")
@@ -657,7 +658,7 @@ def sync_due(db_path: Path, config: dict[str, Any], *, now: dt.datetime | None =
     settings = _settings(config)
     current_route_revision = _route_revision(settings)
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
             table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone()
             row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone() if table else None
             columns = [str(item[1]) for item in db.execute("PRAGMA table_info(ani_rss_state)")] if table else []
@@ -739,16 +740,16 @@ def _cover_endpoint_result(endpoint: str, credential_fingerprint: str, *, health
             _COVER_FAILURES[key] = (revision, time.monotonic() + _COVER_FAILURE_COOLDOWN_SECONDS)
 
 
-def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = None, *,
-                 api_key: str | None = None) -> tuple[bytes, str, str] | None:
-    """Copy a mapped Ani-RSS cached cover without replacing an existing AnimeMachine cache implicitly."""
+def _cover_connection(db_path: Path, config: dict[str, Any] | None,
+                      api_key: str | None) -> tuple[str, str, str] | None:
     key = str(api_key or "").strip() or _secret()
     if not key:
         return None
-    if config is not None and not state_available(state(db_path, config)):
-        return None
+    # Validate the captured worker credential directly below. Reading the full
+    # status uses the process environment's credential and release aggregates,
+    # which can be stale after a Web-side credential change.
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
             db.row_factory = sqlite3.Row
             if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone():
                 return None
@@ -764,10 +765,30 @@ def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = N
                 if (str(state_row["endpoint"]) != current_settings["endpoint"]
                         or str(state_row["configured_mode"]) != current_settings["mode"]):
                     return None
+                revision = _route_revision(current_settings)
+                if revision is not None:
+                    table = db.execute("SELECT 1 FROM sqlite_master WHERE name='metadata'").fetchone()
+                    stored = db.execute("SELECT value FROM metadata WHERE key='ani_rss_route_revision'").fetchone() if table else None
+                    if stored is None or int(stored[0]) != revision:
+                        return None
+        endpoint = _settings(config or {})["endpoint"] if config is not None else str(state_row["endpoint"])
+        return endpoint, key, _credential_fingerprint(key, endpoint)
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+
+
+def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = None, *,
+                 api_key: str | None = None) -> tuple[bytes, str, str] | None:
+    """Reuse a mapped cover while keeping credentials confined to its configured service."""
+    connection = _cover_connection(db_path, config, api_key)
+    if connection is None:
+        return None
+    endpoint, key, credential_fingerprint = connection
+    try:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+            db.row_factory = sqlite3.Row
             rows = db.execute("""SELECT remote_id,evidence_json FROM ani_rss_subscription
                 WHERE anime_id=? AND deleted_at IS NULL ORDER BY enabled DESC,last_seen_at DESC""", (anime_id,)).fetchall()
-        endpoint = _settings(config or {})["endpoint"] if config is not None else str(state_row["endpoint"])
-        credential_fingerprint = _credential_fingerprint(key, endpoint)
         # The file endpoint is an optional fast path. After a transport/server
         # failure, briefly bypass it for the remaining image queue. A route
         # change that can actually affect this endpoint invalidates the cooldown.
@@ -802,6 +823,36 @@ def cached_cover(db_path: Path, anime_id: int, config: dict[str, Any] | None = N
     except (sqlite3.Error, OSError, ValueError, json.JSONDecodeError):
         return None
     return None
+
+
+def proxy_cover(db_path: Path, image_url: str, config: dict[str, Any] | None = None, *,
+                api_key: str | None = None) -> tuple[bytes, str, str] | None:
+    """Use Ani-RSS's supported image cache for unsubscribed covers as well."""
+    image = urllib.parse.urlsplit(image_url)
+    allowed = {urllib.parse.urlsplit(item.base_url).hostname for item in network_registry.for_service("bangumi_image")}
+    if (image.scheme != "https" or image.hostname not in allowed or image.username or image.password
+            or image.port not in {None, 443}):
+        return None
+    connection = _cover_connection(db_path, config, api_key)
+    if connection is None:
+        return None
+    endpoint, key, fingerprint = connection
+    capability = endpoint + "/api/proxyImage"
+    if not _cover_endpoint_available(capability, fingerprint):
+        return None
+    encoded = base64.b64encode(image_url.encode()).decode("ascii")
+    url = capability + "?" + urllib.parse.urlencode({"imgUrl": encoded})
+    try:
+        response = network_transport.request("GET", url, headers={"api-key": key}, timeout=4,
+                                             max_bytes=12 * 1024 * 1024, allow_credentials=True,
+                                             follow_redirects=False)
+        response.raise_for_status()
+        data, mime = network_validators.image_bytes(response.content, response.headers.get("content-type", ""))
+        _cover_endpoint_result(capability, fingerprint, healthy=True)
+        return data, mime, "ani-rss://proxy-image/" + hashlib.sha256(image_url.encode()).hexdigest()[:24]
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError):
+        _cover_endpoint_result(capability, fingerprint, healthy=False)
+        return None
 
 
 def _bgm_id(value: Any) -> int | None:
@@ -1280,7 +1331,7 @@ def state(db_path: Path, config: dict[str, Any]) -> dict[str, Any]:
     key = _secret()
     credential_configured = bool(key)
     expected_fingerprint = _credential_fingerprint(key, settings["endpoint"]) if key else None
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_state'").fetchone()
         row = db.execute("SELECT * FROM ani_rss_state WHERE singleton=1").fetchone() if table else None
@@ -1385,7 +1436,36 @@ def _policy_eligibility_reason(title: str, group: str, source_class: str,
     return "eligible", family
 
 
-def _resource_policy_title(row: sqlite3.Row) -> str:
+def _resource_variants(row: Any) -> list[dict[str, Any]]:
+    """Project cached feeds into independently selectable streams without writes."""
+    base = dict(row)
+    payload = json.loads(base["payload_json"])
+    if base["resource_kind"] != "follow":
+        return [base]
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in _strict_mapping_list(payload.get("items"), "cached resource items"):
+        if str(item.get("title") or "").strip():
+            groups.setdefault(release_variant(str(item["title"])).key, []).append(item)
+    if not groups:
+        return [base]
+    result = []
+    for key, items in groups.items():
+        variant = release_variant(str(items[0]["title"]))
+        title = " ".join(str(item["title"]) for item in items)
+        source, resolution, _ = _resource_fields(title)
+        episodes = [number for item in items if (number := _resource_episode(item)) is not None]
+        part = {**payload, "items": items, "policyTitle": title,
+                "variantKey": key, "variantPatterns": variant.patterns(), "releaseVariant": variant.as_dict()}
+        result.append({**base, "resource_id": base["resource_id"] + "~" + key,
+                       "source_class": source, "resolution": variant.resolution or resolution, "subtitle": variant.subtitle,
+                       "sequence_first": min(episodes) if episodes else None,
+                       "sequence_last": max(episodes) if episodes else None,
+                       "item_count": len(items), "total_bytes": sum(_resource_size(item) for item in items),
+                       "payload_json": json.dumps(part, ensure_ascii=False, separators=(",", ":"))})
+    return result
+
+
+def _resource_policy_title(row: Any) -> str:
     """Use the original release evidence rather than the shortened display title."""
     try:
         payload = json.loads(row["payload_json"])
@@ -1401,11 +1481,11 @@ def _resource_policy_title(row: sqlite3.Row) -> str:
 def refresh_resource_policy(db_path: Path, config: dict[str, Any]) -> None:
     """Re-evaluate cached releases once per policy/rule revision, without remote I/O."""
     revision = hashlib.sha256(json.dumps({
-        "version": 1, "policy": config.get("torrentPolicy", {}),
+        "version": 2, "policy": config.get("torrentPolicy", {}),
         "language": serial_profile_language(config), "rules": load_resource_group_catalog(),
     }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     key = "ani_rss_resource_policy_revision"
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='ani_rss_resource'").fetchone():
             return
         if not db.execute("SELECT 1 FROM ani_rss_resource LIMIT 1").fetchone():
@@ -1423,9 +1503,13 @@ def refresh_resource_policy(db_path: Path, config: dict[str, Any]) -> None:
             return
         ranked: dict[int, list[tuple[Any, ...]]] = {}
         for row in db.execute("SELECT * FROM ani_rss_resource").fetchall():
-            eligible, rank = _policy_eligibility_and_rank(
-                _resource_policy_title(row), str(row["resource_group"] or ""),
-                str(row["source_class"] or "unknown"), row["resolution"], config)
+            decisions = [_policy_eligibility_and_rank(
+                _resource_policy_title(part), str(part["resource_group"] or ""),
+                str(part["source_class"] or "unknown"), part["resolution"], config)
+                for part in _resource_variants(row)]
+            eligible = any(decision[0] for decision in decisions)
+            rank = min((decision[1] for decision in decisions if decision[0]),
+                       default=min(decision[1] for decision in decisions))
             ranked.setdefault(int(row["anime_id"]), []).append((
                 0 if row["resource_kind"] == "collection" else 1, rank,
                 -(row["resolution"] or 0), -row["item_count"], row["title"], row["resource_id"], eligible))
@@ -1752,8 +1836,14 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
             combined_title = " ".join(str(entry.get("title") or "") for entry in items)
             source_class, resolution, _ = _resource_fields(combined_title)
             eligible, policy_rank = _policy_eligibility_and_rank(combined_title, label, source_class, resolution, config)
+            # Evaluate each version separately: a Chinese 720p release must not
+            # lend its subtitle evidence to an English-only 1080p release.
+            version_decisions = [_policy_eligibility_and_rank(str(entry.get("title") or ""), label,
+                *_resource_fields(str(entry.get("title") or ""))[:2], config) for entry in items]
+            eligible = any(decision[0] for decision in version_decisions)
+            policy_rank = min((decision[1] for decision in version_decisions if decision[0]), default=policy_rank)
             payload = {"rss": rss, "type": "mikan", "bgmUrl": group.get("bgmUrl") or item.get("bgmUrl"),
-                       "subgroup": label, "workTitle": item.get("title"), "items": items[:40], "policyTitle": combined_title}
+                       "subgroup": label, "workTitle": item.get("title"), "items": items[:200], "policyTitle": combined_title}
             rid = "ar-" + hashlib.sha256(f"bangumi:{work['bgm_id']}\0follow\0{rss}".encode("utf-8")).hexdigest()[:24]
             resources.append({"resource_id": rid, "kind": "follow", "title": f"{label} · {item.get('title') or names[0]}",
                               "group": label, "source": source_class, "resolution": resolution,
@@ -1816,20 +1906,29 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
 
 
 def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    if config is not None:
-        refresh_resource_policy(db_path, config)
     if config is not None and not state_available(state(db_path, config)):
         return []
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_resource'").fetchone():
             return []
         rows = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id=? AND expires_at>=? ORDER BY rank_key,resource_id",
                           (anime_id, utcnow())).fetchall()
+        rows = [part for row in rows for part in _resource_variants(row)]
+        decisions = {}
+        if config is not None:
+            # GET/detail rendering stays read-only, including during Archive
+            # publication. Persisted aggregates refresh on the background path.
+            decisions = {row["resource_id"]: _policy_eligibility_and_rank(
+                _resource_policy_title(row), str(row["resource_group"] or ""),
+                str(row["source_class"] or "unknown"), row["resolution"], config) for row in rows}
+            rows.sort(key=lambda row: (0 if row["resource_kind"] == "collection" else 1,
+                decisions[row["resource_id"]][1], -(row["resolution"] or 0),
+                -row["item_count"], row["title"], row["resource_id"]))
         region_enabled = _work_region_enabled(db, anime_id, config) if config is not None else True
         result = []
         for index, row in enumerate(rows, 1):
-            eligible = bool(row["eligible"]) and region_enabled
+            eligible = (decisions[row["resource_id"]][0] if config is not None else bool(row["eligible"])) and region_enabled
             reason, family = ("eligible", "other")
             if config is not None:
                 reason, family = _policy_eligibility_reason(
@@ -1841,10 +1940,18 @@ def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None
                 reason = "eligible"
             elif reason == "eligible":
                 reason = "policy_excluded"
+            try:
+                payload = json.loads(row["payload_json"])
+                sample = next((item for item in payload.get("items", []) if isinstance(item, dict) and item.get("title")), {})
+                variant_title = payload.get("torrentTitle") or sample.get("title") or row["title"]
+            except (ValueError, TypeError, AttributeError):
+                payload = {}
+                variant_title = row["title"]
             result.append({"resourceId": row["resource_id"], "provider": "ani-rss", "kind": row["resource_kind"],
-                           "title": row["title"], "resourceGroup": row["resource_group"],
+                           "title": row["title"], "variantTitle": variant_title, "resourceGroup": row["resource_group"],
+                           "releaseVariant": payload.get("releaseVariant", {}),
                            "sourceClass": row["source_class"], "sourceFamily": family,
-                           "resolution": row["resolution"], "sequenceFirst": row["sequence_first"],
+                           "resolution": row["resolution"], "subtitle": row["subtitle"], "sequenceFirst": row["sequence_first"],
                            "sequenceLast": row["sequence_last"], "itemCount": row["item_count"],
                            "totalBytes": row["total_bytes"], "eligible": eligible,
                            "canOverride": not eligible and region_enabled and reason in {
@@ -1855,7 +1962,7 @@ def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None
 
 
 def subscriptions_for_anime(db_path: Path, anime_id: int) -> list[dict[str, Any]]:
-    with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=15)) as db:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_subscription'").fetchone():
             return []
@@ -1890,19 +1997,45 @@ def subscriptions_for_anime(db_path: Path, anime_id: int) -> list[dict[str, Any]
 
 
 def _load_resource(db_path: Path, resource_id: str, config: dict[str, Any] | None = None, *,
-                   policy_override: bool = False) -> tuple[sqlite3.Row, dict[str, Any]]:
-    if config is not None:
-        refresh_resource_policy(db_path, config)
-    db = sqlite3.connect(db_path); db.row_factory = sqlite3.Row
+                   policy_override: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
+    parent_id, _, variant_key = resource_id.partition("~")
+    if variant_key and not re.fullmatch(r"[0-9a-f]{16}", variant_key):
+        raise ValueError("Ani-RSS resource is missing, expired, or ineligible")
+    db = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15); db.row_factory = sqlite3.Row
     try:
-        migrate(db); row = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND expires_at>=?", (resource_id, utcnow())).fetchone()
-        if not row or (not row["eligible"] and not policy_override):
-            raise ValueError("Ani-RSS resource is missing, expired, or ineligible")
+        base = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND expires_at>=?", (parent_id, utcnow())).fetchone()
+        if base is None:
+            raise ValueError("Ani-RSS resource is unavailable: missing or expired")
+        variants = _resource_variants(base) if base else []
+        row = next((item for item in variants if item["resource_id"] == resource_id), None)
+        # Old preview plans remain usable when the feed still has one version.
+        if row is None and not variant_key and len(variants) == 1:
+            row = variants[0]
+        if row is None:
+            raise ValueError("Ani-RSS resource_variant_changed: select a current resource")
+        if config is not None:
+            row["eligible"] = _policy_eligibility_and_rank(_resource_policy_title(row),
+                str(row["resource_group"] or ""), str(row["source_class"] or "unknown"), row["resolution"], config)[0]
+        if not row["eligible"] and not policy_override:
+            raise ValueError("Ani-RSS resource is unavailable: missing, expired, or ineligible")
         if config is not None and not _work_region_enabled(db, int(row["anime_id"]), config):
             raise ValueError("Ani-RSS work region is disabled")
         return row, json.loads(row["payload_json"])
     finally:
         db.close()
+
+
+def _subscription_matches_resource(item: dict[str, Any], payload: dict[str, Any]) -> bool:
+    def feed_identity(value: Any) -> tuple:
+        url = urllib.parse.urlsplit(str(value or ""))
+        # Ani-RSS can normalize a Mikan mirror to the configured hostname.
+        host = (url.hostname or "").lower()
+        if host in {urllib.parse.urlsplit(endpoint.base_url).hostname for endpoint in network_registry.for_service('mikan')}:
+            host = "mikan"
+        return host, url.path.rstrip("/"), tuple(sorted(urllib.parse.parse_qsl(url.query)))
+    patterns = payload.get("variantPatterns")
+    return (item.get("enable") is True and feed_identity(item.get("url")) == feed_identity(payload.get("rss"))
+            and (not patterns or (item.get("match") == patterns and not item.get("standbyRssList"))))
 
 
 def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
@@ -1915,7 +2048,10 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
     # In particular, already submitted collections must not be submitted twice.
     source_url = payload.get("torrentUrl") if kind == "collection" else payload.get("rss")
     legacy_id = "ar-" + hashlib.sha256(f"{kind}\0{source_url}".encode()).hexdigest()[:24]
-    idempotency = hashlib.sha256(f"{anime_id}\0{kind}\0{legacy_id}".encode()).hexdigest()
+    identity = f"{anime_id}\0{kind}\0{legacy_id}"
+    if payload.get("variantKey"):
+        identity += "\0" + payload["variantKey"]
+    idempotency = hashlib.sha256(identity.encode()).hexdigest()
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
         db.row_factory = sqlite3.Row; migrate(db)
         prior = db.execute("SELECT * FROM ani_rss_action WHERE idempotency_key=?", (idempotency,)).fetchone()
@@ -1925,8 +2061,8 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
             remote_id = str(prior["remote_id"] or "")
             if kind == "collection":
                 return {"actionId": prior["action_id"], "state": "submitted", "remoteId": remote_id, "idempotent": True}
-            existing_ids = {str(item.get("id") or "") for item in _client(config).subscriptions()}
-            if remote_id and remote_id in existing_ids:
+            existing = next((item for item in _client(config).subscriptions() if str(item.get("id") or "") == remote_id), None)
+            if existing and _subscription_matches_resource(existing, payload):
                 return {"actionId": prior["action_id"], "state": "submitted", "remoteId": remote_id, "idempotent": True}
             db.execute("UPDATE ani_rss_action SET state='remote_missing',updated_at=? WHERE idempotency_key=?",
                        (utcnow(), idempotency)); db.commit()
@@ -1952,9 +2088,33 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
                              if _bgm_id(item.get("bgmUrl")) == bgm_id
                              and item.get("season") == ani.get("season")), None)
         if same and kind == "follow":
-            remote_id = str(same.get("id")); state_value = "submitted"
+            existing_bgm_id = _bgm_id(same.get('bgmUrl'))
+            if existing_bgm_id and expected_bgm_id and existing_bgm_id != expected_bgm_id:
+                raise ValueError('Ani-RSS subscription identifies a different work')
+            remote_id = str(same.get("id"))
+            desired = {**same, "url": ani.get("url") or payload["rss"],
+                       "subgroup": payload.get("subgroup"), "enable": True}
+            if payload.get("variantPatterns"):
+                desired["match"] = payload["variantPatterns"]
+                # Backup feeds can belong to another publisher. An explicit
+                # version choice uses this feed only; global rules stay intact.
+                desired["standbyRssList"] = []
+            if not _subscription_matches_resource(same, payload):
+                client.call("setAni", params={"move": "false"}, body=desired, timeout=90)
+                confirmed = next((item for item in client.subscriptions() if str(item.get("id")) == remote_id), None)
+                if not confirmed or not _subscription_matches_resource(confirmed, payload):
+                    raise RuntimeError("Ani-RSS did not confirm the selected resource version")
+            state_value = "submitted"
         elif kind == "follow":
-            client.call("addAni", body=ani, timeout=90); state_value = "submitted"
+            ani["enable"] = True
+            if payload.get("variantPatterns"):
+                ani["match"] = payload["variantPatterns"]
+                ani["standbyRssList"] = []
+            client.call("addAni", body=ani, timeout=90)
+            confirmed = next((item for item in client.subscriptions() if str(item.get("id")) == remote_id), None)
+            if not confirmed or not _subscription_matches_resource(confirmed, payload):
+                raise RuntimeError("Ani-RSS did not confirm the selected resource version")
+            state_value = "submitted"
         else:
             destination = client.call("downloadPath", body=ani)
             if not isinstance(destination, dict) or not str(destination.get("downloadPath") or "").strip():
@@ -2070,11 +2230,10 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
             remote_token = explicit_resource.get(requested_id) or explicit_resource.get(owner)
             local_token = explicit_local.get(requested_id) or explicit_local.get(owner)
             if remote_token and routing_mode != "torrent" and region_enabled and remote_available:
-                remote = db.execute("SELECT * FROM ani_rss_resource WHERE resource_id=? AND anime_id IN (?,?) AND expires_at>=?",
-                                    (remote_token, requested_id, owner, utcnow())).fetchone()
                 override = manual_policy_override(request, (requested_id, owner), f"ani-rss:{remote_token}")
-                if remote and not remote["eligible"] and not override:
-                    remote = None
+                remote, _ = _load_resource(db_path, remote_token, config, policy_override=override)
+                if int(remote["anime_id"]) not in {requested_id, owner}:
+                    raise ValueError("Ani-RSS selection belongs to a different work")
                 if not remote and routing_mode == "default":
                     raise ValueError(f"Ani-RSS selection for anime {requested_id} is unavailable")
                 if remote:
@@ -2096,10 +2255,9 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
             has_local_collection = any(item.get("collection") for item in local)
             choose_remote = remote_available and region_enabled and (routing_mode == "ani-rss" or ((mode == "prefer" and not has_local_collection)
                                                            or (mode == "fallback" and not local)))
-            remote: sqlite3.Row | None = None
+            remote: dict[str, Any] | None = None
             if choose_remote:
-                remote = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id IN (?,?) AND eligible=1 AND expires_at>=? ORDER BY rank_key,resource_id LIMIT 1",
-                                    (requested_id, owner, utcnow())).fetchone()
+                remote = _best_resource(db_path, requested_id, owner, config)
         if choose_remote and not remote:
             # Automatic queries are allowed only after a healthy connection
             # has made the configured mode effective. If Ani-RSS disappears
@@ -2112,10 +2270,7 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
                 remote_available = False
                 choose_remote = False
             if choose_remote:
-                with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
-                    db.row_factory = sqlite3.Row
-                    remote = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id IN (?,?) AND eligible=1 AND expires_at>=? ORDER BY rank_key,resource_id LIMIT 1",
-                                        (requested_id, owner, utcnow())).fetchone()
+                remote = _best_resource(db_path, requested_id, owner, config)
         if remote:
             remote_jobs.append(_remote_plan_job(remote))
         elif routing_mode == "ani-rss":
@@ -2136,10 +2291,23 @@ def partition_plan(db_path: Path, request: dict[str, Any], config: dict[str, Any
     return local_request, remote_jobs
 
 
-def _remote_plan_job(row: sqlite3.Row) -> dict[str, Any]:
+def _best_resource(db_path: Path, requested_id: int, owner: int, config: dict[str, Any]) -> dict[str, Any] | None:
+    for anime_id in dict.fromkeys((requested_id, owner)):
+        for item in resources(db_path, anime_id, config):
+            if item["eligible"]:
+                return _load_resource(db_path, item["resourceId"], config)[0]
+    return None
+
+
+def _remote_plan_job(row: Any) -> dict[str, Any]:
+    payload = json.loads(row['payload_json'])
+    version = payload.get('releaseVariant') or {}
+    parts = [version.get('platform'), version.get('subtitle') if version.get('subtitle') != 'Unknown' else '',
+             f"{row['resolution']}p" if row['resolution'] else '', version.get('codec'), version.get('container')]
+    title = ' · '.join([row['title'], *(str(value) for value in parts if value)])
     return {"provider": "ani-rss", "resourceId": row["resource_id"], "animeId": int(row["anime_id"]),
             "resourceKind": row["resource_kind"], "resourceGroup": row["resource_group"],
-            "title": row["title"], "selectedBytes": int(row["total_bytes"] or 0),
+            "title": title, "selectedBytes": int(row["total_bytes"] or 0),
             "state": "preview"}
 
 

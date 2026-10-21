@@ -209,6 +209,36 @@ class CliBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "28 alphanumeric"):
                 anm_cli.bootstrap_qbittorrent(Path(raw))
 
+    def test_new_managed_qbt_avoids_completion_copy_and_preserves_custom_limits(self):
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {}, clear=True):
+            root = Path(raw)
+            anm_cli.bootstrap_qbittorrent(root)
+            path = root / 'qBittorrent/qBittorrent.conf'
+            text = path.read_text(encoding='utf-8')
+            self.assertIn('Session\\TempPathEnabled=false', text)
+            self.assertIn('Session\\AddExtensionToIncompleteFiles=true', text)
+            self.assertIn('Session\\IgnoreSlowTorrentsForQueueing=true', text)
+            self.assertIn('Session\\MaxActiveDownloads=5', text)
+            path.write_text(text.replace('Session\\MaxActiveDownloads=5','Session\\MaxActiveDownloads=2'), encoding='utf-8')
+            anm_cli.bootstrap_qbittorrent(root)
+            self.assertIn('Session\\MaxActiveDownloads=2', path.read_text(encoding='utf-8'))
+            self.assertIn('Session\\TempPathEnabled=false', path.read_text(encoding='utf-8'))
+
+    def test_managed_restart_adopts_old_configuration_without_rewriting_settings(self):
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {}, clear=True):
+            root = Path(raw)
+            path = root / 'qBittorrent/qBittorrent.conf'
+            path.parent.mkdir(parents=True)
+            path.write_text('[BitTorrent]\nSession\\MaxActiveDownloads=2\nSession\\TempPathEnabled=true\n', encoding='utf-8')
+            secret = root / '.animemachine/api-key'
+            secret.parent.mkdir()
+            secret.write_text('qbt_0123456789abcdefghijklmnopqr', encoding='utf-8')
+            before = path.read_bytes()
+            with mock.patch.dict(os.environ, {'ANM_MANAGED_QBT':'true','ANM_QBT_CONFIG_DIR':str(root)}), \
+                 mock.patch.object(anm_cli, 'bootstrap_qbittorrent', side_effect=AssertionError('must not reinitialize')):
+                self.assertEqual([], anm_cli.initialize_managed_services())
+            self.assertEqual(before, path.read_bytes())
+
     def test_legacy_state_is_copied_only_when_new_state_is_empty(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

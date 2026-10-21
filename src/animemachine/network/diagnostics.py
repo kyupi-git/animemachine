@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from . import connectivity, registry, sources, transport
+from . import connectivity, registry, sources, transport, validators
 from .health import Store
 
 
@@ -40,7 +40,7 @@ def _sample(db_path: Path) -> tuple[int | None, str]:
     bgm_id: int | None = None
     image_url = ""
     try:
-        with contextlib.closing(sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)) as db:
+        with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
             row = db.execute("SELECT bgm_id FROM anime_work WHERE bgm_id>0 ORDER BY start_month DESC,id DESC LIMIT 1").fetchone()
             if row:
                 bgm_id = int(row[0])
@@ -165,7 +165,7 @@ def _probe_image(item: dict[str, str], store: Store, timeout: float) -> dict[str
     network_id = str(profile["id"])
     try:
         response = transport.request(
-            "GET", url, headers={"Accept": "image/avif,image/webp,image/jpeg,image/png"}, timeout=timeout,
+            "GET", url, headers={"Accept": validators.IMAGE_ACCEPT}, timeout=timeout,
             max_bytes=12 * 1024 * 1024,
         )
         mime = str(response.headers.get("content-type") or "").split(";", 1)[0].casefold()

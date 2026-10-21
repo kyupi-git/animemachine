@@ -23,6 +23,13 @@ def _secret() -> str:
     return value
 
 
+def configured(config: dict[str, Any]) -> bool:
+    """A template address alone does not enable an optional downloader."""
+    settings = config.get("components", {}).get("downloadClient", {})
+    return bool(str(settings.get("endpoint") or "").strip() and (
+        _secret() or os.getenv("ANM_QBT_ALLOW_AUTH_BYPASS", "false").casefold() == "true"))
+
+
 def lifecycle(task: dict[str, Any]) -> str:
     state = str(task.get("state") or "").casefold()
     progress = float(task.get("progress") or 0)

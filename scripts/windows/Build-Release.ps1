@@ -53,8 +53,7 @@ try {
     $installedPackage = Join-Path $release 'app\animemachine'
     foreach ($sourceFile in Get-ChildItem -LiteralPath $sourcePackage -Recurse -File) {
         if ($sourceFile.FullName -like '*\__pycache__\*' -or $sourceFile.Extension -eq '.pyc') { continue }
-        # System PowerShell 5.1 runs on .NET Framework, which does not expose
-        # Path.GetRelativePath.  Both paths are already absolute descendants.
+        # Both paths are absolute descendants of the source/install roots.
         $relative = $sourceFile.FullName.Substring($sourcePackage.Length).TrimStart('\', '/')
         $installedFile = Join-Path $installedPackage $relative
         if (-not (Test-Path -LiteralPath $installedFile -PathType Leaf) -or
@@ -76,7 +75,7 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $root 'scripts/clean_runtime.py') -Destination $maintenance
     Copy-Item -LiteralPath (Join-Path $root 'deploy\local\.env.local.example') -Destination (Join-Path $release '.env.local.example')
-    foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','CHANGELOG.en.md','CHANGELOG.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md')) {
+    foreach ($name in @('README.md','README.en.md','README.ja.md','CHANGELOG.md','CHANGELOG.en.md','CHANGELOG.ja.md','LICENSE','THIRD-PARTY.md','SECURITY.md','CONTRIBUTING.md','CONTRIBUTING.en.md','CONTRIBUTING.ja.md')) {
         Copy-Item -LiteralPath (Join-Path $root $name) -Destination $release
     }
     Get-ChildItem -LiteralPath (Join-Path $root 'docs') -Filter '*.md' -File |

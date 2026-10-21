@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-@lru_cache(maxsize=1)
-def ssl_context() -> ssl.SSLContext:
+def new_ssl_context() -> ssl.SSLContext:
     try:
         import truststore  # type: ignore
         context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -30,6 +29,11 @@ def ssl_context() -> ssl.SSLContext:
             raise RuntimeError(f"configured CA bundle does not exist: {path}")
         context.load_verify_locations(cafile=str(path))
     return context
+
+
+@lru_cache(maxsize=1)
+def ssl_context() -> ssl.SSLContext:
+    return new_ssl_context()
 
 
 def urlopen(target: Any, **kwargs: Any) -> Any:

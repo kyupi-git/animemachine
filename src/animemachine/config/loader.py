@@ -351,6 +351,11 @@ def _validate(data: Any) -> dict[str, Any]:
     if not network.get("archiveManifestEndpoints") or not network.get("bangumiApiEndpoints"):
         raise ConfigError("metadata network requires Archive manifest and Bangumi API endpoint pools")
     discovery = data["components"].get("discovery", {})
+    from .collector import settings as collector_settings
+    try:
+        collector_settings(data)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     try:
         poll_minutes = int(discovery.get("pollMinutes", 30))
     except (TypeError, ValueError) as exc:

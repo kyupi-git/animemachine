@@ -79,6 +79,7 @@ let seed = "";
 const selected = new Set(),
   torrentSelections = new Map(),
   resourceSelections = new Map(),
+  expandedTorrentWorks = new Set(),
   policyOverrides = new Map(),
   playbackSources = new Map(),
   planState = { id: null },
@@ -250,7 +251,7 @@ const i18n = {
     invalidDownloadRoute: "下载方式无效，请刷新页面后重新选择作品。",
     pending: "待完善",
     directoryDate: "目录年月",
-    episodes: "话数",
+    episodes: "集数",
     country: "地区",
     titles: "标题与别名",
     cast: "声优",
@@ -329,6 +330,9 @@ const i18n = {
     mixedPlan: "订阅与下载",
     taskPreview: "任务预览",
     torrents: "资源",
+    reloadList: "重新载入",
+    collectorWorkSearch: "作品资源检索", collectorSearchLimits: "检索数量与时限", collectorMaxResults: "最多保存资源数", collectorTimeout: "检索时限（秒）", collectorPool: "Torrent 资源池", collectorMonitor: "定时扫描资源池", collectorCollection: "自动采集 Torrent", collectorHistory: "补充历史资源", collectorHint: "作品检索可直接使用；自动采集由联合部署中的 Torrent Collector 执行。资源收录与排序沿用“通用”和“资源组”中的偏好。", collectorSourcesRequired: "请至少选择一个 Torrent 检索来源。",
+    aniRssSubscriptionResources: "Ani-RSS 订阅", torrentResources: "Torrent 下载", exactResourceHint: "订阅仅使用所选资源组和版本。", resourceVariantChanged: "资源版本已更新，请重新选择。",
     noTorrent: "暂未找到资源，可尝试重新搜索。",
     excludedSourceClass: "片源类型不符",
     excludedSerialProfile: "语言不符",
@@ -421,15 +425,15 @@ const i18n = {
     catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "默认跳过已看完（≥99%）的集数；已全部看完的作品可填写起始与结束集重看。",
     catchupSelectHint: "勾选作品、调整集数范围，拖动排序。", catchupRangeFrom: "起始集", catchupRangeTo: "结束集", catchupRangeFromShort: "起始", catchupRangeToShort: "结束", catchupRangeInvalid: "请检查集数范围（必须在可播放集数内，且起始集不大于结束集）。", catchupSelectionOutdated: "作品或媒体状态已变化，请关闭窗口后重新打开续播列表。", catchupSelectRequired: "请先勾选要看的作品。", catchupSelectedCount: "已选择 {works} 部作品 · {episodes} 集",
     catchupDrag: "拖动排序，也可使用上下方向键",
-    viewingResume: "续看：第 {episode} 话", viewingNew: "未开始", viewingEdit: "修改续看集数",
+    viewingResume: "续看：第 {episode} 集", viewingNew: "未开始", viewingEdit: "修改续看集数",
     viewingEpisode: "下次从这一集开始（包含本集）", viewingClear: "设为未开始", viewingUndo: "撤销",
     viewingSaved: "已修改", viewingConflict: "记录已在其它设备更新，请重新打开后修改。",
     potplayerInstall: "安装扩展以记忆播放进度", potplayerHint: "仅 PotPlayer 需要。安装扩展后可记录位置并续播；未安装时正常播放，只记录集数。", viewingPosition: "播放位置（时:分:秒）",
     radar: "新作雷达",
     radarPrevious: "上季度", radarCurrent: "本季度", radarNext: "下季度",
-    viewingUnavailable: "观看记录暂不可用", radarUnwatched: "有新集待看", radarTitleColumn: "标题", radarMediaType: "媒介类型", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间",
-    radarStart: "开播时间", radarBdRelease: "BD", radarResourceRelease: "资源", radarSearch: "检索本季度资源", radarSearchProgress: "已检索 {done} / {total} · 失败 {failed}",
-    episodeUpdated: "第{episode}话",
+    viewingUnavailable: "观看记录暂不可用", radarUnwatched: "有新集待看", radarTitleColumn: "标题", radarProgress: "最新 / 总集数", radarUpdated: "新集更新时间",
+    radarStart: "开始时间", radarWatched: "已看集数", radarBdRelease: "BD", radarResourceRelease: "资源", radarSearch: "检索本季度资源", radarSearchProgress: "已检索 {done} / {total} · 失败 {failed}",
+    episodeUpdated: "第{episode}集",
     radarSubscription: "订阅状态", radarSubscribed: "已订阅", radarPaused: "已暂停",
     radarSubscribe: "订阅", radarChooseResource: "选择订阅资源",
     radarNoResources: "暂未找到可订阅资源，请稍后重试。", radarSubscribeHint: "选择资源组后订阅，下载由 Ani-RSS 按其配置执行。",
@@ -451,7 +455,7 @@ const i18n = {
     reshuffle: "重新随机",
     perPage: "每页",
     hideWork: "隐藏作品", hiddenWorks: "已隐藏作品", workHidden: "已隐藏", restoreWork: "还原显示", noHiddenWorks: "没有已隐藏作品。",
-    hiddenWorksHint: "隐藏仅影响当前账号的列表和一键继续观看，原订阅与下载保持不变。", findRecords: "搜索记录", resourcePickHint: "选择下方资源，再点击“预览下载计划”。", resourceUnmappedHint: "已取得资源，但尚未确认作品匹配；暂不能提交下载。",
+    hiddenWorksHint: "隐藏仅影响当前账号的列表和一键继续观看，原订阅与下载保持不变。", findRecords: "搜索记录", resourcePickHint: "选择下方资源，然后核对并提交。", resourceUnmappedHint: "已取得资源，但尚未确认作品匹配；暂不能提交下载。",
     resourceExcludedHint: "资源与当前偏好不符。可选择允许强行下载的资源，查看提示后继续。", logInfo: "信息", logWarning: "警告", logError: "错误", logAll: "全部记录", logProblems: "警告与错误", technicalDetails: "技术详情", historySource: "原位置", historyTarget: "目标位置", logTaskStatus: "后台任务状态", logTaskComplete: "后台任务已完成", logTaskFailed: "任务未完成",
     previous: "上一页",
     next: "下一页",
@@ -460,7 +464,7 @@ const i18n = {
       "从上到下比较优选维度；点击任一维度可展开其二级顺序或判定说明。",
     resourcePriorityTab: "资源优先级",
     fixedPriorityHint: "此维度按内置规则判定，没有可拖动的二级项。",
-    resourceCompletenessHint: "完整合集或可完整拼接的发布流优先；连载中的发布流允许落后最新进度一集，落后两集及以上会降级。",
+    resourceCompletenessHint: "完整合集或可完整拼接的资源优先。连载作品需从第1集起连续完整，最多落后已知最新进度1集。",
     groupPriorityHint: "收藏类和不同字幕语言的连载类排序，请在“资源组”选项卡调整。",
     groupPriority: "资源组",
     classPriority: "片源类型",
@@ -514,6 +518,7 @@ const i18n = {
     healthDegraded: "近期异常",
     healthUnavailable: "不可用",
     healthDisabled: "已关闭",
+    healthNotConfigured: "未配置",
     healthManual: "手动模式",
     healthWarming: "后台准备中",
     healthWarm: "准备完成",
@@ -617,6 +622,12 @@ const i18n = {
     transferRate: "传输速率",
     startupStarting: "正在初始化",
     startupReady: "网页已就绪",
+    catalogSeasonReady: "当季作品已就绪，正在后台准备其余作品",
+    catalogLocalPreparing: "收藏目录资料正在后台准备，请稍后再试；现在可浏览、订阅和播放",
+    catalogFullDeferred: "当季作品可以继续使用，其余资料稍后自动重试",
+    catalogHistoryPreparing: "历史作品资料正在后台准备，请稍后再查。",
+    copyBrowserPermission: "复制授权命令",
+    browserPermissionHint: "在本机命令提示符（cmd）中粘贴运行一次，然后重开 Edge 或 Chrome。仅允许当前账号从本站调用 PotPlayer 和 VLC，保留已有授权。",
     startupWarming: "网页已就绪，后台准备中",
     startupWarm: "后台准备完成",
     subscriptionsTab: "订阅",
@@ -625,7 +636,7 @@ const i18n = {
     subscriptionsHint: "此处显示本地 Torrent 的后续发布监视，新资源需确认后下载。Ani-RSS 订阅可在作品详情或新作雷达中管理。",
     noWatches: "暂无本地追更任务。",
     removeWatch: "取消追更",
-    watchEpisode: "第 {sequence} 话",
+    watchEpisode: "第 {sequence} 集",
     watchVolume: "第 {sequence} 卷",
     watchPending: "待确认 {count} 项",
     externalSource: "外部来源",
@@ -964,6 +975,9 @@ const i18n = {
     mixedPlan: "Subscriptions and downloads",
     taskPreview: "Task preview",
     torrents: "Resources",
+    reloadList: "Reload",
+    collectorWorkSearch: "Search releases for a work", collectorSearchLimits: "Search limits", collectorMaxResults: "Maximum saved releases", collectorTimeout: "Time limit (seconds)", collectorPool: "Torrent pool", collectorMonitor: "Scan the pool on a schedule", collectorCollection: "Collect Torrents automatically", collectorHistory: "Include older releases", collectorHint: "Per-work search is built in. Automatic collection uses the Torrent Collector service in Compose. Admission and ranking follow your General and Release group preferences.", collectorSourcesRequired: "Select at least one Torrent search source.",
+    aniRssSubscriptionResources: "Ani-RSS subscriptions", torrentResources: "Torrent downloads", exactResourceHint: "The subscription will use only the selected group and version.", resourceVariantChanged: "Release options changed. Select a current version.",
     noTorrent: "No resources found yet. Try searching again.",
     excludedSourceClass: "Source type mismatch",
     excludedSerialProfile: "Language mismatch",
@@ -1062,8 +1076,8 @@ const i18n = {
     potplayerInstall: "Install progress extension", potplayerHint: "PotPlayer only. Install the extension to save positions and resume. Without it, playback works and records episodes only.", viewingPosition: "Position (hours:minutes:seconds)",
     radar: "Release radar",
     radarPrevious: "Previous season", radarCurrent: "Current season", radarNext: "Next season",
-    viewingUnavailable: "Viewing records are unavailable", radarUnwatched: "New episodes to watch", radarTitleColumn: "Title", radarMediaType: "Media type", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated",
-    radarStart: "Premiere date", radarBdRelease: "BD", radarResourceRelease: "Release", radarSearch: "Search this season's releases", radarSearchProgress: "Checked {done} / {total} · Failed {failed}",
+    viewingUnavailable: "Viewing records are unavailable", radarUnwatched: "New episodes to watch", radarTitleColumn: "Title", radarProgress: "Latest / total episodes", radarUpdated: "Episode updated",
+    radarStart: "Start date", radarWatched: "Watched episode", radarBdRelease: "BD", radarResourceRelease: "Release", radarSearch: "Search this season's releases", radarSearchProgress: "Checked {done} / {total} · Failed {failed}",
     episodeUpdated: "Ep. {episode}",
     radarSubscription: "Subscription", radarSubscribed: "Subscribed", radarPaused: "Paused",
     radarSubscribe: "Subscribe", radarChooseResource: "Choose a release",
@@ -1086,7 +1100,7 @@ const i18n = {
     reshuffle: "Reshuffle",
     perPage: "Per page",
     hideWork: "Hide title", hiddenWorks: "Hidden titles", workHidden: "Hidden", restoreWork: "Show again", noHiddenWorks: "No hidden titles.",
-    hiddenWorksHint: "Hiding affects this account’s lists and Continue watching. Subscriptions and downloads remain unchanged.", findRecords: "Search records", resourcePickHint: "Select a release below, then choose Preview download plan.", resourceUnmappedHint: "Releases were saved, but their title match has not been confirmed. Downloads are not available yet.",
+    hiddenWorksHint: "Hiding affects this account’s lists and Continue watching. Subscriptions and downloads remain unchanged.", findRecords: "Search records", resourcePickHint: "Select a release below, then review and confirm.", resourceUnmappedHint: "Releases were saved, but their title match has not been confirmed. Downloads are not available yet.",
     resourceExcludedHint: "These releases do not match your preferences. Select an overridable release and review its warning to continue.", logInfo: "Information", logWarning: "Warning", logError: "Error", logAll: "All records", logProblems: "Warnings and errors", technicalDetails: "Technical details", historySource: "From", historyTarget: "To", logTaskStatus: "Background task status", logTaskComplete: "Background task completed", logTaskFailed: "Task did not complete",
     previous: "Previous",
     next: "Next",
@@ -1095,7 +1109,7 @@ const i18n = {
       "Dimensions are compared from top to bottom. Select one to expand its secondary order or decision notes.",
     resourcePriorityTab: "Resource priority",
     fixedPriorityHint: "This dimension follows a built-in decision rule and has no draggable secondary items.",
-    resourceCompletenessHint: "Complete collections or fully stitchable release streams rank first. An airing stream may trail the pool frontier by one episode; two or more episodes lowers its rank.",
+    resourceCompletenessHint: "Complete collections and complete release streams rank first. Airing releases must include every episode from episode 1 and may trail the latest known episode by at most one.",
     groupPriorityHint: "Manage archive and language-specific serial group orders in the Release groups tab.",
     groupPriority: "Release groups",
     classPriority: "Source classes",
@@ -1149,6 +1163,7 @@ const i18n = {
     healthDegraded: "Recently degraded",
     healthUnavailable: "Unavailable",
     healthDisabled: "Disabled",
+    healthNotConfigured: "Not configured",
     healthManual: "Manual mode",
     healthWarming: "Warming",
     healthWarm: "Warm",
@@ -1252,6 +1267,12 @@ const i18n = {
     transferRate: "Transfer rate",
     startupStarting: "Starting up",
     startupReady: "Ready to use",
+    catalogSeasonReady: "This season is ready; preparing the rest in the background",
+    catalogLocalPreparing: "Collection folders are being prepared. Try again shortly; browsing, subscriptions and playback are available now.",
+    catalogFullDeferred: "Seasonal titles remain available; preparation will retry automatically",
+    catalogHistoryPreparing: "Historical titles are still being prepared. Please try again shortly.",
+    copyBrowserPermission: "Copy permission command",
+    browserPermissionHint: "Run once in Command Prompt (cmd) on this PC, then reopen Edge or Chrome. Allows this site to launch PotPlayer and VLC for your Windows account and keeps existing permissions.",
     startupWarming: "Ready to use; background preparation continues",
     startupWarm: "Background preparation complete",
     subscriptionsTab: "Subscriptions",
@@ -1599,6 +1620,9 @@ const i18n = {
     mixedPlan: "購読とダウンロード",
     taskPreview: "タスクの確認",
     torrents: "リソース",
+    reloadList: "再読み込み",
+    collectorWorkSearch: "作品のリリース検索", collectorSearchLimits: "検索件数と制限時間", collectorMaxResults: "保存件数の上限", collectorTimeout: "制限時間（秒）", collectorPool: "Torrent プール", collectorMonitor: "プールを定期スキャン", collectorCollection: "Torrent を自動収集", collectorHistory: "過去のリリースも収集", collectorHint: "作品の検索は単体で利用できます。自動収集は Compose の Torrent Collector が行います。収録と並び順は「一般」「リリースグループ」の設定に従います。", collectorSourcesRequired: "Torrent の検索先を 1 つ以上選んでください。",
+    aniRssSubscriptionResources: "Ani-RSS の購読", torrentResources: "Torrent のダウンロード", exactResourceHint: "選択したグループとバージョンのみで購読します。", resourceVariantChanged: "リリースの選択肢が更新されました。もう一度選んでください。",
     noTorrent: "リソースがまだ見つかりません。再検索をお試しください。",
     excludedSourceClass: "ソース種別不一致",
     excludedSerialProfile: "言語不一致",
@@ -1697,8 +1721,8 @@ const i18n = {
     potplayerInstall: "再生位置を記録する拡張を導入", potplayerHint: "PotPlayer 専用です。拡張を導入すると再生位置から再開できます。未導入でも通常どおり再生でき、話数のみ記録します。", viewingPosition: "再生位置（時:分:秒）",
     radar: "新作レーダー",
     radarPrevious: "前シーズン", radarCurrent: "今シーズン", radarNext: "次シーズン",
-    viewingUnavailable: "視聴記録を読み込めません", radarUnwatched: "未視聴の新しい話があります", radarTitleColumn: "タイトル", radarMediaType: "メディア種別", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時",
-    radarStart: "放送開始日", radarBdRelease: "BD", radarResourceRelease: "配布", radarSearch: "今シーズンのリリースを検索", radarSearchProgress: "検索済み {done} / {total} · 失敗 {failed}",
+    viewingUnavailable: "視聴記録を読み込めません", radarUnwatched: "未視聴の新しい話があります", radarTitleColumn: "タイトル", radarProgress: "最新 / 総話数", radarUpdated: "新話の更新日時",
+    radarStart: "開始日", radarWatched: "視聴済み話数", radarBdRelease: "BD", radarResourceRelease: "配布", radarSearch: "今シーズンのリリースを検索", radarSearchProgress: "検索済み {done} / {total} · 失敗 {failed}",
     episodeUpdated: "第{episode}話",
     radarSubscription: "購読状態", radarSubscribed: "購読中", radarPaused: "一時停止中",
     radarSubscribe: "購読", radarChooseResource: "購読リリースを選択",
@@ -1721,7 +1745,7 @@ const i18n = {
     reshuffle: "再シャッフル",
     perPage: "表示数",
     hideWork: "作品を非表示", hiddenWorks: "非表示の作品", workHidden: "非表示", restoreWork: "再表示", noHiddenWorks: "非表示の作品はありません。",
-    hiddenWorksHint: "非表示は現在のアカウントの一覧とまとめて再生に適用されます。購読とダウンロードは継続します。", findRecords: "履歴を検索", resourcePickHint: "下のリリースを選び、「ダウンロード計画を確認」を押してください。", resourceUnmappedHint: "リリースは取得しましたが、作品との一致は未確認です。まだダウンロードを送信できません。",
+    hiddenWorksHint: "非表示は現在のアカウントの一覧とまとめて再生に適用されます。購読とダウンロードは継続します。", findRecords: "履歴を検索", resourcePickHint: "下のリリースを選び、内容を確認して送信してください。", resourceUnmappedHint: "リリースは取得しましたが、作品との一致は未確認です。まだダウンロードを送信できません。",
     resourceExcludedHint: "設定した条件に一致しません。強制取得が可能なリリースを選び、表示される内容を確認して続行できます。", logInfo: "情報", logWarning: "警告", logError: "エラー", logAll: "すべて", logProblems: "警告とエラー", technicalDetails: "技術情報", historySource: "移動元", historyTarget: "移動先", logTaskStatus: "バックグラウンド処理の状態", logTaskComplete: "バックグラウンド処理が完了", logTaskFailed: "処理を完了できませんでした",
     previous: "前へ",
     next: "次へ",
@@ -1730,7 +1754,7 @@ const i18n = {
       "上から順に比較します。項目を選択すると、二次順位または判定説明を展開できます。",
     resourcePriorityTab: "リソース優先順位",
     fixedPriorityHint: "この項目は内蔵ルールで判定され、並べ替え可能な二次項目はありません。",
-    resourceCompletenessHint: "完全なコレクションまたは全話を連結できる配信系列を優先します。放送中は最新より1話遅れまで許容し、2話以上遅れると順位を下げます。",
+    resourceCompletenessHint: "全話セットや欠番のないリリースを優先します。放送中の作品は第1話から連続して揃い、確認済みの最新話からの遅れが1話以内のものを表示します。",
     groupPriorityHint: "アーカイブ用と言語別の連載グループ順位は「リリースグループ」タブで調整します。",
     groupPriority: "リリースグループ",
     classPriority: "ソース種別",
@@ -1784,6 +1808,7 @@ const i18n = {
     healthDegraded: "直近で異常",
     healthUnavailable: "利用不可",
     healthDisabled: "無効",
+    healthNotConfigured: "未設定",
     healthManual: "手動モード",
     healthWarming: "準備中",
     healthWarm: "準備完了",
@@ -1887,6 +1912,12 @@ const i18n = {
     transferRate: "転送速度",
     startupStarting: "起動中",
     startupReady: "画面を利用できます",
+    catalogSeasonReady: "今期の作品を利用できます。残りの資料をバックグラウンドで準備中です",
+    catalogLocalPreparing: "保存先の資料を準備中です。しばらくしてからお試しください。検索・購読・再生は利用できます。",
+    catalogFullDeferred: "今期の作品は引き続き利用できます。残りの資料は自動で再試行します",
+    catalogHistoryPreparing: "過去の作品情報を準備中です。しばらくしてから再検索してください。",
+    copyBrowserPermission: "許可コマンドをコピー",
+    browserPermissionHint: "この PC のコマンドプロンプト（cmd）で一度実行し、Edge または Chrome を開き直してください。現在の Windows アカウントで、このサイトから PotPlayer と VLC を起動することを許可します。既存の許可は保持されます。",
     startupWarming: "画面を利用できます。バックグラウンドで準備中です",
     startupWarm: "バックグラウンド準備完了",
     subscriptionsTab: "購読",
@@ -2226,11 +2257,14 @@ const priorityValueLabel = (value) => ({
   unknown: ["其它 / 未识别", "Other / unrecognized", "その他 / 未識別"],
 }[value]?.[li()] || value);
 function localizedError(message, status = 0) {
+  if (message === "catalog_metadata_preparing") return t("catalogLocalPreparing");
   if (String(message || "").includes("local_library_sleeping")) return t("librarySleeping");
   const value = String(message || "");
   const capacity = value.match(/insufficient free space: submission would leave ([\d.]+) TiB; minimum reserve is ([\d.]+) TiB/);
   if (capacity) return t("errorReservedSpace").replace("{available}", capacity[1]).replace("{reserve}", capacity[2]);
   const mappings = [
+    [/collector_search_sources_required/, "collectorSourcesRequired"],
+    [/resource_variant_changed/, "resourceVariantChanged"],
     [/torrent_search_busy/, "torrentSearchBusy"],
     [/qbittorrent_not_configured/, "torrentRequiresQbt"],
     [/local_library_unavailable/, "layoutPreviewUnavailable"],
@@ -2628,7 +2662,7 @@ async function search({ background = false } = {}) {
   searchController?.abort();
   const controller = new AbortController();
   searchController = controller;
-  results.setAttribute("aria-busy", "true");
+  if (!background) results.setAttribute("aria-busy", "true");
   if (!background) { $("prevPage").disabled = $("nextPage").disabled = true; $("catalogLoading").hidden = false; }
   if (!items.length) {
     results.innerHTML = `<div class="empty">${t("loading")}</div>`;
@@ -2827,7 +2861,7 @@ function render() {
   $("nextPage").disabled = pageSize === "all" || (page + 1) * n >= total;
   if (!items.length) {
     const bootstrapping = Number(catalogStats?.record_count || 0) === 0 && catalogStats?.sync?.state === "running";
-    const markup = `<div class="empty">${t(bootstrapping ? "loadingWorks" : "none")}</div>`;
+    const markup = `<div class="empty">${t(catalogStats?.catalog_scope === "season" ? "catalogHistoryPreparing" : bootstrapping ? "loadingWorks" : "none")}</div>`;
     if (markup !== renderedResultsMarkup) {
       cancelCoverLoads();
       results.innerHTML = markup;
@@ -2895,18 +2929,30 @@ function setCoverState(target, state = "available") {
   target.dataset.coverStateLabel = labels[state] ? t(labels[state]) : "";
   target.classList.toggle("cover-unavailable", state === "no_image" || state === "error" || state === "missing");
 }
-function applyCoverBlob(target, blob, batch = coverBatch) {
+async function applyCoverBlob(target, blob, batch = coverBatch) {
   if (!target || !target.isConnected) return;
-  const previous = target.dataset.coverObjectUrl;
-  if (previous) {
-    URL.revokeObjectURL(previous);
-    batch?.objectUrls?.delete(previous);
-  }
   const url = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  }
+  if (!target.isConnected || (batch && coverBatch !== batch)) {
+    URL.revokeObjectURL(url);
+    return;
+  }
+  const previous = target.dataset.coverObjectUrl;
   batch?.objectUrls?.set(url, target);
   target.dataset.coverObjectUrl = url;
   if (target.tagName === "IMG") target.src = url;
   target.style.setProperty("--cover", `url('${url}')`);
+  if (previous) {
+    URL.revokeObjectURL(previous);
+    batch?.objectUrls?.delete(previous);
+  }
 }
 async function reloadCoverImage(button) {
   const target = button.closest("[data-cover]");
@@ -2928,7 +2974,7 @@ async function reloadCoverImage(button) {
     });
     if (!response.ok) throw new Error(`cover ${response.status}`);
     const status = response.headers.get("X-AnimeMachine-Image-Status") || "available";
-    applyCoverBlob(target, await response.blob());
+    if (status === "available") await applyCoverBlob(target, await response.blob());
     setCoverState(target, status);
     if (status === "available") reportPerformanceEvent("firstCover");
     target.dataset.coverAttempt = "0";
@@ -2967,7 +3013,7 @@ function pumpCoverLoads(batch) {
     const modal = topModalDialog();
     if (modal && !modal.contains(target)) { target.dataset.coverQueued = "0"; continue; }
     batch.active += 1;
-    setCoverState(target, Number(target.dataset.coverAttempt || 0) > 0 ? "retrying" : "loading");
+    if (!target.dataset.coverObjectUrl) setCoverState(target, "loading");
     const suffix = coverVersion ? `?v=${coverVersion}` : "";
     fetch(`/api/anime/${target.dataset.cover}/image${suffix}`, {
       signal: batch.controller.signal,
@@ -2977,18 +3023,21 @@ function pumpCoverLoads(batch) {
       if (!response.ok) throw new Error(`cover ${response.status}`);
       return { blob: await response.blob(), status: response.headers.get("X-AnimeMachine-Image-Status") || "available",
         pending: response.headers.get("X-AnimeMachine-Image-Pending") === "1", etag: response.headers.get("ETag") };
-    }).then(({ blob, status, pending, etag }) => {
+    }).then(async ({ blob, status, pending, etag }) => {
       if (coverBatch !== batch || !target.isConnected) return;
       const modal = topModalDialog();
       if (modal && !modal.contains(target)) {
         target.dataset.coverQueued = "0";
         return;
       }
-      if (!etag || !target.dataset.coverObjectUrl || target.dataset.coverEtag !== etag) {
-        applyCoverBlob(target, blob, batch);
+      // Loading polls carry the same SVG placeholder. Keep the existing paint
+      // surface until a real cover has decoded, including during cache upgrades.
+      if (status === "available" && (!etag || !target.dataset.coverObjectUrl || target.dataset.coverEtag !== etag)) {
+        await applyCoverBlob(target, blob, batch);
+        if (coverBatch !== batch || !target.isConnected) return;
         target.dataset.coverEtag = etag || "";
       }
-      setCoverState(target, status);
+      setCoverState(target, target.dataset.coverObjectUrl ? "available" : status);
       if (status === "available") reportPerformanceEvent("firstCover");
       if (pending || status === "loading" || status === "retrying") {
         const attempt = Number(target.dataset.coverAttempt || 0) + 1;
@@ -3094,7 +3143,7 @@ const suffix = (c) =>
       }[mode] || "noneMode",
     ),
   libraryHtml = (x, animeId) => {
-    const targets = (x.targets || []).filter((item) => item.origin !== "ani-rss_api");
+    const targets = uniqueLibraryTargets(x.targets || []);
     return targets.length
       ? targets.map((y) => {
           const inspection = y.state === "absent" ? t("absentInspection") : inspectionLabel(y.inspectionMode),
@@ -3104,7 +3153,8 @@ const suffix = (c) =>
             mappedPath = clientVisiblePath(y.path),
             count = y.fileCount != null
               ? ` · ${y.fileCount} ${t("files")}`
-              : y.expectedFiles != null ? ` · ${y.observedFiles}/${y.expectedFiles} ${t("files")}` : "",
+              : Number(y.expectedFiles) > 0 ? ` · ${y.observedFiles}/${y.expectedFiles} ${t("files")}`
+                : y.observedFiles != null ? ` · ${y.observedFiles} ${t("files")}` : "",
             needsAudit = y.state === "existing" && ["not_inspected_preexisting", "catalog_state_only", "none"].includes(y.inspectionMode);
           return `<div class="library-resource"><div class="inventory"><span><b>${esc(mappedPath || y.path)}</b><div class="inventory-foot"><small>${status}${count}${needsAudit ? ` <button type="button" class="text-button audit-work" data-icon="check" data-anime-id="${animeId}">${t("verifyWork")}</button>` : ""}</small><button type="button" class="text-button copy-library-path" data-icon="copy" data-copy-path="${esc(mappedPath || "")}" ${mappedPath ? "" : "disabled"}>${t("copyPath")}</button></div></span></div></div>`;
         }).join("")
@@ -3115,7 +3165,7 @@ const suffix = (c) =>
     : "",
   playbackSourceHtml = (targets, subscriptions, selected) => {
     const choices = [
-      ...targets.map((item) => ({ value: item.path, label: clientVisiblePath(item.path) || item.path })),
+      ...uniqueLibraryTargets(targets).map((item) => ({ value: item.path, label: clientVisiblePath(item.path) || item.path })),
       ...subscriptions.filter((item) => Number(item.playableCount || 0) > 0).map((item) => ({
         value: `ani-rss:${item.remoteId}`,
         label: `${t("remotePlaybackSource")} · ${item.title}`,
@@ -3159,6 +3209,10 @@ const suffix = (c) =>
     if (/^\d+$/.test(raw)) return `${raw}${scan || "p"}`;
     return /^\d+[pi]$/i.test(raw) ? raw : "";
   },
+  resourceSubtitleModeText = (value) => String(value || "").split("+").map((mode) => ({
+    soft: ["可关闭字幕", "Soft subtitles", "切替字幕"], hard: ["固定字幕", "Hard subtitles", "焼き込み字幕"],
+    external: ["独立字幕文件", "External subtitles", "外部字幕"],
+  }[mode]?.[li()] || "")).filter(Boolean).join(" / "),
   eligibilityReasonText = (item) => {
     if (item?.eligible) return "";
     const reason = String(item?.eligibilityReason || "");
@@ -3175,9 +3229,9 @@ const suffix = (c) =>
     const buckets = new Map(), groups = [];
     for (const row of rows) {
       const sequence = row.releaseUnit === "volume" ? row.volumeSequence : row.episodeSequence,
-        mergeable = row.eligible && ["episode", "volume"].includes(row.releaseUnit) && sequence?.length,
+        mergeable = (row.eligible || row.canOverride) && ["episode", "volume"].includes(row.releaseUnit) && sequence?.length,
         key = mergeable
-          ? [row.eligible, row.sourceFamily, row.sourceClass, row.resourceGroup, row.subtitle, row.resolution, row.scan, row.bitDepth, row.releaseUnit].join("|")
+          ? [row.eligible, row.sourceFamily, row.sourceClass, row.resourceGroup, row.subtitle, row.resolution, row.scan, row.bitDepth, row.releaseUnit, row.releaseVariantKey].join("|")
           : row.infoHash;
       if (!buckets.has(key)) buckets.set(key, { mergeable, rows: [] });
       buckets.get(key).rows.push(row);
@@ -3205,39 +3259,41 @@ const suffix = (c) =>
       return { members, top, sample, sequence };
     }).sort((a, b) => a.top.effectiveRank - b.top.effectiveRank);
   },
-  torrentGroupHtml = (group, id) => {
-    const y = group.top,
-      storageDirectories = [...new Set(group.members.map((item) => item.storageDirectory).filter(Boolean))],
-      storageDirectory = storageDirectories.filter((value) => value !== ".").join(" · "),
-      resourceGroup = y.resourceGroup && !["unknown", "other"].includes(String(y.resourceGroup).toLowerCase())
-        ? y.resourceGroup
-        : "",
-      sourceClass = y.sourceClass && !["unknown", "other"].includes(String(y.sourceClass).toLowerCase())
-        ? sourceClassText(y.sourceClass)
-        : "",
-      resolution = resourceResolutionText(y.resolution, y.scan),
-      files = group.members.reduce((sum, item) => sum + Number(item.fileCount || 0), 0),
-      details = [resourceGroup, sourceClass, resolution, files ? `${fmt(files)} ${t("files")}` : ""]
-        .filter(Boolean)
-        .join(" · ");
-    const exclusion = eligibilityReasonText(y);
-    return `<label class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}"><input type="radio" name="resource-${id}" value="torrent:${esc(y.infoHash)}" data-policy-override="${!y.eligible && !!y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${torrentSelections.get(id) === y.infoHash && (y.eligible || policyOverrides.get(id) === `torrent:${y.infoHash}`) ? "checked" : ""}><span class="torrent-lines"><b title="${esc(y.name || storageDirectory)}">${esc(y.name || storageDirectory || y.infoHash)}</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
+  resourceChoices = (torrents, aniResources, id) => {
+    const buckets = new Map();
+    const add = (provider, y, members = [y]) => {
+      const selectedValue = provider === "torrent" ? torrentSelections.get(id) : resourceSelections.get(id),
+        selectedMember = provider === "torrent" ? members.find((row) => row.infoHash === selectedValue) : null,
+        value = `${provider}:${selectedMember?.infoHash || (provider === "torrent" ? y.infoHash : y.resourceId)}`,
+        group = String(y.resourceGroup || "").trim(),
+        knownGroup = group && !["unknown", "other"].includes(group.toLowerCase()),
+        key = `${provider}:${knownGroup ? group.normalize("NFKC").toLowerCase() : value}`,
+        source = y.sourceClass && !["unknown", "other"].includes(String(y.sourceClass).toLowerCase()) ? sourceClassText(y.sourceClass) : "",
+        subtitle = y.subtitle && !["unknown", "other"].includes(String(y.subtitle).toLowerCase()) ? subtitleText(y.subtitle) : "",
+        files = provider === "torrent" ? members.reduce((sum, row) => sum + Number(row.fileCount || 0), 0) : Number(y.itemCount || 0),
+        details = [y.releaseVariant?.platform, subtitle, source, resourceResolutionText(y.resolution, y.scan), y.releaseVariant?.codec, y.releaseVariant?.container, resourceSubtitleModeText(y.releaseVariant?.subtitleMode), files ? `${fmt(files)} ${t("files")}` : ""].filter(Boolean).join(" · "),
+        title = y.variantTitle || y.name || y.title || y.storageDirectory || value,
+        option = { value, title, details, eligible: !!y.eligible, canOverride: !!y.canOverride, reason: eligibilityReasonText(y), selected: value === `${provider}:${selectedValue}` };
+      if (!buckets.has(key)) buckets.set(key, { provider, name: knownGroup ? group : t("other"), variants: [] });
+      buckets.get(key).variants.push(option);
+    };
+    torrentGroups(torrents || []).forEach((group) => add("torrent", group.top, group.members));
+    (aniResources || []).forEach((row) => add("ani-rss", row));
+    return [...buckets.values()].map((group) => {
+      group.current = group.variants.findIndex((row) => row.selected);
+      if (group.current < 0) group.current = group.variants.findIndex((row) => row.eligible);
+      if (group.current < 0) group.current = Math.max(0, group.variants.findIndex((row) => row.canOverride));
+      return group;
+    });
   },
-  aniResourceHtml = (y, id) => {
-    const exclusion = eligibilityReasonText(y),
-      resourceGroup = y.resourceGroup && !["unknown", "other"].includes(String(y.resourceGroup).toLowerCase())
-        ? y.resourceGroup
-        : "",
-      sourceClass = y.sourceClass && !["unknown", "other"].includes(String(y.sourceClass).toLowerCase())
-        ? sourceClassText(y.sourceClass)
-        : "",
-      details = [
-        resourceGroup,
-        sourceClass,
-        resourceResolutionText(y.resolution),
-        Number(y.itemCount || 0) > 0 ? `${fmt(y.itemCount)} ${t("files")}` : "",
-      ].filter(Boolean).join(" · ");
-    return `<label class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}"><input type="radio" name="resource-${id}" value="ani-rss:${esc(y.resourceId)}" data-policy-override="${!y.eligible && !!y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${resourceSelections.get(id) === y.resourceId && (y.eligible || policyOverrides.get(id) === `ani-rss:${y.resourceId}`) ? "checked" : ""}><span class="torrent-lines"><b>Ani-RSS</b><small class="torrent-subline" title="${esc(details)}${exclusion ? ` ${esc(exclusion)}` : ""}"><span>${esc(details)}</span>${exclusion ? `<span class="torrent-exclusion">${esc(exclusion)}</span>` : ""}</small></span></label>`;
+  resourceChoiceHtml = (group, id, index) => {
+    const y = group.variants[group.current], radioId = `resource-${id}-${index}`,
+      provider = group.provider === "ani-rss" ? "Ani-RSS" : "Torrent",
+      options = group.variants.map((row, position) => `<option value="${position}" ${position === group.current ? "selected" : ""} ${row.eligible || row.canOverride ? "" : "disabled"}>${esc([row.details, row.title, row.reason].filter(Boolean).join(" · "))}</option>`).join(""),
+      choice = group.variants.length > 1
+        ? `<select class="resource-variant" aria-label="${esc(`${group.name} · ${provider}`)}" title="${esc(y.title)}">${options}</select>`
+        : `<span class="resource-title" title="${esc(y.title)}">${esc(y.title)}</span>`;
+    return `<div class="torrent ${y.eligible ? "" : y.canOverride ? "policy-excluded" : "disabled"}" data-resource-choice="${index}"><input id="${radioId}" type="radio" name="resource-${id}" value="${esc(y.value)}" data-policy-override="${!y.eligible && y.canOverride}" ${y.eligible || y.canOverride ? "" : "disabled"} ${y.selected && (y.eligible || policyOverrides.get(id) === y.value) ? "checked" : ""} aria-label="${esc(`${group.name} · ${provider}`)}"><div class="torrent-lines"><label for="${radioId}"><b>${esc(group.name)} <small>${provider}</small></b></label>${choice}<small class="torrent-subline"><span>${esc(y.details)}</span><span class="torrent-exclusion">${esc(y.reason)}</span></small></div></div>`;
   };
 
 function graphTitle(node) {
@@ -5186,14 +5242,15 @@ function positionValue(text) {
   if (!/^\d{1,3}:[0-5]\d:[0-5]\d$/.test(text.trim())) throw new Error(t("viewingPosition"));
   return text.split(":").reduce((sum, part) => sum * 60 + Number(part), 0) * 1000;
 }
-function viewingButton(animeId, record, bgmId = record?.bgmId) {
-  return `<button type="button" class="text-button viewing-button" data-viewing="${animeId}" data-bgm-id="${Number(bgmId) || 0}" title="${esc(t("viewingEdit"))} · ${esc(viewingLabel(record))}">${esc(viewingLabel(record))}</button>`;
+function viewingButton(animeId, record, bgmId = record?.bgmId, compact = false) {
+  const text = compact ? record?.episode != null ? fmt(record.episode) : "—" : viewingLabel(record);
+  return `<button type="button" class="text-button viewing-button" data-viewing="${animeId}" data-bgm-id="${Number(bgmId) || 0}"${compact ? ' data-viewing-compact="true"' : ""} title="${esc(t("viewingEdit"))} · ${esc(viewingLabel(record))}">${esc(text)}</button>`;
 }
 function updateViewing(record) {
   const previous = viewingRecords.get(record.animeId);
   if (previous && (previous.revision !== record.revision || previous.epoch !== record.epoch)) invalidateCatalogPages();
   viewingRecords.set(record.animeId, record);
-  document.querySelectorAll(`[data-viewing="${record.animeId}"]`).forEach((button) => { button.textContent = viewingLabel(record); button.title = `${t("viewingEdit")} · ${viewingLabel(record)}`; });
+  document.querySelectorAll(`[data-viewing="${record.animeId}"]`).forEach((button) => { button.textContent = button.dataset.viewingCompact ? record.episode != null ? fmt(record.episode) : "—" : viewingLabel(record); button.title = `${t("viewingEdit")} · ${viewingLabel(record)}`; });
 }
 async function openViewing(animeId, title = "", bgmId = 0) {
   const generation = ++viewingGeneration;
@@ -5248,7 +5305,8 @@ async function saveViewing(episode, undo = false, positionMs = 0) {
 function playerActionsHtml(attribute = "data-catchup-player") {
   const button = (kind, key) => `<button type="button" class="tool dark-tool player-action" ${attribute}="${kind}"${kind === "copy" ? ' data-icon="copy"' : kind === "system" ? ' data-icon="download"' : ""}>${playerIcon(kind)}<span>${esc(t(key))}</span></button>`;
   const windows = /Windows/i.test(navigator.userAgent), mac = /(Macintosh|Mac OS X)/i.test(navigator.userAgent);
-  const primary = windows ? `<div class="potplayer-group">${button("potplayer", "openPotPlayer")}<button class="tool dark-tool extension-install" type="button" data-install-playback-extension title="${esc(t("potplayerHint"))}">${esc(t("potplayerInstall"))}</button></div>` : mac ? button("iina", "openIina") : "";
+  if (windows) return `<div class="player-grid">${button("potplayer", "openPotPlayer")}${button("vlc", "openVlc")}${button("copy", "copyPlaylist")}<button class="tool dark-tool extension-install" type="button" data-install-playback-extension title="${esc(t("potplayerHint"))}">${esc(t("potplayerInstall"))}</button><button class="tool dark-tool player-action" type="button" data-copy-browser-permission data-icon="copy" title="${esc(t("browserPermissionHint"))}">${esc(t("copyBrowserPermission"))}</button>${button("system", "systemPlayer")}</div>`;
+  const primary = mac ? button("iina", "openIina") : "";
   return `${primary}<div class="player-utilities">${button("vlc", "openVlc")}${button("copy", "copyPlaylist")}${button("system", "systemPlayer")}</div>`;
 }
 async function deliverPlayback(kind, handoff, button) {
@@ -5393,6 +5451,23 @@ document.addEventListener("click", (event) => {
   anchor.download = "";
   document.body.append(anchor); anchor.click(); anchor.remove();
 });
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-copy-browser-permission]");
+  if (!button || button.disabled) return;
+  const previous = button.innerHTML;
+  button.disabled = true;
+  try {
+    const value = await api(`/api/playback/browser-permission-command?origin=${encodeURIComponent(location.origin)}`);
+    await copyPlainText(value.command);
+    button.textContent = t("copiedPlaylist");
+    alert(t("browserPermissionHint"));
+  } catch (error) { alert(error.message); }
+  finally {
+    if (button.isConnected) button.innerHTML = previous;
+    if (button.closest("#catchupPlayers")) updateCatchupControls(false);
+    else button.disabled = false;
+  }
+});
 async function openCatchup() {
   const season = radarSeasons()[radarSeason];
   catchupRequest = { from: season.from, to: season.to, language, sort: radarSort, direction: radarDirection };
@@ -5457,6 +5532,26 @@ function playerIcon(kind) {
   return "";
 }
 
+function uniqueLibraryTargets(targets) {
+  const rows = new Map();
+  const score = item => [item.state !== "absent" ? 1 : 0,
+    Number(item.fileCount || item.observedFiles || 0) > 0 ? 1 : 0,
+    item.state !== "external" ? 1 : 0,
+    Number(item.fileCount || item.observedFiles || 0)];
+  for (const [index, target] of targets.entries()) {
+    if (target.origin === "ani-rss_api") continue;
+    const path = String(target.path || "");
+    const windows = /^[a-z]:[\\/]|^\\\\|^\/\//i.test(path);
+    const normalized = (windows ? path.replace(/\\/g, "/") : path).replace(/\/+$/, "") || "/";
+    const key = path ? `${windows ? "windows" : "posix"}:${windows ? normalized.toLowerCase() : normalized}` : `missing:${index}`;
+    const previous = rows.get(key);
+    if (!previous) { rows.set(key, target); continue; }
+    const left = score(target), right = score(previous);
+    const difference = left.findIndex((value, position) => value !== right[position]);
+    if (difference >= 0 && left[difference] > right[difference]) rows.set(key, target);
+  }
+  return [...rows.values()];
+}
 function clientVisiblePath(value) {
   const raw = String(value || ""), normalized = raw.replace(/\\/g, "/"),
     mappings = config.playback?.directPathMappings || [];
@@ -5619,7 +5714,7 @@ async function showDetail(id) {
   });
   if (generation !== detailGeneration) return;
   const
-    libraryTargets = (x.library?.targets || []).filter((target) => target.origin !== "ani-rss_api"),
+    libraryTargets = uniqueLibraryTargets(x.library?.targets || []),
     playableTargets = libraryTargets.filter((target) => target.state !== "absent" && Number(target.fileCount || target.observedFiles || 0) > 0),
     aniSubscriptions = x.ani_rss?.subscriptions || [],
     playableAniSubscriptions = aniSubscriptions.filter((item) => Number(item.playableCount || 0) > 0),
@@ -5719,13 +5814,19 @@ async function showDetail(id) {
       || (playableAniSubscriptions.length ? `<p class="muted">${t("aniRssRemoteOnlyLibrary")}</p>` : `<p class="muted">${t("notInLibrary")}</p>`),
     playbackSourceSelector = playbackSourceHtml(playableTargets, playableAniSubscriptions, selectedPlaybackSource),
     aniRssManagement = aniSubscriptions.map((subscription) => aniSubscriptionManagementHtml(subscription, id)).join(""),
-    resourceList = `${torrentGroups(x.torrents).map((group) => torrentGroupHtml(group, x.id)).join("")}${aniResources.map((y) => aniResourceHtml(y, x.id)).join("")}`,
+    choices = resourceChoices(x.torrents, aniResources, id),
+    providerResources = (provider) => choices.map((group, index) => group.provider === provider ? resourceChoiceHtml(group, id, index) : "").join(""),
+    resourceList = `<section class="resource-provider ani-rss-resources"><h4>${t("aniRssSubscriptionResources")}</h4><div class="torrent-list">${providerResources("ani-rss") || `<p class="muted">${t("noTorrent")}</p>`}</div>${aniResources.length ? `<small class="muted">${t("exactResourceHint")}</small>` : ""}</section><details class="resource-provider native-torrents" ${expandedTorrentWorks.has(id) || torrentSelections.has(id) ? "open" : ""}><summary>${t("torrentResources")} <small>(${choices.filter((group) => group.provider === "torrent").length})</small></summary><div class="torrent-list">${providerResources("torrent") || `<p class="muted">${t("noTorrent")}</p>`}</div></details>`,
     hasEligibleResource = (x.torrents || []).some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `torrent:${y.infoHash}`))
       || aniResources.some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `ani-rss:${y.resourceId}`));
   if (generation !== detailGeneration) return;
   $("detail").innerHTML =
-    `<div class="detail-hero"><header class="detail-intro"><div class="detail-meta-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><div class="detail-visibility">${x.hidden ? `<span class="muted">${t("workHidden")}</span>` : ""}${visibilityButton(x.bgm_id, x.id, x.hidden)}</div></div><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}${aniRssManagement}<div id="detailPlayback">${playbackHtml(playbackState)}</div><section id="detailResources" class="detail-resources"><h3>${t("torrents")}</h3><p id="resourceChoiceHint" class="muted resource-choice-hint">${hasEligibleResource ? t("resourcePickHint") : ""}</p><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted" role="status"></small></div></section><h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `<div class="detail-hero"><header class="detail-intro"><div class="detail-meta-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><div class="detail-visibility">${x.hidden ? `<span class="muted">${t("workHidden")}</span>` : ""}${visibilityButton(x.bgm_id, x.id, x.hidden)}</div></div><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}<div id="detailPlayback">${playbackHtml(playbackState)}</div>${aniRssManagement}<section id="detailResources" class="detail-resources"><h3>${t("torrents")}</h3><p id="resourceChoiceHint" class="muted resource-choice-hint">${hasEligibleResource ? t("resourcePickHint") : ""}</p><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted" role="status"></small></div></section><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
+  $("detail").querySelector(".native-torrents").ontoggle = (event) => {
+    if (event.target.open) expandedTorrentWorks.add(id);
+    else expandedTorrentWorks.delete(id);
+  };
   $("detail")
     .querySelectorAll(`input[name="resource-${id}"]`)
     .forEach(
@@ -5748,6 +5849,24 @@ async function showDetail(id) {
           render();
         }),
     );
+  $("detail").querySelectorAll("[data-resource-choice]").forEach((row) => {
+    const select = row.querySelector(".resource-variant"), radio = row.querySelector('input[type="radio"]'),
+      variants = choices[Number(row.dataset.resourceChoice)].variants;
+    if (select) select.onchange = () => {
+      const choice = variants[Number(select.value)];
+      if (!choice || !(choice.eligible || choice.canOverride)) return;
+      radio.value = choice.value;
+      radio.disabled = false;
+      radio.dataset.policyOverride = String(!choice.eligible && choice.canOverride);
+      select.title = choice.title;
+      row.classList.toggle("policy-excluded", !choice.eligible && choice.canOverride);
+      row.classList.remove("disabled");
+      row.querySelector(".torrent-subline > span:first-child").textContent = choice.details;
+      row.querySelector(".torrent-exclusion").textContent = choice.reason;
+      radio.checked = true;
+      radio.onchange();
+    };
+  });
   $("detail").querySelectorAll(".audit-work").forEach((button) => {
     button.onclick = async () => {
       button.disabled = true;
@@ -5818,11 +5937,12 @@ async function showDetail(id) {
               setTimeout(poll, 1000); return;
             }
             if (job.state === "failed") { status.textContent = t("torrentSearchFailed"); button.disabled = false; return; }
+            expandedTorrentWorks.add(id);
             await showDetail(id);
             const message = job.sourcesFailed ? t("torrentSearchPartial") : job.saved ? t("searchPoolDone") : t("searchPoolNone");
             if (Number(detailDialog.dataset.animeId) === id && detailDialog.open) {
               $("searchWorkState").textContent = message;
-              const section = $("detailResources"), choices = [...section.querySelectorAll('input[type="radio"]')];
+              const section = $("detailResources"), choices = [...section.querySelectorAll('.native-torrents input[type="radio"]')];
               $("resourceChoiceHint").textContent = choices.some((choice) => !choice.disabled)
                 ? t("resourcePickHint") : choices.length ? t("resourceExcludedHint") : job.saved ? t("resourceUnmappedHint") : t("searchPoolNone");
               section.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -6228,11 +6348,29 @@ function renderGroupPolicy() {
 }
 function loadOperationalSettings() {
   $("pollMinutes").value = config.components.discovery.pollMinutes ?? 30;
+  const collector = config.components.torrentCollector || {}, search = collector.search || {}, pool = collector.pool || {};
+  $("collectorSearchSources").querySelectorAll("input").forEach((input) => { input.checked = (search.sources || ["mikan", "nyaa", "acgrip"]).includes(input.value); });
+  validateCollectorSources();
+  $("collectorMaxResults").value = search.maxResults ?? 80;
+  $("collectorTimeout").value = search.timeoutSeconds ?? 120;
+  $("collectorMonitor").checked = pool.monitorEnabled !== false;
+  $("collectorCollection").checked = pool.collectionEnabled !== false;
+  $("collectorHistory").checked = pool.historyEnabled !== false;
   $("minimumFree").value = config.storageGuard.minimumFreeTiB ?? 0.1;
   $("onDemandHash").checked =
     config.differentialPlanning?.samePathSizePolicy === "hash_and_skip";
 }
+function validateCollectorSources() {
+  const box = $("collectorSearchSources");
+  box.querySelector("input").setCustomValidity(box.querySelector("input:checked") ? "" : t("collectorSourcesRequired"));
+}
 function saveOperationalSettings(target) {
+  const sources = [...$("collectorSearchSources").querySelectorAll("input:checked")].map((input) => input.value);
+  if (!sources.length) throw new Error(t("collectorSourcesRequired"));
+  target.components.torrentCollector = {
+    search: {sources, maxResults: Number($("collectorMaxResults").value), timeoutSeconds: Number($("collectorTimeout").value)},
+    pool: {monitorEnabled: $("collectorMonitor").checked, collectionEnabled: $("collectorCollection").checked, historyEnabled: $("collectorHistory").checked},
+  };
   target.components.discovery.pollMinutes = Math.max(
     5,
     +$("pollMinutes").value || 30,
@@ -6639,6 +6777,8 @@ function logMessage(message) {
     torrent_search_complete: ["Torrent 检索已完成", "Torrent search completed", "Torrent 検索が完了しました"],
     torrent_search_failed: ["Torrent 检索未完成", "Torrent search did not complete", "Torrent 検索を完了できませんでした"],
     qbt_state_refresh_failed: ["下载器状态暂不可用", "Downloader status is unavailable", "ダウンローダーの状態を取得できません"],
+    seasonal_covers_prepared: ["当季封面已就绪", "Seasonal covers are ready", "今期のカバーを準備しました"],
+    seasonal_cover_pack_invalid: ["预置封面未通过校验", "The bundled cover check failed", "同梱カバーの検証に失敗しました"],
     application_update_check_failed: ["暂时无法检查新版", "Update check is unavailable", "更新を確認できませんでした"],
     archive_schedule_failed: ["底包检查未完成", "Catalog update check did not complete", "カタログの更新を確認できませんでした"],
   };
@@ -6908,7 +7048,7 @@ function renderPlaybackDiagnostics(payload) {
 function systemHealthLabels() {
   return {
     names: { network: t("healthNetwork"), aniRss: t("healthAniRss"), qbittorrent: t("healthQbittorrent"), storage: t("healthStorage"), imagePreload: t("healthImagePreload"), playback: t("healthPlayback") },
-    details: { ready: t("healthReady"), sleeping: t("librarySleeping"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
+    details: { ready: t("healthReady"), sleeping: t("librarySleeping"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), not_configured: t("healthNotConfigured"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
   };
 }
 function systemHealthExtra(item) {
@@ -7021,6 +7161,12 @@ function renderScanProgress(s, startup = null) {
       bar.removeAttribute("value");
     }
     $("scanProgressText").textContent = text;
+    box.classList.remove("idle");
+    return;
+  }
+  if (s.catalog_scope === "season") {
+    $("scanProgressText").textContent = t(s.sync?.state === "error" ? "catalogFullDeferred" : "catalogSeasonReady");
+    bar.removeAttribute("value");
     box.classList.remove("idle");
     return;
   }
@@ -7247,7 +7393,7 @@ async function loadRadar({ preferCache = false } = {}) {
     };
   });
   const season = seasons[radarSeason];
-  $("radarStatus").textContent = t("radarLoading");
+  if (!$("radarResults").querySelector("table")) $("radarStatus").textContent = t("radarLoading");
   $("radarResults").setAttribute("aria-busy", "true");
   try {
     const scanPromise = api("/api/ani-rss/season-search", { signal: controller.signal, timeoutMs: 5000 })
@@ -7267,7 +7413,7 @@ async function loadRadar({ preferCache = false } = {}) {
     updateRadarSeasonCount($(`radarTab${radarSeason}`), season, data.total);
     $("radarStatus").textContent = data.viewingUnavailable ? t("viewingUnavailable") : available ? "" : t("recentEpisodeRequiresAniRss");
     renderRadarTable(data.items.length ? `<table class="data-table radar-table"><thead><tr>
-      ${radarHeader("title", "radarTitleColumn")}${radarHeader("type", "radarMediaType", "radar-media")}${radarHeader("premiere", "radarStart", "radar-start")}${radarHeader("progress", "radarProgress")}${radarHeader("subscription", "radarSubscription")}${radarHeader("updated", "radarUpdated")}
+      ${radarHeader("title", "radarTitleColumn")}${radarHeader("premiere", "radarStart", "radar-start")}${radarHeader("progress", "radarProgress")}<th class="radar-watched">${esc(t("radarWatched"))}</th>${radarHeader("subscription", "radarSubscription")}${radarHeader("updated", "radarUpdated")}
       </tr></thead><tbody>${data.items.map((item) => {
         if (item.subscription_state === "active") radarPendingSubscriptions.delete(item.id);
         const pending = radarPendingSubscriptions.has(item.id) || radarSubmittingSubscriptions.has(item.id);
@@ -7277,10 +7423,10 @@ async function loadRadar({ preferCache = false } = {}) {
           item.ani_rss_subscriptions.map((value) => aniSubscriptionMenu(value, item.id, !available, item.bgm_id)).join("") : state === "active" ?
           `<details class="subscription-menu"><summary>${t("radarSubscribed")} ▾</summary><div class="subscription-menu-actions">${visibilityButton(item.bgm_id, item.id)}</div></details>` : state === "paused" ? `<details class="subscription-menu"><summary>${t("radarPaused")} ▾</summary><div class="subscription-menu-actions">${visibilityButton(item.bgm_id, item.id)}</div></details>` :
           `<details class="subscription-menu"><summary>${t("radarSubscribe")} ▾</summary><div class="subscription-menu-actions"><button type="button" class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("enableSubscription")}</button>${visibilityButton(item.bgm_id, item.id)}</div></details>`;
-        return `<tr data-radar-id="${item.id}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}" ${radarIsHighlighted(item) ? `title="${esc(t("radarUnwatched"))}"` : ""}><td class="radar-title-cell ${imagesEnabled ? "with-radar-cover" : ""}">${imagesEnabled ? `<img class="radar-cover" data-cover="${item.id}" alt="" decoding="async" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='600'%3E%3Crect width='400' height='600' fill='%23e6e4de'/%3E%3C/svg%3E">` : ""}<button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button>${item.media_code === "tv" && item.viewing?.episode != null ? viewingButton(item.id, item.viewing, item.bgm_id) : ""}</td>
-          <td class="radar-media" data-label="${esc(t("radarMediaType"))}">${esc(label("media", item.media_code))}</td>
-          <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}${radarReleaseDate(item)}</td>
+        return `<tr data-radar-id="${item.id}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}" ${radarIsHighlighted(item) ? `title="${esc(t("radarUnwatched"))}"` : ""}><td class="radar-title-cell ${imagesEnabled ? "with-radar-cover" : ""}">${imagesEnabled ? `<img class="radar-cover" data-cover="${item.id}" alt="" decoding="async" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='600'%3E%3Crect width='400' height='600' fill='%23e6e4de'/%3E%3C/svg%3E">` : ""}<button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button></td>
+          <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}${language === "en" ? ` (${esc(label("media", item.media_code))})` : `（${esc(label("media", item.media_code))}）`}${radarReleaseDate(item)}</td>
           <td class="radar-progress" data-label="${esc(t("radarProgress"))}">${item.episode_progress?.current ?? "?"} / ${item.episode_progress?.total ?? "?"}</td>
+          <td class="radar-watched" data-label="${esc(t("radarWatched"))}">${viewingButton(item.id, item.viewing, item.bgm_id, true)}</td>
           <td data-label="${esc(t("radarSubscription"))}">${subscription}</td><td data-label="${esc(t("radarUpdated"))}">${stamp && Number.isFinite(stamp.getTime()) ? esc(stamp.toLocaleString(language)) : ""}</td></tr>`;
       }).join("")}</tbody></table>` : `<p class="empty">${t("radarEmpty")}</p>`);
     $("radarResults").querySelectorAll("[data-radar-sort]").forEach((button) => {
@@ -7319,6 +7465,10 @@ async function loadRadar({ preferCache = false } = {}) {
   } catch (error) {
     if (generation === radarGeneration && !controller.signal.aborted) {
       $("radarStatus").textContent = `${t("failed")}: ${error.message}`;
+      const retry = document.createElement("button");
+      retry.type = "button"; retry.className = "text-button"; retry.dataset.icon = "refresh";
+      retry.textContent = t("reloadList"); retry.onclick = () => loadRadar();
+      $("radarStatus").append(" ", retry);
     }
   } finally {
     if (generation === radarGeneration) $("radarResults").removeAttribute("aria-busy");
@@ -7368,7 +7518,7 @@ async function openRadarSubscription(animeId) {
     if (!active()) return;
     const resources = follow(detail);
     $("radarResource").innerHTML = resources.map((r) =>
-      `<option value="${esc(r.resourceId)}" data-policy-override="${!r.eligible && !!r.canOverride}" ${r.eligible || r.canOverride ? "" : "disabled"}>${esc([r.title, r.resolution ? r.resolution + "p" : "", eligibilityReasonText(r)].filter(Boolean).join(" · "))}</option>`).join("");
+      `<option value="${esc(r.resourceId)}" data-policy-override="${!r.eligible && !!r.canOverride}" ${r.eligible || r.canOverride ? "" : "disabled"}>${esc([r.title, r.releaseVariant?.platform, subtitleText(r.subtitle), r.resolution ? r.resolution + "p" : "", r.releaseVariant?.codec, eligibilityReasonText(r)].filter(Boolean).join(" · "))}</option>`).join("");
     const selectedResource = resources.find((r) => r.eligible) || resources.find((r) => r.canOverride);
     if (selectedResource) $("radarResource").value = selectedResource.resourceId;
     $("radarSubscribeStatus").textContent = selectedResource ? t("radarSubscribeHint") : resources.length ? t("radarPolicyExcluded") : t("radarNoResources");
@@ -7985,6 +8135,20 @@ $("radarPlaceholders").onclick = () => runMaintenance("placeholders", "radar");
 $("repairMetadata").onclick = () => runMaintenance("metadata");
 $("settingsForm").onsubmit = (e) =>
   saveSettings(e).catch((x) => ($("saveState").textContent = x.message));
+$("collectorSearchSources").addEventListener("change", validateCollectorSources);
+let invalidSettingsField = null;
+$("settingsForm").addEventListener("invalid", (event) => {
+  event.preventDefault();
+  if (invalidSettingsField) return;
+  const field = event.target, panel = field.closest(".tab-panel");
+  invalidSettingsField = field;
+  if (panel) document.querySelector(`.settings-tabs [data-tab="${panel.dataset.panel}"]`)?.click();
+  for (let parent = field.parentElement; parent && parent !== $("settingsForm"); parent = parent.parentElement)
+    if (parent.tagName === "DETAILS") parent.open = true;
+  $("saveState").textContent = field.validationMessage;
+  field.focus();
+  setTimeout(() => { invalidSettingsField = null; }, 0);
+}, true);
 $("testQbt").onclick = () => testConnection("qbittorrent");
 $("testAniRss").onclick = () => testConnection("ani-rss");
 $("refreshLogs").onclick = loadLogs;

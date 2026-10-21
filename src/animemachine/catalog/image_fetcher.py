@@ -21,6 +21,25 @@ IMAGE_PRIORITY_RETRY = 900
 IMAGE_PRIORITY_MAINTENANCE = 1000
 
 
+def _fetch_cover(db_path: Path, anime_id: int, network: dict[str, Any], *, refresh: bool) -> str:
+    from . import service
+    from ..network import connectivity
+
+    for _attempt in range(2):
+        image = service.get_anime_image(db_path, anime_id, refresh=refresh, network=network, log_timing=False)
+        if image and image[1] != "image/svg+xml":
+            return "available"
+        with contextlib.closing(sqlite3.connect(db_path, timeout=5)) as db:
+            row = db.execute("SELECT error FROM anime_image WHERE anime_id=?", (anime_id,)).fetchone()
+        if row and row[0] == "no_cover":
+            return "no_image"
+        if connectivity.is_offline():
+            break
+        # Reuse learned routes and warm connections once after a transient
+        # failure, without waiting for a user poll or the full-catalog retry.
+    return "error:remote"
+
+
 def _worker_main(db_path: str, requests: Any, results: Any, workers: int, host_limit: int) -> None:
     """Run remote image I/O outside the Web process and reserve foreground capacity."""
     with contextlib.suppress(ValueError):
@@ -36,14 +55,7 @@ def _worker_main(db_path: str, requests: Any, results: Any, workers: int, host_l
         started = time.monotonic()
         try:
             with transport.bandwidth_limit(bandwidth if priority > 0 else 0):
-                image = service.get_anime_image(Path(db_path), anime_id, refresh=refresh, network=network,
-                                                log_timing=False)
-            if image and image[1] != "image/svg+xml":
-                status = "available"
-            else:
-                with contextlib.closing(sqlite3.connect(db_path, timeout=5)) as db:
-                    row = db.execute("SELECT error FROM anime_image WHERE anime_id=?", (anime_id,)).fetchone()
-                status = "no_image" if row and row[0] == "no_cover" else "error:remote"
+                status = _fetch_cover(Path(db_path), anime_id, network, refresh=refresh)
             return anime_id, status, time.monotonic() - started
         except BaseException as exc:  # keep a bad task from terminating the worker process
             return anime_id, f"error:{type(exc).__name__}", time.monotonic() - started
@@ -66,6 +78,7 @@ def _worker_main(db_path: str, requests: Any, results: Any, workers: int, host_l
     network_learning_suppressed = False
     fast_successes = 0
     foreground_latency_ewma: float | None = None
+    last_foreground_result = 0.0
     background_duration_ewma: float | None = None
     background_failure_ewma = 0.0
     last_budget: tuple[int, str, float | None, int, int] | None = None
@@ -113,6 +126,11 @@ def _worker_main(db_path: str, requests: Any, results: Any, workers: int, host_l
                     break
 
             active_foreground = sum(1 for _anime_id, active_priority in futures.values() if active_priority == 0)
+            if (not active_foreground and foreground_latency_ewma is not None
+                    and time.monotonic() - last_foreground_result >= 15.0):
+                # A completed slow cover must not throttle an otherwise idle
+                # background queue for the rest of the process lifetime.
+                foreground_latency_ewma = None
             adaptive_cap = max(0, target - reserve)
             resource_ratio = 1.0
             budget_reasons: list[str] = []
@@ -202,6 +220,7 @@ def _worker_main(db_path: str, requests: Any, results: Any, workers: int, host_l
                     completed_id, status, duration = future.result()
                     results.put((completed_id, status))
                     if priority == 0:
+                        last_foreground_result = time.monotonic()
                         foreground_latency_ewma = duration if foreground_latency_ewma is None else .25 * duration + .75 * foreground_latency_ewma
                     else:
                         background_duration_ewma = duration if background_duration_ewma is None else .20 * duration + .80 * background_duration_ewma

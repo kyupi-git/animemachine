@@ -435,7 +435,7 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertIn("8787", text)
             self.assertNotIn("127.0.0.1:8877", text)
             self.assertIn("2.20.3", text)
-            self.assertIn("deploy/compose/advanced/collector/.env.example", text)
+            self.assertIn("Torrent Collector", text)
             self.assertIn("ANM_CA_BUNDLE", text)
         for family in (("README.md", "README.en.md", "README.ja.md"),
                        ("docs/architecture.md", "docs/architecture.en.md", "docs/architecture.ja.md")):
