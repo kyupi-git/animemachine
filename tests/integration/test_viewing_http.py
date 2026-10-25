@@ -95,6 +95,28 @@ class ViewingHTTPTests(unittest.TestCase):
         self.assertIn('DVDRip', scoped['editions'][0]['label'])
         self.assertEqual(scoped['available'], scoped['editions'][0]['id'] == payload['editions'][0]['id'])
 
+    def test_inventory_published_between_reads_keeps_editions_and_queue_consistent(self):
+        rows = []
+        for version in ('DVDRip', 'BDRip'):
+            path = self.root / version / f'Show - 01 [{version}].mkv'
+            path.parent.mkdir()
+            path.write_bytes(b'media')
+            rows.append((path, 5, 1, 'preexisting', 'main_video'))
+        reads = 0
+
+        def inventory_rows(*_args):
+            nonlocal reads
+            reads += 1
+            return iter([] if reads == 1 else rows)
+
+        with mock.patch.object(playback, '_existing_rows', side_effect=inventory_rows), \
+                mock.patch.object(playback, 'inventory_pending', return_value=False):
+            with self.request(f'/api/anime/{self.anime_id}/playback') as response:
+                payload = json.load(response)
+        self.assertTrue(payload['available'])
+        self.assertEqual(1, payload['count'])
+        self.assertEqual(2, len(payload['editions']))
+
     def test_local_update_status_does_not_contact_release_provider(self):
         with mock.patch.object(application_update, 'status', side_effect=AssertionError('Internet forbidden')):
             with self.request('/api/update/status?local=1') as response:

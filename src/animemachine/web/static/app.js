@@ -2563,7 +2563,7 @@ function applyTheme() {
 }
 function applyLanguage() {
   localizeStaticUi();
-  $("manualLink").href = `/help/${language}/`;
+  $("manualLink").href = language === "en" ? "/help/en/" : language === "ja" ? "/help/ja/" : "/help/zh-Hans/";
   applyTheme();
   document
     .querySelectorAll("option[data-group]")

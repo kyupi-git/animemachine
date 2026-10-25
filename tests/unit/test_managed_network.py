@@ -93,6 +93,24 @@ class ManagedNetworkTests(unittest.TestCase):
         self.assertEqual(["mikanHost", "bgmApi"], result["manual"])
         self.assertFalse(any(name == "setConfig" for name, _ in self.client.calls))
 
+    def test_legacy_identity_upgrade_preserves_managed_routes_and_user_changes(self):
+        with mock.patch.object(network, 'probe', side_effect=self.mirror_only):
+            network.tick(self.client)
+            state = network._read()
+            state.pop('identityVersion')
+            state['identity'] = 'a' * 64
+            network._save(network._root() / 'ani-rss-network.json', state)
+            self.client.config['bgmApi'] = 'https://user.example'
+            self.client.calls.clear()
+            result = network.tick(self.client)
+        self.assertEqual(['bgmApi'], result['manual'])
+        self.assertEqual('https://mikan.sakiko.de', self.client.config['mikanHost'])
+        self.assertEqual('https://user.example', self.client.config['bgmApi'])
+        saved = network._read()
+        self.assertEqual(2, saved['identityVersion'])
+        self.assertEqual(network._client_identity(self.client.endpoint, self.client.key), saved['identity'])
+        self.assertFalse(any(name == 'setConfig' for name, _ in self.client.calls))
+
     def test_partial_failure_after_config_patch_is_resumed(self):
         with mock.patch.object(network, "probe", side_effect=self.mirror_only), \
                 mock.patch.object(network, "_migrate_feeds", side_effect=RuntimeError("temporarily unavailable")):

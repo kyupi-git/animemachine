@@ -668,6 +668,10 @@ def available_editions(db_path: Path, anime_id: int, config: dict[str, Any], sou
         return []
     candidates = collect_items(db_path, anime_id, config, source='' if source.startswith('edition:') else source,
                                cached_only=True, all_versions=True)
+    return _edition_choices(candidates)
+
+
+def _edition_choices(candidates: list[PlaybackItem]) -> list[dict[str, Any]]:
     groups: dict[str, dict[str, Any]] = {}
     edition_map = editions.classify([item.path for item in candidates])
     for item in candidates:
@@ -683,6 +687,25 @@ def available_editions(db_path: Path, anime_id: int, config: dict[str, Any], sou
             candidate = next(item for item in candidates if 'edition:' + edition_map[item.path][0] == row['id'])
             row['label'] += ' · ' + candidate.path.parent.name
     return rendered
+
+
+def inventory_snapshot(db_path: Path, anime_id: int, config: dict[str, Any], source: str = '',
+                       edition: str = '') -> tuple[list[PlaybackItem], list[dict[str, Any]]]:
+    """Derive the queue and edition choices from one inventory read."""
+    requested = edition or (source if source.startswith('edition:') else '')
+    if requested and source.startswith('ani-rss:'):
+        return [], []
+    candidates = collect_items(db_path, anime_id, config, source='' if source.startswith('edition:') else source,
+                               cached_only=True, all_versions=True)
+    if source.startswith('ani-rss:'):
+        return candidates, []
+    versions = _edition_choices(candidates)
+    if requested:
+        if not any(row['id'] == requested for row in versions):
+            return [], versions
+        edition_map = editions.classify([item.path for item in candidates])
+        candidates = [item for item in candidates if 'edition:' + edition_map[item.path][0] == requested]
+    return _default_main_queue(candidates), versions
 
 
 def _mapped_path(path: Path, mappings: list[dict[str, Any]]) -> str | None:

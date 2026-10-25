@@ -77,12 +77,16 @@ def _request_failed_recently(endpoint: registry.Endpoint) -> bool:
         return False
 
 
+def _client_identity(endpoint: str, key: str) -> str:
+    return hashlib.pbkdf2_hmac('sha256', key.encode(), b'AnimeMachine managed network\0' + endpoint.encode(), 210_000).hex()
+
+
 def request_failed(endpoint: str, key: str) -> None:
     """Actual outbound timeouts invalidate a successful probe, without editing user services."""
     if not owned(endpoint):
         return
     state = _read()
-    identity = hashlib.sha256((endpoint + '\0' + key).encode()).hexdigest()
+    identity = _client_identity(endpoint, key)
     if state.get('identity') != identity:
         return
     selected = state.get('selected', {}).get('mikanHost')
@@ -329,9 +333,13 @@ def tick(client, *, subject_id: int = 300649, operation_lock=None, cancelled=lam
         return {**status(), "changed": False}
     try:
         state = _read()
-        identity = hashlib.sha256((client.endpoint + "\0" + client.key).encode()).hexdigest()
-        if state.get("identity") != identity:
-            state = {"identity": identity, "managed": {}, "selected": {}, "recovery": {}}
+        identity = _client_identity(client.endpoint, client.key)
+        if state.get('identityVersion') is None and isinstance(state.get('identity'), str) and re.fullmatch(r'[0-9a-f]{64}', state['identity']):
+            # Keep the owned service's routing preferences on upgrade. The fresh
+            # config comparison below still preserves user changes and credentials.
+            state.update(identity=identity, identityVersion=2, nextCheck=0)
+        elif state.get("identity") != identity or state.get('identityVersion') != 2:
+            state = {"identity": identity, "identityVersion": 2, "managed": {}, "selected": {}, "recovery": {}}
         now = time.time()
         selected_source = next((item for item in registry.for_service('mikan')
                                 if item.base_url == state.get('selected', {}).get('mikanHost')), None)

@@ -6001,10 +6001,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     playback_params = urllib.parse.parse_qs(parsed.query)
                     source = (playback_params.get("source") or [""])[0]
                     edition = (playback_params.get("edition") or [""])[0]
-                    versions = playback.available_editions(db_path, anime_id, cfg, source)
-                    playback_source = edition or source
-                    edition_available = not edition or any(item['id'] == edition for item in versions)
-                    entries = playback.collect_items(db_path, anime_id, cfg, source=playback_source, cached_only=True) if edition_available else []
+                    entries, versions = playback.inventory_snapshot(db_path, anime_id, cfg, source, edition)
                     indexing = False
                     library_sleeping = sleeping_path(cfg.get('deployment', {}).get('libraryUncRoot', '/Library'), cfg)
                     if not entries and not source.startswith('ani-rss:') and not library_sleeping and playback.inventory_pending(db_path, anime_id):
@@ -6016,7 +6013,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             job = maintenance['library']
                             indexing = indexing or (job.get('state') == 'running' and job.get('scope') in {'all', str(anime_id)})
                     if not entries and not indexing and not source.startswith('ani-rss:'):
-                        entries = playback.collect_items(db_path, anime_id, cfg, source=playback_source, cached_only=True) if edition_available else []
+                        entries, versions = playback.inventory_snapshot(db_path, anime_id, cfg, source, edition)
                     remote_source = source.startswith("ani-rss:") or bool(entries and all(item.origin == "ani-rss" for item in entries))
                     self.json_response({
                         "available": bool(entries), "count": len(entries),
