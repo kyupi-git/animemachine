@@ -177,6 +177,7 @@ jobs:
     needs: container
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         architecture: [amd64, arm64]
     permissions:
@@ -198,11 +199,11 @@ jobs:
           version=$(cat VERSION)
           image="$IMAGE_REPOSITORY:$version"
           docker pull --platform "linux/$IMAGE_ARCHITECTURE" "$image"
-          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$IMAGE_ARCHITECTURE"
+          test "$(docker image inspect --platform "linux/$IMAGE_ARCHITECTURE" --format '{{.Architecture}}' "$image")" = "$IMAGE_ARCHITECTURE"
           docker tag "$image" "animemachine:$version"
           mkdir -p dist
           archive="dist/AnimeMachine-$version-docker-linux-$IMAGE_ARCHITECTURE.tar.gz"
-          docker save "animemachine:$version" | gzip -1 > "$archive"
+          docker save --platform "linux/$IMAGE_ARCHITECTURE" "animemachine:$version" | gzip -1 > "$archive"
           gzip --test "$archive"
           (cd dist && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
