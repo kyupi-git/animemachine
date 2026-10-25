@@ -20,11 +20,19 @@ TRANSLATED_FAMILIES = (
     ("docs/reference.md", "docs/reference.en.md", "docs/reference.ja.md"),
     ("deploy/compose/README.md", "deploy/compose/README.en.md", "deploy/compose/README.ja.md"),
 )
+MANUAL = ROOT / "docs" / "manual"
+MANUAL_LOCALES = ("zh-Hans", "en", "ja")
 
 
 def markdown_files() -> list[Path]:
     return sorted(
-        [*ROOT.glob("*.md"), *ROOT.joinpath("docs").glob("*.md"), *ROOT.joinpath("deploy/compose").rglob("*.md")]
+        [
+            *ROOT.glob("*.md"),
+            *ROOT.joinpath("docs").glob("*.md"),
+            *ROOT.joinpath("deploy/compose").rglob("*.md"),
+            *MANUAL.glob("*.md"),
+            *(path for locale in MANUAL_LOCALES for path in (MANUAL / locale).glob("*.md")),
+        ]
     )
 
 
@@ -54,7 +62,13 @@ def main() -> int:
                 continue
             if not target.exists():
                 errors.append(f"{source.relative_to(ROOT)}: missing local target: {raw}")
-    for family in TRANSLATED_FAMILIES:
+    manual_names = [{path.name for path in (MANUAL / locale).glob("*.md")} for locale in MANUAL_LOCALES]
+    if manual_names[1:] != [manual_names[0], manual_names[0]]:
+        errors.append("manual chapter sets differ between languages")
+    manual_families = [
+        tuple(f"docs/manual/{locale}/{name}" for locale in MANUAL_LOCALES) for name in sorted(manual_names[0])
+    ]
+    for family in (*TRANSLATED_FAMILIES, *manual_families):
         paths = [ROOT / name for name in family]
         missing = [name for name, path in zip(family, paths) if not path.is_file()]
         if missing:

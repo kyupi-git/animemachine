@@ -10,7 +10,7 @@ def _value(name: str) -> str:
     return os.getenv(name, "").strip()
 
 
-def apply_runtime_overrides(source: dict[str, Any]) -> dict[str, Any]:
+def apply_runtime_overrides(source: dict[str, Any], *, applied: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return a validated-config-shaped copy with deployment environment overlays.
 
     Environment variables are intentionally never written back to config.json.
@@ -20,6 +20,8 @@ def apply_runtime_overrides(source: dict[str, Any]) -> dict[str, Any]:
     download_client = components.setdefault("downloadClient", {})
     if value := _value("ANM_MANAGED_QBITTORRENT_URL"):
         download_client["endpoint"] = value
+        if applied is not None:
+            applied['components.downloadClient.endpoint'] = value
 
     ani_rss = components.setdefault("aniRss", {})
     for env_name, key in (
@@ -29,6 +31,8 @@ def apply_runtime_overrides(source: dict[str, Any]) -> dict[str, Any]:
     ):
         if value := _value(env_name):
             ani_rss[key] = value
+            if applied is not None:
+                applied[f'components.aniRss.{key}'] = value
 
     deployment = data.setdefault("deployment", {})
     for env_name, key in (
@@ -38,12 +42,16 @@ def apply_runtime_overrides(source: dict[str, Any]) -> dict[str, Any]:
     ):
         if value := _value(env_name):
             deployment[key] = value
+            if applied is not None:
+                applied[f'deployment.{key}'] = value
 
     external_path = _value("ANM_EXTERNAL_LIBRARY_DIR") or _value("ANM_ANI_RSS_LIBRARY_DIR")
     if external_path:
         libraries = data.get("externalLibraries")
         if isinstance(libraries, list) and libraries:
             libraries[0]["path"] = external_path
+            if applied is not None:
+                applied['externalLibraries.0.path'] = external_path
 
     network = data.setdefault("metadata", {}).setdefault("network", {})
     for env_name, key in (
@@ -52,4 +60,13 @@ def apply_runtime_overrides(source: dict[str, Any]) -> dict[str, Any]:
     ):
         if value := _value(env_name):
             network[key] = [part.strip() for part in value.split(";") if part.strip()]
+            if applied is not None:
+                applied[f'metadata.network.{key}'] = network[key]
     return data
+
+
+def override_values(source: dict[str, Any]) -> dict[str, Any]:
+    """Describe public configuration values managed by deployment, without secrets."""
+    applied: dict[str, Any] = {}
+    apply_runtime_overrides(source, applied=applied)
+    return applied

@@ -169,3 +169,25 @@ class Store:
         if session.token:
             with contextlib.closing(sqlite3.connect(self.path)) as db, db:
                 db.execute("DELETE FROM auth_session WHERE token_hash=?", (self._digest(session.token),))
+
+    def change_password(self, session: Session, current_password: str, new_password: str) -> None:
+        if not self.enabled or not session.token:
+            raise ValueError("password_change_unavailable")
+        if (not isinstance(current_password, str) or not isinstance(new_password, str)
+                or not 10 <= len(new_password) <= 256):
+            raise ValueError("password_length")
+        with contextlib.closing(sqlite3.connect(self.path)) as db:
+            row = db.execute("SELECT password_hash FROM auth_user WHERE id=? AND enabled=1", (session.user_id,)).fetchone()
+        if row is None or not _verify(current_password, str(row[0])):
+            raise ValueError("current_password_incorrect")
+        if current_password == new_password:
+            raise ValueError("password_unchanged")
+        encoded = _password_hash(new_password)
+        token_hash = self._digest(session.token)
+        with contextlib.closing(sqlite3.connect(self.path, timeout=15)) as db, db:
+            changed = db.execute("""UPDATE auth_user SET password_hash=? WHERE id=? AND enabled=1 AND password_hash=?
+                AND EXISTS(SELECT 1 FROM auth_session WHERE token_hash=? AND user_id=? AND expires_at>=?)""",
+                (encoded, session.user_id, row[0], token_hash, session.user_id, int(time.time()))).rowcount
+            if not changed:
+                raise ValueError("password_changed_retry")
+            db.execute("DELETE FROM auth_session WHERE user_id=? AND token_hash<>?", (session.user_id, token_hash))

@@ -623,16 +623,11 @@ def sync_runtime(*, scan_pool: bool = True, sync_ani_rss: bool = True) -> dict[s
         sync_status("ani_rss")
         result["aniRss"] = ani_rss.sync(DB, current_config)
     sync_status("external_library")
-    external_sources = list(current_config.get("externalLibraries", []))
-    ani_source = ani_rss.media_source(current_config)
-    if ani_source.get("path"):
-        external_sources = [source for source in external_sources
-                            if str(source.get("path")) != str(ani_source["path"])]
-    if sync_ani_rss and ani_source.get("enabled") and ani_source.get("path"):
-        external_sources.append(ani_source)
+    external_sources = external_library.configured_sources(current_config)
     result["externalLibraries"] = external_library.scan(
         DB, external_sources,
         progress=lambda stats: sync_status("external_library", details=stats),
+        config=current_config,
     )
     if RUNTIME_DB.is_file():
         sync_status("runtime_overlay")

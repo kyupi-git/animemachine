@@ -40,6 +40,17 @@ node --check src/animemachine/web/static/app.js
 python scripts/check_compose.py
 ```
 
+## Maintaining the manual
+
+The manual sources in `docs/manual` use VitePress to generate the offline pages bundled with the app. Install Node.js 22 or later, then run:
+
+```sh
+npm --prefix docs/manual ci --ignore-scripts
+npm --prefix docs/manual run build
+```
+
+After changing the text or referenced screenshots, rebuild and include `src/animemachine/web/static/help` in the change. The build checks local links, images, and the downloadable deployment template; the test entry point checks that generated pages match their sources. App users open **Manual** without installing Node.js.
+
 ## Repository layout
 
 | Directory | Contents |
@@ -55,4 +66,4 @@ python scripts/check_compose.py
 
 Keep each change focused on a concrete problem and describe the resulting behavior and validation. Use reproducible examples for title matching, relationships and metadata imports. Changes to stored data include a migration and upgrade tests. Maintain Chinese, English and Japanese interfaces and user documentation together.
 
-Automated tests use synthetic metadata and isolated temporary directories; download and player integration tests use a dedicated environment. Contributions contain source, maintained documentation and reproducible examples. Instance settings, credentials, media and build outputs stay local.
+Automated tests use synthetic metadata and isolated temporary directories; download and player integration tests use a dedicated environment. Contributions contain source, maintained documentation, bundled offline help, and reproducible examples. Instance settings, credentials, media, and release packages stay local.

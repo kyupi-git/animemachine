@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import datetime as dt
 import os
 from pathlib import Path
 import re
@@ -93,10 +94,61 @@ def _pending() -> dict[str, str] | None:
     if (_version_tuple(version) is None or (previous and _version_tuple(previous) is None)
             or (backup and not re.fullmatch(r"\.backup-[0-9a-f]{32}", backup))):
         return None
-    return {"version": version, "previous": previous, "backup": backup}
+    transaction = str(value.get("transaction") or "")
+    if transaction and not re.fullmatch(r"[0-9a-f]{32}", transaction):
+        return None
+    result = {"version": version, "previous": previous, "backup": backup}
+    if transaction:
+        result["transaction"] = transaction
+    return result
+
+
+def _finish_pending(pending: dict[str, str]) -> None:
+    # A health acknowledgement belongs only to the activation it checked.
+    pending = {"backup": "", **pending}
+    if _pending() == pending:
+        (_update_root() / "pending.json").unlink(missing_ok=True)
+
+
+def _record_rollback(pending: dict[str, str], restored: str) -> None:
+    path = _update_root() / "status.json"
+    try:
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        state["lastUpgrade"] = {
+            "status": "failed", "version": pending["version"], "restoredVersion": restored,
+            "mode": "docker", "message": "health_check_failed",
+            "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+        temporary = path.with_name(f".status-{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(state, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as exc:
+        print(f"Warning: application restored, but update result could not be saved: {exc}", file=sys.stderr, flush=True)
+
+
+def _recovery_pending(version: str) -> dict[str, str]:
+    # Older supervisors could lose pending.json. Still verify an active layer
+    # before trusting it, and retain the previous installed layer as fallback.
+    releases = _update_root() / "releases"
+    current = _version_tuple(version)
+    base = _version_tuple(_base_version())
+    candidates = [candidate.name for candidate in releases.iterdir()
+                  if _version_tuple(candidate.name) and base < _version_tuple(candidate.name) < current
+                  and _valid_release(candidate.name)] if releases.is_dir() and base and current else []
+    previous = max(candidates, key=_version_tuple) if candidates else ""
+    return {"version": version, "previous": previous, "backup": ""}
 
 
 def _rollback(pending: dict[str, str]) -> None:
+    pending = {"backup": "", **pending}
+    current_pending = _pending()
+    if current_pending is not None and current_pending != pending:
+        return
     backup = pending.get("backup", "")
     if backup:
         releases = _update_root() / "releases"
@@ -114,7 +166,8 @@ def _rollback(pending: dict[str, str]) -> None:
             _write_current(pending["version"])
         else:
             _clear_current()
-        (_update_root() / "pending.json").unlink(missing_ok=True)
+        _finish_pending(pending)
+        _record_rollback(pending, _selected_release()[1])
         return
     previous = pending.get("previous", "")
     base_tuple = _version_tuple(_base_version())
@@ -123,7 +176,8 @@ def _rollback(pending: dict[str, str]) -> None:
         _write_current(previous)
     else:
         _clear_current()
-    (_update_root() / "pending.json").unlink(missing_ok=True)
+    _finish_pending(pending)
+    _record_rollback(pending, _selected_release()[1])
 
 
 
@@ -281,7 +335,7 @@ def _await_pending(child: subprocess.Popen, pending: dict[str, str], arguments: 
             _rollback(pending)
             return None
         if _healthy(port, version, host):
-            (_update_root() / "pending.json").unlink(missing_ok=True)
+            _finish_pending(pending)
             if pending.get("backup"):
                 shutil.rmtree(_update_root() / "releases" / pending["backup"])
             return child.wait()
@@ -309,13 +363,21 @@ def main(arguments: list[str]) -> int:
     is_server = not arguments or arguments[0] == "run"
     while True:
         release_root, selected_version = _selected_release()
+        pending = _pending() if is_server else None
+        if pending and pending["version"] != selected_version:
+            # Activation stopped after writing rollback metadata but before
+            # publishing the new pointer. Continue using the previous layer.
+            _finish_pending(pending)
+            _record_rollback(pending, selected_version)
+            pending = None
+        if is_server and release_root is not None and pending is None:
+            pending = _recovery_pending(selected_version)
         env = os.environ.copy()
         if release_root is not None:
             existing = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = os.pathsep.join(value for value in (str(release_root), existing) if value)
         child = subprocess.Popen([sys.executable, "-m", "animemachine", *(arguments or ["run"])], env=env)
         _ACTIVE_CHILD = child
-        pending = _pending() if is_server else None
         if pending and pending.get("version") == selected_version:
             code = _await_pending(child, pending, arguments)
             if code is None:

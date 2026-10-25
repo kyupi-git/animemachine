@@ -466,6 +466,8 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(catalog.choose_display_english_title(["xxxHOLiC"]), "xxxHOLiC")
 
     def test_related_subject_kind_uses_archive_infobox(self):
+        self.assertEqual(catalog.related_subject_kind({'type': 1, 'platform': 1001,
+            'tags': [{'name': '轻小说改编'}], 'infobox': '{{Infobox animanga/Manga}}'}), 'manga')
         self.assertEqual(catalog.related_subject_kind({"type": 1, "infobox": "{{Infobox animanga/Manga}}"}), "manga")
         self.assertEqual(catalog.related_subject_kind({"type": 1, "tags": [{"name": "轻小说"}]}), "light_novel")
         self.assertEqual(catalog.related_subject_kind({"type": 1, "platform": 1001}), "manga")

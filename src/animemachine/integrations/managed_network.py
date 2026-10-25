@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sqlite3
 import threading
 import time
 import urllib.parse
@@ -28,6 +29,7 @@ _DEFAULTS = {"mikanHost": "https://mikanani.me", "bgmApi": "https://api.bgm.tv"}
 _SERVICES = {"mikanHost": "mikan", "bgmApi": "bangumi_api"}
 _LOCK = threading.Lock()
 _STATUS: dict = {"state": "idle"}
+_RECHECK = threading.Event()
 
 
 def _root() -> Path:
@@ -64,6 +66,32 @@ def _read() -> dict:
 
 def status() -> dict:
     return dict(_STATUS)
+
+
+def _request_failed_recently(endpoint: registry.Endpoint) -> bool:
+    try:
+        row = sources._health().snapshot(endpoint.id, 'ani-rss-mikan-request',
+                                         network_id=transport.network_environment_id())
+        return bool(row and 0 <= time.time() - float(row.get('lastFailureAt') or 0) < 300)
+    except (OSError, sqlite3.Error):
+        return False
+
+
+def request_failed(endpoint: str, key: str) -> None:
+    """Actual outbound timeouts invalidate a successful probe, without editing user services."""
+    if not owned(endpoint):
+        return
+    state = _read()
+    identity = hashlib.sha256((endpoint + '\0' + key).encode()).hexdigest()
+    if state.get('identity') != identity:
+        return
+    selected = state.get('selected', {}).get('mikanHost')
+    source = next((item for item in registry.for_service('mikan') if item.base_url == selected), None)
+    if source is None or 'mikanHost' in state.get('public', {}).get('manual', []):
+        return
+    sources._health().failure(source.id, 'ani-rss-mikan-request', 'upstream_timeout',
+                              network_id=transport.network_environment_id())
+    _RECHECK.set()
 
 
 @contextlib.contextmanager
@@ -157,9 +185,20 @@ def probe(endpoint: registry.Endpoint, config: dict, subject_id: int) -> bool:
     route = "environment_proxy" if _proxy(config, endpoint.base_url) else "direct"
     environment = transport.network_environment_id()
     store = sources._health()
+    deadline = start + (40 if endpoint.service == 'mikan' else 16)
     def get(url: str, limit: int = 8 * 1024 * 1024):
-        response = transport.request("GET", url, headers={"User-Agent": "ani-rss connectivity via AnimeMachine"},
-                                     timeout=4, max_bytes=limit, proxy_url=_proxy(config, url))
+        for attempt in range(2):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('source probe deadline exceeded')
+            try:
+                response = transport.request("GET", url, headers={"User-Agent": "ani-rss connectivity via AnimeMachine"},
+                                             timeout=min(8, remaining), deadline=deadline,
+                                             max_bytes=limit, proxy_url=_proxy(config, url))
+                break
+            except (httpx.TimeoutException, httpx.NetworkError):
+                if attempt:
+                    raise
         allowed = {urllib.parse.urlsplit(item.base_url).hostname for item in registry.for_service(endpoint.service)}
         if response.url.host not in allowed:
             raise ValueError("unexpected source redirect")
@@ -172,7 +211,10 @@ def probe(endpoint: registry.Endpoint, config: dict, subject_id: int) -> bool:
                     raise ValueError("metadata identity mismatch")
             else:
                 page = html.unescape(get(endpoint.base_url + "/Home").text)
-                matches = list(dict.fromkeys(re.findall(r"/Home/Bangumi/(\d+)", page, re.I)))[:3]
+                # Home starts with long-running titles whose full RSS can be
+                # several MiB. Probe newer public titles instead of mistaking
+                # the bounded download limit for a dead source.
+                matches = sorted(set(re.findall(r"/Home/Bangumi/(\d+)", page, re.I)), key=int, reverse=True)[:3]
                 if not matches or not re.search(r"(?:蜜柑|Mikan)", page, re.I):
                     raise ValueError("source did not return a Mikan page")
                 enclosure = None
@@ -203,9 +245,10 @@ def probe(endpoint: registry.Endpoint, config: dict, subject_id: int) -> bool:
 def _select(field: str, config: dict, subject_id: int, current: str, state: dict) -> str | None:
     endpoints = registry.for_service(_SERVICES[field])
     primary = next(item for item in endpoints if item.base_url == _DEFAULTS[field])
+    failed = {item.id for item in endpoints if field == 'mikanHost' and _request_failed_recently(item)}
     # Require consecutive failures before leaving the official source, and two
     # healthy periodic checks before returning from an established fallback.
-    first = probe(primary, config, subject_id)
+    first = primary.id not in failed and probe(primary, config, subject_id)
     if first:
         count = int(state.setdefault("recovery", {}).get(field, 0)) + 1
         state["recovery"][field] = count
@@ -214,9 +257,9 @@ def _select(field: str, config: dict, subject_id: int, current: str, state: dict
         chosen = next((item for item in endpoints if item.base_url == current), None)
         return current if chosen and probe(chosen, config, subject_id) else primary.base_url
     state.setdefault("recovery", {})[field] = 0
-    if current == primary.base_url and probe(primary, config, subject_id):
+    if primary.id not in failed and current == primary.base_url and probe(primary, config, subject_id):
         return primary.base_url
-    alternatives = [item for item in endpoints if item.id != primary.id]
+    alternatives = [item for item in endpoints if item.id != primary.id and item.id not in failed]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="anm-managed-route") as pool:
         results = list(zip(alternatives, pool.map(lambda item: probe(item, config, subject_id), alternatives)))
     healthy = [item for item, good in results if good]
@@ -290,10 +333,14 @@ def tick(client, *, subject_id: int = 300649, operation_lock=None, cancelled=lam
         if state.get("identity") != identity:
             state = {"identity": identity, "managed": {}, "selected": {}, "recovery": {}}
         now = time.time()
-        if 0 <= state.get("nextCheck", 0) - now <= 1800:
+        selected_source = next((item for item in registry.for_service('mikan')
+                                if item.base_url == state.get('selected', {}).get('mikanHost')), None)
+        recheck = _RECHECK.is_set() or bool(selected_source and _request_failed_recently(selected_source))
+        if not recheck and 0 <= state.get("nextCheck", 0) - now <= 1800:
             _STATUS.clear()
             _STATUS.update(state.get("public", {"state": "idle"}), changed=False)
             return status()
+        _RECHECK.clear()
         _STATUS.update(state="checking")
         config = client.call("config", timeout=8)
         if not isinstance(config, dict):
@@ -344,7 +391,7 @@ def tick(client, *, subject_id: int = 300649, operation_lock=None, cancelled=lam
         migrations, complete = (_migrate_feeds(client, selected["mikanHost"], operation_lock=operation_lock, cancelled=cancelled)
                                 if "mikanHost" in selected and "mikanHost" not in manual else (0, True))
         ready = len(healthy | set(manual)) == 2 and complete
-        state.update(nextCheck=now + (900 if ready and complete else 30),
+        state.update(nextCheck=now + (900 if ready and complete and not _RECHECK.is_set() else 30),
                      updatedAt=dt.datetime.now(dt.timezone.utc).isoformat())
         public = {"state": "ready" if ready else "retrying", "manual": manual,
                   "sources": {field: value for field, value in selected.items() if field not in manual}}

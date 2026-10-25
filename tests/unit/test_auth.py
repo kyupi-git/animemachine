@@ -6,6 +6,42 @@ from animemachine.api import auth
 
 
 class AuthTests(unittest.TestCase):
+    def test_admin_and_regular_users_can_change_only_their_own_password(self):
+        with tempfile.TemporaryDirectory() as raw:
+            store = auth.Store(Path(raw) / 'auth.sqlite3', enabled=True,
+                               bootstrap_username='admin', bootstrap_password='initial-admin-password')
+            store.create_user('viewer', 'initial-viewer-password', 'user')
+            for username, old in [('admin','initial-admin-password'),('viewer','initial-viewer-password')]:
+                with self.subTest(username=username):
+                    first = store.login(username, old)
+                    other = store.login(username, old)
+                    before = store.users()
+                    with self.assertRaisesRegex(ValueError, 'current_password_incorrect'):
+                        store.change_password(first, 'wrong', 'new-account-password')
+                    self.assertIsNotNone(store.from_cookie(f'anm_session={other.token}'))
+                    store.change_password(first, old, 'new-account-password')
+                    self.assertIsNone(store.login(username, old))
+                    self.assertIsNotNone(store.login(username, 'new-account-password'))
+                    self.assertIsNone(store.from_cookie(f'anm_session={other.token}'))
+                    self.assertIsNotNone(store.from_cookie(f'anm_session={first.token}'))
+                    self.assertEqual(before, store.users())
+                    with self.assertRaisesRegex(ValueError, 'password_changed_retry'):
+                        store.change_password(other, 'new-account-password', 'another-new-password')
+
+    def test_password_change_validates_length_and_requires_real_authentication(self):
+        with tempfile.TemporaryDirectory() as raw:
+            store = auth.Store(Path(raw) / 'auth.sqlite3', enabled=True,
+                               bootstrap_username='admin', bootstrap_password='initial-admin-password')
+            session = store.login('admin', 'initial-admin-password')
+            for password in ['short','x'*257,[],True,None]:
+                with self.assertRaisesRegex(ValueError, 'password_length'):
+                    store.change_password(session, 'initial-admin-password', password)
+            with self.assertRaisesRegex(ValueError, 'password_unchanged'):
+                store.change_password(session, 'initial-admin-password', 'initial-admin-password')
+            local = auth.Store(Path(raw) / 'local.sqlite3', enabled=False)
+            with self.assertRaisesRegex(ValueError, 'password_change_unavailable'):
+                local.change_password(local.from_cookie(''), '', 'new-password-123')
+
     def test_hidden_titles_are_account_scoped_idempotent_and_persisted(self):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "auth.sqlite3"

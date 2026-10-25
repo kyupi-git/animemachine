@@ -6,6 +6,7 @@ import base64
 import contextlib
 import dataclasses
 import hashlib
+import json
 import mimetypes
 import os
 import re
@@ -23,20 +24,16 @@ from ..catalog.episodes import playback_episode
 from ..storage import AVAILABLE, status_for_path
 from ..storage import path_policy
 from ..storage.sleep import require_awake, sleeping_path
+from ..library import media as library_media, editions
 
-VIDEO_SUFFIXES = {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ogm"}
+VIDEO_SUFFIXES = library_media.VIDEO_SUFFIXES
 SUBTITLE_SUFFIXES = {".ass", ".ssa", ".srt", ".vtt", ".sup", ".sub"}
-BONUS = re.compile(
-    r"(?i)(?:^|[/\\\s._\-\[\](){}])(?:ncop|nced|op(?:ening)?|ed(?:ing)?|cm|pv|menu|preview|trailer|"
-    r"promotional|sp|mini(?:ature)?(?:[ ._-]+character)?[ ._-]+anime|picture[ ._-]+drama|"
-    r"short[ ._-]+anime|series[ ._-]+extras|映像特典|予告|特典映像|番宣|ミニアニメ|ピクチャードラマ)"
-    r"(?:\d{1,3})?(?:[/\\\s._\-\[\](){}]|$)"
-)
+BONUS = library_media.BONUS
 EPISODE_PATTERNS = (
     re.compile(r"(?i)\bS(?P<season>\d{1,2})[ ._-]*E(?P<episode>\d{1,4})(?:[ ._-]*E(?P<episode2>\d{1,4}))?\b"),
     re.compile(r"(?i)(?:^|[\[\s._-])(?:EP?|Episode)[ ._-]*(?P<episode>\d{1,4})(?:v\d+)?(?:[\]\s._-]|$)"),
-    re.compile(r"(?:第\s*)?(?P<episode>\d{1,4})(?:\.\d+)?\s*(?:話|话|集)"),
-    re.compile(r"(?:^|[\[\s._-])(?P<episode>\d{1,3})(?:v\d+)?(?:[\]\s._-]|$)"),
+    re.compile(r"(?:第\s*)?(?P<episode>\d{1,4}(?:\.\d+)?)\s*(?:話|话|集)"),
+    re.compile(r"(?:^|[\[\s._-])(?P<episode>\d{1,3}(?:\.\d+)?)(?:v\d+)?(?:[\]\s._-]|$)"),
 )
 
 
@@ -337,9 +334,7 @@ def _natural(value: str) -> tuple[Any, ...]:
 
 
 def _is_main_video(path: Path, file_kind: str | None = None) -> bool:
-    if path.suffix.casefold() not in VIDEO_SUFFIXES or BONUS.search(path.as_posix()):
-        return False
-    return not file_kind or file_kind == "main_video"
+    return library_media.is_main_video(path, file_kind)
 
 
 def _default_main_queue(items: list[PlaybackItem]) -> list[PlaybackItem]:
@@ -351,8 +346,20 @@ def _default_main_queue(items: list[PlaybackItem]) -> list[PlaybackItem]:
         (numbered.setdefault(item.episode, []) if item.episode is not None else unnumbered).append(item)
 
     selected = [max(candidates, key=lambda item: (
-        origin_rank.get(item.origin, 0), item.bytes
+        origin_rank.get(item.origin, 0), editions.quality(item.path if item.locator.source_type == 'local' else Path(item.locator.name)), item.bytes
     )) for candidates in numbered.values()]
+    if not numbered and len(unnumbered) > 1:
+        # A movie can have several unnumbered editions. Keep the files belonging
+        # to one edition together instead of playing the same film repeatedly.
+        edition_map = editions.classify([item.path for item in unnumbered if item.locator.source_type == 'local'])
+        groups: dict[str, list[PlaybackItem]] = {}
+        for item in unnumbered:
+            key = edition_map[item.path][0] if item.locator.source_type == 'local' else item.origin
+            groups.setdefault(key, []).append(item)
+        unnumbered = max(groups.values(), key=lambda group: (
+            max(origin_rank.get(item.origin, 0) for item in group),
+            max(editions.quality(item.path) if item.locator.source_type == 'local' else (0, 0) for item in group),
+            sum(item.bytes for item in group)))
     selected.extend(unnumbered)
     return selected
 
@@ -367,6 +374,19 @@ def configured_media_roots(config: dict[str, Any]) -> list[Path]:
     if ani_rss_media:
         roots.append(Path(ani_rss_media))
     return roots
+
+
+def _configured_path(path: Path, config: dict[str, Any]) -> bool:
+    return any(_cached_within(path, root) for root in configured_media_roots(config))
+
+
+def _cached_within(path: Path, root: Path) -> bool:
+    target = os.path.normcase(os.path.abspath(str(path)))
+    boundary = os.path.normcase(os.path.abspath(str(root)))
+    try:
+        return os.path.commonpath((target, boundary)) == boundary
+    except ValueError:
+        return False
 
 
 def ani_rss_media_path_state(config: dict[str, Any]) -> str:
@@ -415,6 +435,14 @@ def _path_key(path: Path) -> str:
 
 
 def _existing_rows(db: sqlite3.Connection, anime_id: int, expected_count: int | None) -> Iterable[tuple[Path, int, float | None, str, str | None]]:
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_local_file'").fetchone():
+        for filename, size, kind in db.execute(
+                "SELECT f.absolute_path,f.size,f.file_kind FROM runtime_local_file f "
+                "JOIN runtime_work w ON w.target_unc=f.owner_path "
+                "WHERE w.anime_id=? AND w.library_state IN ('existing','downloading','queued') "
+                "ORDER BY f.absolute_path", (anime_id,)):
+            path = Path(filename)
+            yield path, int(size), playback_episode(db, anime_id, _episode(path, expected_count=expected_count), expected_count), "preexisting", str(kind)
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_asset'").fetchone():
         for row in db.execute("""SELECT a.final_path,a.bytes,a.source_file_index,a.source_info_hash,
                                   f.file_kind
@@ -424,16 +452,20 @@ def _existing_rows(db: sqlite3.Connection, anime_id: int, expected_count: int | 
             path = Path(str(row[0]))
             yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, expected_count=expected_count), expected_count), "managed", str(row[4] or "") or None
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_media_file'").fetchone():
-        for row in db.execute("""SELECT absolute_path,size,episode_number FROM external_media_file
+        for row in db.execute("""SELECT f.absolute_path,f.size,f.episode_number,s.kind FROM external_media_file f
+                                  JOIN external_library_source s USING(source_id)
                                   WHERE anime_id=? AND match_state='verified' ORDER BY absolute_path""", (anime_id,)):
             path = Path(str(row[0]))
-            yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, float(row[2]) if row[2] is not None else None, expected_count), expected_count), "external", "main_video"
+            yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, float(row[2]) if row[2] is not None else None, expected_count), expected_count), 'preexisting' if row[3] == 'local' else "external", "main_video"
 
 
 def _scan_preexisting(db: sqlite3.Connection, anime_id: int, config: dict[str, Any], known: set[str], expected_count: int | None) -> Iterable[tuple[Path, int, float | None, str, str | None]]:
     if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_work'").fetchone():
         return
     for target, state in db.execute("SELECT target_unc,library_state FROM runtime_work WHERE anime_id=?", (anime_id,)):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_local_file' AND type='table'").fetchone() and db.execute(
+                'SELECT 1 FROM runtime_local_file WHERE owner_path=? LIMIT 1', (target,)).fetchone():
+            continue
         root = Path(str(target))
         if state not in {"existing", "downloading", "queued"} or not _allowed(root, config):
             continue
@@ -472,6 +504,7 @@ def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str
                     continue
                 marks = ','.join('?' for _ in chunk)
             rows = []
+            known_main_paths: set[str] = set()
             if {'runtime_asset', 'runtime_work'} <= tables:
                 rows.extend(db.execute(f"""SELECT w.anime_id,a.final_path,NULL,k.episode_count
                     FROM runtime_asset a JOIN runtime_work w ON w.target_unc=a.owner_path
@@ -480,9 +513,16 @@ def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str
                 rows.extend(db.execute(f"""SELECT m.anime_id,m.absolute_path,m.episode_number,k.episode_count
                     FROM external_media_file m JOIN anime_work k ON k.id=m.anime_id
                     WHERE m.match_state='verified' AND m.anime_id IN ({marks})""", chunk))
+            if {'runtime_local_file', 'runtime_work'} <= tables:
+                local_rows = list(db.execute(f"""SELECT w.anime_id,f.absolute_path,NULL,k.episode_count
+                    FROM runtime_local_file f JOIN runtime_work w ON w.target_unc=f.owner_path
+                    JOIN anime_work k ON k.id=w.anime_id WHERE f.file_kind='main_video'
+                    AND w.anime_id IN ({marks})""", chunk))
+                rows.extend(local_rows)
+                known_main_paths.update(str(row[1]) for row in local_rows)
             for anime_id, filename, hint, expected in rows:
                 path = Path(filename)
-                if sleeping_path(path, config) or not _is_main_video(path):
+                if not _configured_path(path, config) or sleeping_path(path, config) or not _is_main_video(path, 'main_video' if str(filename) in known_main_paths else None):
                     continue
                 episode = playback_episode(db, anime_id, _episode(path, hint, expected), expected)
                 if episode is not None:
@@ -498,8 +538,37 @@ def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str
     return latest
 
 
+def latest_known_episodes(db_path: Path, anime_ids: list[int], config: dict[str, Any], *,
+                          expected_identities: dict[int, int] | None = None) -> dict[int, float]:
+    """Combine indexed media and last-known resource reports without remote I/O."""
+    latest = latest_cached_episodes(db_path, anime_ids, config, expected_identities=expected_identities)
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for offset in range(0, len(anime_ids), 400):
+            chunk = anime_ids[offset:offset + 400]
+            marks = ','.join('?' for _ in chunk)
+            identities = dict(db.execute(f'SELECT id,bgm_id FROM anime_work WHERE id IN ({marks})', chunk))
+            for table, clause in (('ani_rss_subscription', 'deleted_at IS NULL'), ('ani_rss_release_state', '1')):
+                if table not in tables:
+                    continue
+                for identity, episode in db.execute(f'''SELECT anime_id,MAX(current_episode) FROM {table}
+                    WHERE {clause} AND anime_id IN ({marks}) GROUP BY anime_id''', chunk):
+                    if expected_identities is not None and expected_identities.get(identity) != identities.get(identity):
+                        continue
+                    number = playback_episode(db, identity, episode)
+                    if number is not None and number > 0:
+                        latest[identity] = max(latest.get(identity, number), number)
+            if 'ani_rss_movie_release_state' in tables:
+                for identity, in db.execute(f'''SELECT r.anime_id FROM ani_rss_movie_release_state r
+                    JOIN anime_work w ON w.id=r.anime_id WHERE w.media_code='movie'
+                    AND r.last_release_at<>'' AND r.anime_id IN ({marks})''', chunk):
+                    if expected_identities is None or expected_identities.get(identity) == identities.get(identity):
+                        latest[identity] = max(latest.get(identity, 1), 1)
+    return latest
+
+
 def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, source: str = "",
-                  cached_only: bool = False) -> list[PlaybackItem]:
+                  cached_only: bool = False, all_versions: bool = False) -> list[PlaybackItem]:
     """Return a deterministic main-feature queue without opening media payloads."""
     if source.startswith("ani-rss:"):
         remote_id = source.split(":", 1)[1].strip()
@@ -517,7 +586,14 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
         items.sort(key=lambda item: (item.episode is None, item.episode or 0, _natural(item.name)))
         return items
 
-    source_root = authorize_media_path(Path(source), config) if source else None
+    edition = source.split(':', 1)[1] if source.startswith('edition:') else ''
+    if source.startswith('edition:') and not re.fullmatch(r'[0-9a-f]{24}', edition):
+        raise ValueError('playback edition is invalid')
+    source_root = None
+    if source and not edition:
+        source_root = Path(source) if cached_only else authorize_media_path(Path(source), config)
+        if cached_only and (not _configured_path(source_root, config) or sleeping_path(source_root, config)):
+            return []
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         work = db.execute("SELECT bgm_id,title_ja,episode_count FROM anime_work WHERE id=?", (anime_id,)).fetchone()
@@ -525,17 +601,24 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
             raise ValueError("anime not found")
         expected_count = int(work["episode_count"]) if work["episode_count"] is not None else None
         rows = list(_existing_rows(db, anime_id, expected_count))
-        rows = [row for row in rows if not sleeping_path(row[0], config)]
+        rows = [row for row in rows if _configured_path(row[0], config) and not sleeping_path(row[0], config)]
         if not cached_only:
             known = {_path_key(row[0]) for row in rows}
             rows.extend(_scan_preexisting(db, anime_id, config, known, expected_count))
     items: list[PlaybackItem] = []
     seen: set[tuple[str, int]] = set()
+    edition_map = editions.classify([row[0] for row in rows if _is_main_video(row[0], row[4])]) if edition else {}
     for path, recorded_size, episode, origin, file_kind in rows:
+        if edition and (path not in edition_map or edition_map[path][0] != edition):
+            continue
+        if source_root and not (_cached_within(path, source_root) if cached_only else _under(path, source_root)):
+            continue
         if cached_only:
             # Inventory is only a candidate. Opening the token still authorizes and
             # validates the file against the current roots and sleep schedule.
-            if _is_main_video(path, file_kind):
+            identity = (os.path.normcase(os.path.abspath(str(path))), recorded_size)
+            if identity not in seen and _is_main_video(path, file_kind):
+                seen.add(identity)
                 prefix = f"{_episode_label(episode)} · " if episode is not None else ""
                 items.append(PlaybackItem(MediaLocator.local(path, recorded_size), prefix + path.stem,
                                           episode, recorded_size, origin, int(work["bgm_id"])))
@@ -560,9 +643,46 @@ def collect_items(db_path: Path, anime_id: int, config: dict[str, Any], *, sourc
         seen.add(identity)
         prefix = f"{_episode_label(episode)} · " if episode is not None else ""
         items.append(PlaybackItem(MediaLocator.local(path, actual_size), prefix + path.stem, episode, actual_size, origin, int(work["bgm_id"])))
-    items = _default_main_queue(items)
+    items = items if all_versions else _default_main_queue(items)
     items.sort(key=lambda item: (item.episode is None, item.episode or 0, _natural(item.name)))
     return items
+
+
+def inventory_pending(db_path: Path, anime_id: int) -> bool:
+    with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='runtime_work' AND type='table'").fetchone():
+            return False
+        row = db.execute("""SELECT c.evidence_json FROM runtime_work w LEFT JOIN runtime_completeness c
+            ON c.anime_id=w.anime_id WHERE w.anime_id=? AND w.library_state='existing' LIMIT 1""", (anime_id,)).fetchone()
+        if row is None:
+            return False
+        try:
+            evidence = json.loads(row[0] or '{}')
+            return not isinstance(evidence, dict) or evidence.get('mediaInventoryVersion') != 1
+        except (ValueError, TypeError):
+            return True
+
+
+def available_editions(db_path: Path, anime_id: int, config: dict[str, Any], source: str = '') -> list[dict[str, Any]]:
+    if source.startswith('ani-rss:'):
+        return []
+    candidates = collect_items(db_path, anime_id, config, source='' if source.startswith('edition:') else source,
+                               cached_only=True, all_versions=True)
+    groups: dict[str, dict[str, Any]] = {}
+    edition_map = editions.classify([item.path for item in candidates])
+    for item in candidates:
+        key, label = edition_map[item.path]
+        group = groups.setdefault(key, {'id': 'edition:' + key, 'label': label, 'episodes': set(), 'count': 0})
+        group['episodes'].add(item.episode)
+        group['count'] += 1
+    rendered = [{'id': row['id'], 'label': row['label'], 'count': len(row['episodes']) if None not in row['episodes'] else row['count']}
+                for row in sorted(groups.values(), key=lambda row: (-len(row['episodes']), row['label']))]
+    repeated = {row['label'] for row in rendered if sum(other['label'] == row['label'] for other in rendered) > 1}
+    for row in rendered:
+        if row['label'] in repeated:
+            candidate = next(item for item in candidates if 'edition:' + edition_map[item.path][0] == row['id'])
+            row['label'] += ' · ' + candidate.path.parent.name
+    return rendered
 
 
 def _mapped_path(path: Path, mappings: list[dict[str, Any]]) -> str | None:

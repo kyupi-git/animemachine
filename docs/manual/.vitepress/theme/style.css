@@ -1,0 +1,17 @@
+:root { --vp-c-brand-1: #216f68; --vp-c-brand-2: #2c8c82; --vp-c-brand-3: #36998c; --vp-font-family-base: system-ui, 'Noto Sans SC', 'Noto Sans JP', sans-serif; }
+.dark { --vp-c-brand-1: #7ac7b8; --vp-c-brand-2: #57ad9e; --vp-c-brand-3: #36998c; }
+.vp-doc p, .vp-doc li { line-height: 1.85; }
+.vp-doc img { display: block; width: auto; max-width: 100%; height: auto; border-radius: 9px; border: 1px solid var(--vp-c-divider); margin: 20px auto 10px; }
+.vp-doc img[alt*="目录示意"], .vp-doc img[alt*="Folder mapping"], .vp-doc img[alt*="フォルダー対応"] { max-width: min(640px, 100%); }
+.vp-doc h2 { margin-top: 40px; }
+html[lang="zh-Hans"] { --vp-code-copy-copied-text-content: '已复制'; }
+html[lang="ja"] { --vp-code-copy-copied-text-content: 'コピー済み'; }
+.vp-doc .custom-block { border-radius: 9px; }
+.vp-doc .custom-block p { line-height: 1.7; }
+.vp-doc table { width: 100%; }
+.vp-doc a:has(> img) { cursor: zoom-in; }
+.VPDoc { --vp-layout-max-width: 1440px; }
+.back-to-app { margin-left: 18px; font-size: 13px; color: var(--vp-c-brand-1); white-space: nowrap; }
+.back-to-app-mobile { display: block; padding: 14px 0; color: var(--vp-c-brand-1); }
+@media (max-width: 960px) { .back-to-app { display: none; } }
+@media (max-width: 640px) { .vp-doc table { font-size: 13px; } .vp-doc img { border-radius: 5px; } }

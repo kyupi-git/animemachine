@@ -4,6 +4,8 @@
 
 AnimeMachine is an anime library manager with Chinese, English, and Japanese interfaces. It combines title metadata, media files, and subscription progress, with support for search, seasonal subscriptions, collection management, series relationships, and playback. It runs on Windows, Linux, macOS, and Docker.
 
+[User manual](docs/manual/en/index.md) · [Quick setup](docs/guide.en.md#start) · [Troubleshooting](docs/manual/en/troubleshooting.md). After starting the app, choose **Manual** at the top of the page to read the illustrated steps offline.
+
 ![Browse covers and see resource availability and collection status](docs/images/library-overview.en.png)
 
 ## Features
@@ -19,7 +21,7 @@ AnimeMachine is an anime library manager with Chinese, English, and Japanese int
 
 ## Watch this week's episodes in one playlist
 
-Click **Continue watching** in Release radar, select titles, adjust each title’s episode range, and reorder them. By default, each title starts with its next unfinished episode and continues to the latest playable episode. With the PotPlayer extension installed, playback also resumes from the saved position.
+Click **Continue watching** in Release radar to select subscribed TV titles with new episodes to watch, adjust each title’s episode range, and reorder them. By default, each title starts with its next unfinished episode and continues to the latest playable episode. With the PotPlayer extension installed, playback also resumes from the saved position.
 
 ![Actual playback in PotPlayer, with several seasonal titles in the playlist sidebar](docs/images/potplayer-weekly.en.png)
 

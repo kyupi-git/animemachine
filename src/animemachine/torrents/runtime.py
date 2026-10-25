@@ -23,19 +23,20 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from ..config.loader import (archive_group_enabled, canonical_resolution, manual_policy_override, option_enabled, resource_group_enabled,
-                        region_policy_enabled, serial_group_matches, serial_profile_language,
+                        region_policy_enabled, serial_group_matches, serial_profile_language, archive_group_id, group_variant_enabled,
                         serial_rule_enabled, source_family)
 from . import differential as differential_plan
 from . import season_guard
 from .variants import release_variant
 from ..library import external as external_library
+from ..library import media as library_media
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
 
 
-VIDEO = {".mkv", ".mp4", ".m2ts", ".ts", ".avi", ".mov", ".webm", ".flv", ".wmv"}
+VIDEO = library_media.VIDEO_SUFFIXES
 AUDIO = {".flac", ".wav", ".ape", ".aac", ".m4a", ".mp3", ".ac3", ".eac3", ".dts"}
 SUBTITLE = {".ass", ".ssa", ".srt", ".sup", ".vtt"}
-BONUS_VIDEO = re.compile(r"(?i)(?:^|[/\\\s._\-\[\](){}])(ncop|nced|cm|pv|menu|preview|trailer|promotional|映像特典|予告|特典)(?:\d{1,3})?(?:[/\\\s._\-\[\](){}]|$)")
+BONUS_VIDEO = library_media.BONUS
 MAL_URL = re.compile(r"myanimelist\.net/anime/(\d+)")
 _STATS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _STATS_LOCK = threading.Lock()
@@ -142,7 +143,7 @@ def file_kind(path: str) -> str:
     suffix = PurePosixPath(path.replace("\\", "/")).suffix.casefold()
     lowered = path.casefold()
     if suffix in VIDEO:
-        return "bonus_video" if BONUS_VIDEO.search(path) else "main_video"
+        return "bonus_video" if library_media.is_bonus_video(path) else "main_video"
     if suffix in AUDIO:
         return "cd_audio" if re.search(r"(?i)(?:^|[/\\])(?:cds?|ost|soundtrack)(?:[/\\]|\b)", path) else "audio"
     if suffix in SUBTITLE:
@@ -157,7 +158,9 @@ def file_kind(path: str) -> str:
 
 
 def migrate_overlay(db: sqlite3.Connection) -> None:
+    from ..library import inventory
     db.executescript(OVERLAY_SCHEMA)
+    inventory.migrate(db)
     columns = {row[1] for row in db.execute("PRAGMA table_info(runtime_torrent)")}
     for name, declaration in {"release_unit": "TEXT NOT NULL DEFAULT 'unknown'", "volume_sequence_json": "TEXT NOT NULL DEFAULT '[]'", "episode_sequence_json": "TEXT NOT NULL DEFAULT '[]'"}.items():
         if name not in columns:
@@ -653,7 +656,10 @@ def collection_state(db: sqlite3.Connection, anime_id: int, *, include_ani_rss: 
         "SELECT library_state FROM runtime_work WHERE anime_id=?", (anime_id,))}
     if "existing" in states:
         return "local"
-    if external_library.status(db, anime_id) or (include_ani_rss and _ani_rss_external_status(db, anime_id)):
+    media = external_library.status(db, anime_id)
+    if media and media['state'] == 'existing':
+        return 'local'
+    if media or (include_ani_rss and _ani_rss_external_status(db, anime_id)):
         return "external"
     if states & {"queued", "downloading"}:
         return "submitted"
@@ -668,7 +674,7 @@ def library_status(db: sqlite3.Connection, anime_id: int, *, include_ani_rss: bo
     if not works:
         if external and ani_external:
             targets = [*external["targets"], *ani_external["targets"]]
-            return {"state": "external", "managed": False, "preferredOrigin": "external",
+            return {"state": external['state'], "managed": False, "preferredOrigin": "external",
                     "coexistingExternal": True, "externalComplete": False,
                     "inspectionMode": "external_readonly", "targets": targets}
         return external or ani_external or {"state": "not_in_library_catalog", "managed": False, "inspectionMode": "none", "targets": []}
@@ -724,7 +730,8 @@ def library_status(db: sqlite3.Connection, anime_id: int, *, include_ani_rss: bo
     preferred_origin = "native"
     expected_episode_row = db.execute("SELECT episode_count FROM anime_work WHERE id=?", (anime_id,)).fetchone()
     expected_episodes = int(expected_episode_row[0] or 0) if expected_episode_row else 0
-    external_complete = bool(external and expected_episodes and len(external.get("observedEpisodes", [])) >= expected_episodes)
+    external_complete = bool(external and external['state'] == 'external' and expected_episodes
+                             and len(external.get("observedEpisodes", [])) >= expected_episodes)
     if external_complete and managed_any and not complete_managed_bdrip:
         # A complete external WEB edition remains logically preferred while a
         # managed BDRip is still an episode/volume increment. Both stay visible.
@@ -776,11 +783,15 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
             f"{row['torrent_path']} {row['info_name']} {manifest_text}",
             row["effective_group"], serial_language) if family == "serial" else []
         if family == "serial":
-            group_enabled = any(serial_rule_enabled(config["torrentPolicy"], serial_language, match["id"]) for match in serial_matches)
+            group_enabled = any(serial_rule_enabled(config["torrentPolicy"], serial_language, match["id"])
+                                and group_variant_enabled(config["torrentPolicy"], family, match["id"], row["info_name"], serial_language)
+                                for match in serial_matches)
             if not serial_matches:
                 group_enabled = bool(allow_unlisted.get("resourceGroup", False))
         else:
-            group_enabled = archive_group_enabled(config["torrentPolicy"], row["effective_group"])
+            group_enabled = (archive_group_enabled(config["torrentPolicy"], row["effective_group"])
+                             and group_variant_enabled(config["torrentPolicy"], family,
+                                archive_group_id(config["torrentPolicy"], row["effective_group"]), row["info_name"]))
         resolution = f"{row['video_height']}{row['video_scan'] or 'p'}" if row["video_height"] else "unknown"
         resolution_enabled = option_enabled(resolutions, canonical_resolution(resolution), allow_unlisted.get("resolution", True))
         # Archive releases intentionally ignore subtitle presence. Serial

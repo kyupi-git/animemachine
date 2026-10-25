@@ -85,7 +85,7 @@ docker compose pull
 docker compose up -d
 ```
 
-The first two show status and recent logs; the latter two pull and recreate images. Default images are pinned to `0.5.0`. To upgrade to a newer release, first update the image tags in `compose.yaml` (or any `ANM_IMAGE` overrides in `.env`). Pulling alone does not upgrade a pinned version.
+The first two show status and recent logs; the latter two pull and recreate images. Default images are pinned to `0.5.1`. To upgrade to a newer release, first update the image tags in `compose.yaml` (or any `ANM_IMAGE` overrides in `.env`). Pulling alone does not upgrade a pinned version.
 
 For backups, run `docker compose down` to stop services and preserve data. Back up `compose.yaml`, optional `.env`, `config`, `data`, `library`, actual media/Torrent directories, and the collector's named volume when used. Run `docker compose up -d` afterward. Give each AnimeMachine instance its own `data` directory. When changing older deployments, `docker compose up -d --remove-orphans` removes obsolete services, so check that none are custom services you want to keep.
 

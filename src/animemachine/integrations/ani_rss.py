@@ -25,7 +25,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import httpx
 from ..network import tls as tls_support
@@ -38,6 +38,7 @@ from .. import __version__
 
 from ..config.loader import (archive_group_enabled, canonical_resolution, load_resource_group_catalog, manual_policy_override, option_enabled,
                         region_policy_enabled, resource_group_enabled, serial_group_matches, serial_profile_language,
+                        archive_group_id, group_variant_enabled,
                         serial_rule_enabled, source_family, torrent_policy_eligible)
 
 
@@ -274,7 +275,8 @@ def automatic_search_ids(db_path: Path, *, today: dt.date | None = None) -> list
 
 def refresh_background_resources(db_path: Path, config: dict[str, Any], *,
                                  stop_event: threading.Event | None = None,
-                                 abort_event: threading.Event | None = None) -> dict[str, Any]:
+                                 abort_event: threading.Event | None = None,
+                                 before_work: Callable[[], Any] | None = None) -> dict[str, Any]:
     """Refresh due rolling Ani-RSS resources once, without overlapping another pass.
 
     This pass is intentionally independent from image warm-up so a first-run
@@ -293,6 +295,8 @@ def refresh_background_resources(db_path: Path, config: dict[str, Any], *,
             if ((stop_event is not None and stop_event.is_set())
                     or (abort_event is not None and abort_event.is_set())):
                 break
+            if before_work is not None:
+                before_work()
             checked += 1
             # Re-check health between works. A dead optional endpoint stops this
             # pass immediately instead of cascading one timeout across the queue.
@@ -368,6 +372,14 @@ class Client:
         if not isinstance(payload, dict):
             return payload
         if "code" in payload and int(payload.get("code", 500)) != 200:
+            message = str(payload.get('message') or '')
+            if path.lstrip('/') in {'mikan', 'mikanGroup'} and re.search(
+                    r'timeout|timed out|connectexception|unknownhost|handshake|connection reset', message, re.I):
+                from . import managed_network
+                try:
+                    managed_network.request_failed(self.endpoint, self.key)
+                except (OSError, ValueError, sqlite3.Error):
+                    pass  # Health feedback must preserve the original provider error.
             raise RuntimeError(str(payload.get("message") or "Ani-RSS request failed"))
         return payload.get("data") if "data" in payload else payload
 
@@ -1417,11 +1429,14 @@ def _policy_eligibility_reason(title: str, group: str, source_class: str,
         return "resolution_disabled", source_family(policy, source_class)
     family = source_family(policy, source_class)
     if family == "archive":
-        return ("eligible" if archive_group_enabled(policy, group) else "resource_group_disabled"), family
+        enabled = (archive_group_enabled(policy, group)
+                   and group_variant_enabled(policy, family, archive_group_id(policy, group), title))
+        return ("eligible" if enabled else "resource_group_disabled"), family
     if family == "serial":
         language = serial_profile_language(config)
         matches = serial_group_matches(title, group, language)
-        enabled = (any(serial_rule_enabled(policy, language, match["id"]) for match in matches)
+        enabled = (any(serial_rule_enabled(policy, language, match["id"])
+                       and group_variant_enabled(policy, family, match["id"], title, language) for match in matches)
                    if matches else bool(allow.get("resourceGroup", False)))
         if enabled:
             return "eligible", family
@@ -1949,7 +1964,7 @@ def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None
                 variant_title = row["title"]
             result.append({"resourceId": row["resource_id"], "provider": "ani-rss", "kind": row["resource_kind"],
                            "title": row["title"], "variantTitle": variant_title, "resourceGroup": row["resource_group"],
-                           "releaseVariant": payload.get("releaseVariant", {}),
+                           "releaseVariant": payload.get("releaseVariant") or release_variant(str(variant_title)).as_dict(),
                            "sourceClass": row["source_class"], "sourceFamily": family,
                            "resolution": row["resolution"], "subtitle": row["subtitle"], "sequenceFirst": row["sequence_first"],
                            "sequenceLast": row["sequence_last"], "itemCount": row["item_count"],
@@ -2039,7 +2054,8 @@ def _subscription_matches_resource(item: dict[str, Any], payload: dict[str, Any]
 
 
 def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
-              policy_override: bool = False) -> dict[str, Any]:
+              policy_override: bool = False, expected_bgm_id: int | None = None,
+              create_only: bool = False) -> dict[str, Any]:
     if not isinstance(policy_override, bool):
         raise ValueError("policyOverride must be boolean")
     row, payload = _load_resource(db_path, resource_id, config, policy_override=policy_override)
@@ -2056,7 +2072,10 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
         db.row_factory = sqlite3.Row; migrate(db)
         prior = db.execute("SELECT * FROM ani_rss_action WHERE idempotency_key=?", (idempotency,)).fetchone()
         expected_work = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (anime_id,)).fetchone()
-        expected_bgm_id = int(expected_work[0]) if expected_work else None
+        actual_bgm_id = int(expected_work[0]) if expected_work else None
+        if expected_bgm_id is not None and actual_bgm_id != expected_bgm_id:
+            raise ValueError("catalog_identity_changed")
+        expected_bgm_id = actual_bgm_id
         if prior and prior["state"] == "submitted":
             remote_id = str(prior["remote_id"] or "")
             if kind == "collection":
@@ -2091,6 +2110,8 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
             existing_bgm_id = _bgm_id(same.get('bgmUrl'))
             if existing_bgm_id and expected_bgm_id and existing_bgm_id != expected_bgm_id:
                 raise ValueError('Ani-RSS subscription identifies a different work')
+            if create_only:
+                return {"state": "existing", "remoteId": str(same.get("id") or ""), "idempotent": True}
             remote_id = str(same.get("id"))
             desired = {**same, "url": ani.get("url") or payload["rss"],
                        "subgroup": payload.get("subgroup"), "enable": True}

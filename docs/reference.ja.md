@@ -21,7 +21,7 @@ Compose の主な変数は次のとおりです。パス変数には**ホスト�
 
 | 変数 | 既定値 / 用途 |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.0` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.1` |
 | `ANM_LIBRARY_DIR` | `./library`、コレクション |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`、Torrent プール |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`、既存メディア |

@@ -45,6 +45,10 @@ class ManagedNetworkTests(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         network._STATUS.clear()
+        network._RECHECK.clear()
+        health_patch = mock.patch.object(network.sources, '_HEALTH', None)
+        health_patch.start()
+        self.addCleanup(health_patch.stop)
         self.client = FakeClient()
 
     def expire(self):
@@ -120,6 +124,46 @@ class ManagedNetworkTests(unittest.TestCase):
         self.assertEqual(previous, self.client.config)
         self.assertLess(network._read()["nextCheck"] - network.time.time(), 61)
 
+    def test_actual_search_timeout_rechecks_and_avoids_the_recently_failing_source(self):
+        with mock.patch.object(network, 'probe', return_value=True):
+            network.tick(self.client)
+        self.assertEqual('https://mikanani.me', self.client.config['mikanHost'])
+        network.request_failed(self.client.endpoint, self.client.key)
+        network._RECHECK.clear()  # Persistent health also recovers after a restart.
+        with mock.patch.object(network, 'probe', return_value=True):
+            result = network.tick(self.client)
+        self.assertTrue(result['changed'])
+        self.assertEqual('https://mikanime.tv', self.client.config['mikanHost'])
+        self.assertFalse(self.client.items[0]['enable'])
+
+    def test_external_or_manual_sources_never_record_managed_request_failures(self):
+        with mock.patch.object(network, 'probe', return_value=True):
+            network.tick(self.client)
+        self.client.config['mikanHost'] = 'https://private.example'
+        self.expire()
+        with mock.patch.object(network, 'probe', return_value=True):
+            network.tick(self.client)
+        with mock.patch.object(network.sources, '_health', side_effect=AssertionError('manual source')):
+            network.request_failed(self.client.endpoint, self.client.key)
+            network.request_failed('http://external.example:7789', self.client.key)
+
+    def test_only_mikan_outbound_errors_request_a_route_recheck(self):
+        from animemachine.integrations import ani_rss
+        client = ani_rss.Client(self.client.endpoint, self.client.key)
+        for path, message, expected in [('mikan', 'SocketTimeoutException: Read timed out', True),
+                                         ('mikanGroup', 'UnknownHostException', True),
+                                         ('mikan', 'Invalid year', False),
+                                         ('config', 'SocketTimeoutException', False)]:
+            with self.subTest(path=path, message=message), \
+                 mock.patch.object(ani_rss.tls_support, 'urlopen') as opened, \
+                 mock.patch.object(network, 'request_failed') as failed:
+                response = opened.return_value.__enter__.return_value
+                response.status = 200
+                response.read.return_value = json.dumps({'code': 500, 'message': message}).encode()
+                with self.assertRaises(RuntimeError):
+                    client.call(path)
+                self.assertEqual(int(expected), failed.call_count)
+
     def test_user_token_stays_on_official_api_and_gateway_strips_credentials(self):
         self.client.config["bgmToken"] = "private-token"
         with mock.patch.object(network, "probe", side_effect=self.mirror_only):
@@ -165,15 +209,27 @@ class ManagedNetworkTests(unittest.TestCase):
     def test_source_probe_validates_html_rss_and_torrent_not_just_http_status(self):
         endpoint = next(row for row in network.registry.for_service("mikan") if row.id == "mikan-sakiko")
         raw = b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:" + b"0" * 20 + b"ee"
-        payloads = [b'&#34588;&#26577; <a href="/Home/Bangumi/123">Example</a>',
+        payloads = [b'&#34588;&#26577; <a href="/Home/Bangumi/1">Huge ongoing feed</a> <a href="/Home/Bangumi/123">Example</a>',
                     b'<rss><channel><item><enclosure url="https://mikan.sakiko.de/Download/test.torrent"/></item></channel></rss>', raw]
         responses = [httpx.Response(200, content=body, request=httpx.Request("GET", endpoint.base_url + "/Home")) for body in payloads]
         with mock.patch.object(network.transport, "request", side_effect=responses) as request, \
                 mock.patch.object(network.sources, "_health") as health:
             self.assertTrue(network.probe(endpoint, {}, 123))
             self.assertEqual(3, request.call_count)
+            self.assertIn('bangumiId=123', request.call_args_list[1].args[1])
             self.assertEqual("", request.call_args.kwargs["proxy_url"])
             health.return_value.success.assert_called_once()
+        with mock.patch.object(network.transport, 'request', side_effect=[httpx.ReadTimeout('slow handshake'), *responses]) as request, \
+                mock.patch.object(network.sources, '_health'):
+            self.assertTrue(network.probe(endpoint, {}, 123))
+            self.assertEqual(4, request.call_count)
+            self.assertGreaterEqual(request.call_args.kwargs['timeout'], 7)
+            self.assertTrue(all(call.kwargs['deadline'] == request.call_args.kwargs['deadline']
+                                for call in request.call_args_list))
+        with mock.patch.object(network.transport, 'request', side_effect=httpx.ReadTimeout('unreachable')) as request, \
+                mock.patch.object(network.sources, '_health'):
+            self.assertFalse(network.probe(endpoint, {}, 123))
+            self.assertEqual(2, request.call_count)
         with mock.patch.object(network.transport, "request", return_value=responses[0]), \
                 mock.patch.object(network.sources, "_health"):
             self.assertFalse(network.probe(endpoint, {}, 123))

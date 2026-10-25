@@ -37,6 +37,7 @@ _VERSION_RE = re.compile(r"^(?:v)?(\d+)\.(\d+)\.(\d+)$", re.IGNORECASE)
 _CACHE_LOCK = threading.RLock()
 _CACHE: tuple[float, dict[str, Any]] | None = None
 _UPDATE_LOCK = threading.Lock()
+_UPLOAD_LOCK = threading.Lock()
 _STATE_LOCK = threading.RLock()
 _LAST_RELEASE_SOURCE = ""
 _UPDATE_API_SERVICE = "application_update_api"
@@ -423,11 +424,47 @@ def _decorate_status(result: dict[str, Any], diagnostics: dict[str, Any]) -> dic
         "downloadSourceLabel": _source_label(preferred or state_source or _LAST_RELEASE_SOURCE),
         "sha256Status": sha_status,
         "verification": verification,
-        "upgradeResult": dict(state.get("lastUpgrade") or {}),
+        "upgradeResult": local_status()['upgradeResult'],
+        "installationPending": local_status()['installationPending'],
         "automaticResult": dict(state.get("lastAutomatic") or {}),
         "sourceDiagnostics": diagnostics,
     })
     return result
+
+
+def local_status() -> dict[str, Any]:
+    """Installation facts are always available, including without Internet access."""
+    last = dict(_read_state().get('lastUpgrade') or {})
+    target = _version_tuple(str(last.get('version') or ''))
+    last['historical'] = bool(last.get('status') == 'failed' and target is not None
+                              and (target <= _version_tuple(__version__)
+                                   or last.get('restoredVersion') == __version__))
+    mode = _install_mode()[0]
+    return {'currentVersion': __version__, 'upgradeResult': last, 'installMode': mode,
+            'installationPending': mode == 'docker' and (_docker_update_root() / 'pending.json').exists()}
+
+
+def receive_offline(stream: Any, length: int, *, host: str, port: int) -> dict[str, Any]:
+    from .offline_update import MAX_BYTES
+
+    if not 0 < length <= MAX_BYTES:
+        raise ValueError('offline_package_invalid')
+    if not _UPLOAD_LOCK.acquire(blocking=False):
+        raise RuntimeError('update already in progress')
+    try:
+        with tempfile.TemporaryDirectory(prefix='animemachine-upload-') as temporary:
+            package = Path(temporary) / 'update.zip'
+            with package.open('xb') as output:
+                remaining = length
+                while remaining:
+                    block = stream.read(min(1024 * 1024, remaining))
+                    if not block:
+                        raise ValueError('offline_package_incomplete')
+                    output.write(block)
+                    remaining -= len(block)
+            return apply(host=host, port=port, offline_package=package)
+    finally:
+        _UPLOAD_LOCK.release()
 
 
 def status(*, force: bool = False) -> dict[str, Any]:
@@ -436,7 +473,8 @@ def status(*, force: bool = False) -> dict[str, Any]:
     now = time.monotonic()
     with _CACHE_LOCK:
         if not force and _CACHE is not None and now - _CACHE[0] < _CACHE_SECONDS:
-            return json.loads(json.dumps(_CACHE[1]))
+            cached = json.loads(json.dumps(_CACHE[1]))
+            return _decorate_status(cached, cached.get('sourceDiagnostics') or {})
     checked_at = _utc_now()
     try:
         result = _build_status(_release_payload(force=force))
@@ -812,7 +850,8 @@ def _activate_docker_release(wheel: Path, version: str) -> None:
                 os.replace(releases / backup, target)
             raise
         pending_file = update_root / "pending.json"
-        pending = json.dumps({"version": version, "previous": previous, "backup": backup}, separators=(",", ":")) + "\n"
+        pending = json.dumps({"version": version, "previous": previous, "backup": backup,
+                              "transaction": uuid.uuid4().hex}, separators=(",", ":")) + "\n"
         # Publish rollback metadata before switching the active pointer.  If the
         # process is interrupted between the two writes, the previous layer stays
         # active; the reverse order could start an unverified layer without a
@@ -836,13 +875,69 @@ def _activate_docker_release(wheel: Path, version: str) -> None:
             shutil.rmtree(stage, ignore_errors=True)
 
 
-def apply(*, host: str, port: int, force: bool = False) -> dict[str, Any]:
+def _stage_verified_update(archive: Path, latest_version: str, mode: str, root: Path | None,
+                           *, host: str, port: int) -> dict[str, Any]:
+    stage = None
+    try:
+        if mode == "docker":
+            _activate_docker_release(archive, latest_version)
+            _record_state(lastUpgrade={"status": "restarting", "version": latest_version, "mode": "docker", "at": _utc_now()})
+            return {"accepted": True, "restarting": True, "version": latest_version, "mode": "docker"}
+        if mode != "portable" or root is None:
+            raise ValueError("portable release required")
+        stage = root.parent / f".animemachine-update-{uuid.uuid4().hex}"
+        new_root = _extract_release(archive, stage, latest_version)
+        worker_dir = Path(tempfile.mkdtemp(prefix="animemachine-updater-"))
+        if os.name == "nt":
+            worker = worker_dir / "update.ps1"
+            _write_windows_worker(worker, root=root, new_root=new_root, old_pid=os.getpid(), host=host, port=port)
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(worker),
+                 "-Root", str(root), "-NewRoot", str(new_root), "-OldPid", str(os.getpid()),
+                 "-BindAddress", host, "-HealthHost", _health_probe_host(host), "-Port", str(port)],
+                cwd=worker_dir, close_fds=True, creationflags=creationflags,
+            )
+        else:
+            worker = worker_dir / "update.sh"
+            _write_unix_worker(worker, root=root, new_root=new_root, old_pid=os.getpid(), host=host, port=port)
+            subprocess.Popen(
+                ["/bin/sh", str(worker), str(root), str(new_root), str(os.getpid()), host, str(port), _health_probe_host(host)],
+                cwd=worker_dir, close_fds=True, start_new_session=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        _record_state(lastUpgrade={"status": "restarting", "version": latest_version, "mode": "portable", "at": _utc_now()})
+        return {"accepted": True, "restarting": True, "version": latest_version, "mode": "portable"}
+    except Exception:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+
+def apply(*, host: str, port: int, force: bool = False, offline_package: Path | None = None) -> dict[str, Any]:
     """Stage a verified update and request a controlled restart."""
     if not _UPDATE_LOCK.acquire(blocking=False):
+        raise RuntimeError("update already in progress")
+    if _install_mode()[0] == 'docker' and (_docker_update_root() / 'pending.json').exists():
+        _UPDATE_LOCK.release()
         raise RuntimeError("update already in progress")
     stage: Path | None = None
     download_dir: Path | None = None
     try:
+        if offline_package is not None:
+            from . import offline_update
+            mode, root = _install_mode()
+            if mode not in {'docker', 'portable'}:
+                raise ValueError('portable_release_required')
+            download_dir = Path(tempfile.mkdtemp(prefix='animemachine-offline-'))
+            release = offline_update.unpack(offline_package, download_dir, mode=mode, current_version=__version__,
+                                            asset_name=_asset_name, allow_same=force)
+            version = release['latestVersion']
+            archive = download_dir / release['asset']['name']
+            _record_state(verification={'status': 'verified', 'version': version,
+                                        'sha256': release['asset']['sha256'], 'source': 'offline', 'at': _utc_now()},
+                          lastUpgrade={'status': 'installing', 'version': version, 'mode': mode, 'at': _utc_now()})
+            return _stage_verified_update(archive, version, mode, root, host=host, port=port)
         release = status(force=False)
         if not release.get("updateAvailable") and not (force and release.get("canForceUpdate")):
             raise ValueError("no newer release is available")
@@ -877,39 +972,7 @@ def apply(*, host: str, port: int, force: bool = False) -> dict[str, Any]:
             verification={"status": "verified", "version": latest_version, "sha256": str(downloaded.get("sha256") or sha256),
                           "source": used_source, "at": _utc_now()},
         )
-        if mode == "docker":
-            _activate_docker_release(archive, latest_version)
-            shutil.rmtree(download_dir, ignore_errors=True)
-            download_dir = None
-            _record_state(lastUpgrade={"status": "restarting", "version": latest_version, "mode": "docker", "at": _utc_now()})
-            return {"accepted": True, "restarting": True, "version": latest_version, "mode": "docker"}
-        if mode != "portable" or root is None:
-            raise ValueError("portable release required")
-        stage = root.parent / f".animemachine-update-{uuid.uuid4().hex}"
-        new_root = _extract_release(archive, stage, latest_version)
-        worker_dir = Path(tempfile.mkdtemp(prefix="animemachine-updater-"))
-        if os.name == "nt":
-            worker = worker_dir / "update.ps1"
-            _write_windows_worker(worker, root=root, new_root=new_root, old_pid=os.getpid(), host=host, port=port)
-            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-            subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(worker),
-                 "-Root", str(root), "-NewRoot", str(new_root), "-OldPid", str(os.getpid()),
-                 "-BindAddress", host, "-HealthHost", _health_probe_host(host), "-Port", str(port)],
-                cwd=worker_dir, close_fds=True, creationflags=creationflags,
-            )
-        else:
-            worker = worker_dir / "update.sh"
-            _write_unix_worker(worker, root=root, new_root=new_root, old_pid=os.getpid(), host=host, port=port)
-            subprocess.Popen(
-                ["/bin/sh", str(worker), str(root), str(new_root), str(os.getpid()), host, str(port), _health_probe_host(host)],
-                cwd=worker_dir, close_fds=True, start_new_session=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-        shutil.rmtree(download_dir, ignore_errors=True)
-        download_dir = None
-        _record_state(lastUpgrade={"status": "restarting", "version": latest_version, "mode": "portable", "at": _utc_now()})
-        return {"accepted": True, "restarting": True, "version": latest_version, "mode": "portable"}
+        return _stage_verified_update(archive, latest_version, mode, root, host=host, port=port)
     except Exception as exc:
         if stage is not None:
             shutil.rmtree(stage, ignore_errors=True)
@@ -917,9 +980,13 @@ def apply(*, host: str, port: int, force: bool = False) -> dict[str, Any]:
         verification = dict(state.get("verification") or {})
         if "digest" in str(exc).casefold() or "sha256" in str(exc).casefold():
             verification.update({"status": "failed", "at": _utc_now()})
-        _record_state(verification=verification,
-                      lastUpgrade={"status": "failed", "version": str((locals().get("release") or {}).get("latestVersion") or ""),
-                                   "mode": str((locals().get("mode") or "")), "at": _utc_now(), "message": type(exc).__name__})
+        failed = {"status": "failed", "version": str((locals().get("release") or {}).get("latestVersion") or ""),
+                  "mode": str((locals().get("mode") or "")), "at": _utc_now(), "message": type(exc).__name__,
+                  "reason": str(exc)[:400]}
+        # Rejected uploads never began an installation. Keep the installation
+        # result while retaining the rejected attempt separately for diagnosis.
+        _record_state(verification=verification, **({'lastRejected': failed}
+                      if offline_package is not None and not failed['version'] else {'lastUpgrade': failed}))
         raise
     finally:
         if download_dir is not None:

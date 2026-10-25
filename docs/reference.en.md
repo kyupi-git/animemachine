@@ -21,7 +21,7 @@ Common Compose variables are listed below. Path variables specify **host folders
 
 | Variable | Default / purpose |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.0` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.1` |
 | `ANM_LIBRARY_DIR` | `./library`, collected media |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`, Torrent pool |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`, existing media |

@@ -21,6 +21,7 @@ from ..config.policy import ConfigStore
 from ..storage import AVAILABLE, StorageUnavailableError, status_for_path
 from ..storage.path_policy import PathAuthorizationError, authorize_existing, is_junction, open_authorized
 from ..storage.sleep import StorageSleepingError, require_awake
+from . import inventory
 
 
 EPISODE = re.compile(r"(?i)(?:^|[^a-z0-9])(?:ep?|episode|第)?\s*(\d{1,4})(?:\s*[-_. ]?v\d+)?(?:[^a-z0-9]|$)")
@@ -103,7 +104,7 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
     """
     rows = []
     for raw in paths:
-        cache_key = str(raw).replace("/", "\\").casefold()
+        cache_key = inventory.owner_key(raw)
         if cache is not None and cache_key in cache:
             rows.extend(cache[cache_key])
             continue
@@ -141,7 +142,8 @@ def _observed(paths: Iterable[str], cache: dict[str, list[dict[str, Any]]] | Non
                                 pending.append(item.path)
                         elif item.is_file(follow_symlinks=False) and lowered not in {"empty.txt", "deprecated.txt"}:
                             info = item.stat(follow_symlinks=False)
-                            found.append({**_signature(item.path, info.st_size, runtime_catalog.file_kind(item.path)),
+                            found.append({**_signature(item.path, info.st_size, runtime_catalog.file_kind(
+                                              inventory.relative_kind_path(item.path, root))),
                                           "modifiedAt": info.st_mtime_ns / 1_000_000_000})
             except OSError as exc:
                 raise StorageUnavailableError(exc.errno or 0, f"storage unavailable: {root}") from exc
@@ -192,7 +194,8 @@ def _verify_hash_baselines(db: sqlite3.Connection, owner_paths: list[str],
 def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None = None,
           progress: Callable[[dict[str, int]], None] | None = None,
           commit_every: int = 100,
-          throttle: Callable[[], None] | None = None) -> dict[str, int]:
+          throttle: Callable[[], None] | None = None,
+          priority: Callable[[], int | None] | None = None) -> dict[str, int]:
     with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as db:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
@@ -204,12 +207,17 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
         observed_cache: dict[str, list[dict[str, Any]]] = {}
         def report() -> None:
             processed = updated + skipped
-            if processed % max(1, commit_every) == 0:
-                db.commit()
+            # Never keep a Catalog writer across the next remote directory walk.
+            db.commit()
             if progress:
                 progress({"updated": updated, "skipped": skipped, "unavailable": unavailable,
-                          "processed": processed, "total": len(ids)})
-        for anime_id in ids:
+                          "processed": processed, "total": len(ids),
+                          "files": sum(len(rows) for rows in observed_cache.values())})
+        pending = list(ids)
+        while pending:
+            requested = priority() if priority else None
+            anime_id = requested if requested in pending else pending[0]
+            pending.remove(anime_id)
             if throttle:
                 throttle()
             works = list(db.execute("SELECT target_unc,origin FROM runtime_work WHERE anime_id=? AND library_state='existing'", (anime_id,)))
@@ -222,6 +230,9 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
                     for work in works:
                         authorize_existing(str(work[0]), [root], config=config)
                 observed = _observed((str(row[0]) for row in works), observed_cache, config)
+                for target, _origin in works:
+                    key = inventory.owner_key(target)
+                    inventory.replace_owner(db, str(target), observed_cache.get(key, []))
             except StorageSleepingError:
                 skipped += 1
                 report()
@@ -238,6 +249,7 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
                         basis='no_comparison_manifest',observed_files=excluded.observed_files,expected_files=0,
                         evidence_json=excluded.evidence_json,assessed_at=excluded.assessed_at""",
                            (anime_id, len(observed), json.dumps({"method": "local_file_inventory_only", "paths": len(works),
+                             "mediaInventoryVersion": 1,
                              "latestMediaUpdateAt": max((x["modifiedAt"] for x in observed if x["kind"] == "main_video"), default=None)})))
                 updated += 1
                 report()
@@ -255,6 +267,7 @@ def audit(db_path: Path, config: dict[str, Any], *, anime_ids: list[int] | None 
                     score = 0.0
                     basis = "hash_mismatch"
             evidence = {"method": "kind_episode_name_size_v1", "paths": len(works),
+                        "mediaInventoryVersion": 1,
                         "latestMediaUpdateAt": max((x["modifiedAt"] for x in observed if x["kind"] == "main_video"), default=None),
                         "managed": any(str(row[1]) == "managed_submission" for row in works),
                         "hashVerification": exact}

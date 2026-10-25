@@ -4,6 +4,8 @@
 
 AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具。它整合作品资料、媒体文件与订阅进度，提供作品检索、新番追更、收藏整理、系列关系查询和播放功能，可在 Windows、Linux、macOS 或 Docker 中运行。
 
+[用户手册](docs/manual/zh-Hans/index.md) · [快速部署](docs/guide.md#start) · [常见问题](docs/manual/zh-Hans/troubleshooting.md)。启动后点击页面顶部的 **手册**，可离线查阅图文步骤。
+
 ![作品列表：按封面浏览，查看资源和收藏状态](docs/images/library-overview.png)
 
 ## 主要功能
@@ -19,7 +21,7 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 
 ## 连续播放本周新集
 
-在新作雷达点击 **一键继续观看**，勾选多部 TV 动画，自行修改各作品的播放集数范围并排序。默认从上次未看完的一集播到最新可用集数；PotPlayer 安装扩展后，还可从上次停止的位置续播。
+在新作雷达点击 **一键继续观看**，勾选已订阅且有新集待看的 TV 动画，自行修改各作品的播放集数范围并排序。默认从上次未看完的一集播到最新可用集数；PotPlayer 安装扩展后，还可从上次停止的位置续播。
 
 ![PotPlayer 实际播放：侧栏列出多部新作，可连续观看](docs/images/potplayer-weekly.png)
 
@@ -28,6 +30,10 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 ## 快速开始
 
 根据设备选择启动方式，具体步骤见[部署与使用指南](docs/guide.md#start)。
+
+**视频教程：** [部署教程](https://youtu.be/7meID_Dzayg) · [使用教程](https://youtu.be/ZKJUFCOF1VA)
+
+两部视频预定于北京时间 **2026-10-26 19:30** 公开。
 
 | 使用场景 | 启动方式 |
 | --- | --- |

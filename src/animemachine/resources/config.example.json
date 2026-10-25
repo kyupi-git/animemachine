@@ -304,6 +304,13 @@
     "serialSubtitle": {
       "language": "auto"
     },
+    "groupVariants": {
+      "serial": {
+        "zh": {
+          "kirara-fantasia": ["Baha"]
+        }
+      }
+    },
     "archiveGroupIds": [
       "jsum",
       "vcb-studio",

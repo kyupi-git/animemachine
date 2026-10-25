@@ -17,6 +17,84 @@ class ApplicationUpdateTests(unittest.TestCase):
         application_update._CACHE = None
         application_update._LAST_RELEASE_SOURCE = ""
 
+    @staticmethod
+    def _supervisor():
+        import importlib.util
+        entry = Path(__file__).resolve().parents[2] / 'packaging/docker/entrypoint.py'
+        spec = importlib.util.spec_from_file_location('test_update_supervisor', entry)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_docker_pending_install_blocks_new_attempt_without_overwriting_result(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(os.environ, {
+                'ANM_INSTALL_MODE': 'docker', 'ANM_STATE_DIR': temp}, clear=False):
+            root = Path(temp) / 'application-update'
+            root.mkdir()
+            (root / 'pending.json').write_text('{}')
+            application_update._record_state(lastUpgrade={'status': 'restarting', 'version': '1.2.4'})
+            with self.assertRaisesRegex(RuntimeError, 'update already in progress'):
+                application_update.apply(host='127.0.0.1', port=8787)
+            self.assertEqual('restarting', application_update.local_status()['upgradeResult']['status'])
+            self.assertTrue(application_update.local_status()['installationPending'])
+            self.assertFalse(application_update._UPDATE_LOCK.locked())
+
+    def test_old_health_ack_cannot_remove_new_activation(self):
+        import json
+        module = self._supervisor()
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(os.environ, {'ANM_STATE_DIR': temp}):
+            root = Path(temp) / 'application-update'
+            root.mkdir()
+            first = {'version': '1.2.4', 'previous': '1.2.3', 'backup': '', 'transaction': 'a' * 32}
+            newer = dict(first, transaction='b' * 32)
+            (root / 'pending.json').write_text(json.dumps(newer))
+            child = mock.Mock()
+            child.poll.return_value = None
+            child.wait.return_value = 75
+            with mock.patch.object(module, '_healthy', return_value=True):
+                self.assertEqual(75, module._await_pending(child, first, ['run']))
+            self.assertEqual(newer, module._pending())
+
+    def test_missing_pending_failed_layer_recovers_previous_and_reports_result(self):
+        module = self._supervisor()
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(os.environ, {'ANM_STATE_DIR': temp}), \
+                mock.patch.object(module, '_base_version', return_value='1.2.3'):
+            root = Path(temp) / 'application-update'
+            for version in ('1.2.4', '1.2.5'):
+                release = root / 'releases' / version
+                (release / 'animemachine').mkdir(parents=True)
+                (release / 'animemachine/__main__.py').write_text('')
+                (release / f'animemachine-{version}.dist-info').mkdir()
+                (release / f'animemachine-{version}.dist-info/METADATA').write_text('')
+            module._write_current('1.2.5')
+            pending = module._recovery_pending('1.2.5')
+            self.assertEqual('1.2.4', pending['previous'])
+            failed = mock.Mock()
+            failed.poll.return_value = 9
+            self.assertIsNone(module._await_pending(failed, pending, ['run']))
+            self.assertEqual('1.2.4', module._selected_release()[1])
+            with mock.patch.object(application_update, '__version__', '1.2.4'):
+                status = application_update.local_status()['upgradeResult']
+            self.assertEqual('failed', status['status'])
+            self.assertEqual('1.2.4', status['restoredVersion'])
+            self.assertTrue(status['historical'])
+
+    def test_interrupted_pointer_activation_keeps_running_base(self):
+        import json
+        module = self._supervisor()
+        with tempfile.TemporaryDirectory() as temp, mock.patch.dict(os.environ, {'ANM_STATE_DIR': temp}), \
+                mock.patch.object(module, '_base_version', return_value='1.2.3'), \
+                mock.patch.object(module, '_drop_privileges'), mock.patch.object(module.signal, 'signal'):
+            root = Path(temp) / 'application-update'
+            root.mkdir()
+            (root / 'pending.json').write_text(json.dumps({'version': '1.2.4', 'previous': '', 'backup': ''}))
+            child = mock.Mock()
+            child.wait.return_value = 0
+            with mock.patch.object(module.subprocess, 'Popen', return_value=child):
+                self.assertEqual(0, module.main(['run']))
+            self.assertFalse((root / 'pending.json').exists())
+            self.assertEqual('1.2.3', application_update.local_status()['upgradeResult']['restoredVersion'])
+
     def _release(self, version="1.2.4"):
         portable = application_update._portable_asset_name(version)
         docker = application_update._docker_asset_name(version)

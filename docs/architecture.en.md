@@ -61,7 +61,7 @@ Connect existing media as an external read-only library to keep its current layo
 
 Collection status comes from media checks. Available resources, download tasks, and subscription progress each have their own records. Title details bring them together so you can follow a release through to its files.
 
-Viewing records live separately in application data and use account IDs and stable Bangumi IDs. Title details and Release radar share these records. Continue watching groups titles, defaults to the next unfinished episodes, and lets users adjust each range and title order; fully watched titles can be replayed by specifying a range. Creating a playlist or editing a range does not change viewing history; ≥99% playback counts as completed, while ≤1% does not count as watched. The optional PotPlayer extension reports positions from within the player and resumes five seconds before the saved position. Copied and downloaded PotPlayer playlists use the same mechanism. Positions are associated with individual media files, so changing files does not reuse an unrelated position. Late events from older sessions cannot overwrite a manual correction.
+Viewing records belong to each account and are shared by title details and Release radar. Continue watching gathers subscribed TV titles with new episodes to watch, with adjustable ranges and order. Watching at least 90% of the latest episode or confirming it manually clears its pending status. The PotPlayer extension records positions and resumes five seconds before the last stop; other players record episodes. Records can be corrected manually.
 
 ## Background tasks
 
@@ -69,8 +69,6 @@ Viewing records live separately in application data and use account IDs and stab
 - **Covers**: releases include a selection of seasonal covers. Verified images enter the normal cache by title ID, preserving existing images. Network fetching prioritizes works you are browsing, then recent and older titles; each server and proxy route uses a separate connection environment.
 - **Media and resources**: scheduled folder scans and service syncs update collection status, episodes, and subscriptions.
 - **Ongoing tasks**: progress and recent valid results are saved. Unfinished work resumes after a restart; remote tasks retry when connectivity returns.
-
-Remote metadata requests run outside the database maintenance lock. The title identity is checked again before writing; the lock is held only briefly while publishing results.
 
 Background work runs separately from page interactions. Diagnostics summarizes network, storage, image, and service status; Logs shows recent significant results.
 

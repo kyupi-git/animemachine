@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
 from animemachine.config.loader import (archive_group_enabled, canonical_resolution, option_enabled, resource_group_enabled,
@@ -8,6 +10,20 @@ from animemachine.torrents import metainfo as INDEXER
 
 
 class TorrentPolicyTests(unittest.TestCase):
+    def test_default_chinese_kirara_variant_and_saved_choices_are_preserved(self):
+        from animemachine.config.loader import _validate
+        example = Path(__file__).resolve().parents[2] / 'src/animemachine/resources/config.example.json'
+        base = json.loads(example.read_text(encoding='utf-8'))
+        self.assertEqual({'kirara-fantasia': ['Baha']}, base['torrentPolicy']['groupVariants']['serial']['zh'])
+        base['torrentPolicy'].pop('groupVariants')
+        validated = _validate(base)
+        for platform, expected in [('Baha', True), ('CR', False), ('ABEMA', False)]:
+            self.assertEqual(expected, torrent_policy_eligible(validated['torrentPolicy'], 'webrip',
+                'Kirara Fantasia', '1080p', 'CHT', f'[Kirara] Work [{platform}][CHT][1080p]'))
+        for choices in ({'serial': {'zh': {'kirara-fantasia': ['CR']}}}, {'serial': {'zh': {}}}):
+            base['torrentPolicy']['groupVariants'] = choices
+            self.assertEqual(choices, _validate(base)['torrentPolicy']['groupVariants'])
+
     def test_only_explicit_false_disables(self) -> None:
         self.assertTrue(option_enabled({"2160p": False, "1080p": True}, "unknown"))
         self.assertTrue(option_enabled({"CHS": True}, None))

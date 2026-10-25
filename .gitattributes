@@ -4,9 +4,14 @@
 *.c text eol=lf
 *.as text eol=lf
 *.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
 *.css text eol=lf
 *.html text eol=lf
 *.md text eol=lf
+*.svg text eol=lf
 *.ps1 text eol=crlf
 *.cmd text eol=crlf
 *.sqlite3 binary
@@ -14,3 +19,7 @@
 *.jpg binary
 *.zip binary
 *.dll binary
+VERSION text eol=lf
+RELEASE_PYTHON_VERSION text eol=lf
+src/animemachine/web/static/help/** linguist-generated=true
+src/animemachine/web/static/help/licenses.txt text eol=lf

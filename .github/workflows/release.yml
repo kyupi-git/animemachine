@@ -66,6 +66,7 @@ jobs:
           path: |
             dist/AnimeMachine-*-release-windows.zip
             dist/AnimeMachine-*-release-windows.zip.sha256
+            dist/AnimeMachine-*-windows.anm-update.zip
           if-no-files-found: error
 
   release-unix:
@@ -92,6 +93,8 @@ jobs:
           path: |
             dist/AnimeMachine-*-release-*.tar.gz
             dist/AnimeMachine-*-release-*.tar.gz.sha256
+            dist/AnimeMachine-*-linux-*.anm-update.zip
+            dist/AnimeMachine-*-macos-*.anm-update.zip
           if-no-files-found: error
 
   release-app:
@@ -112,13 +115,16 @@ jobs:
           python -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
           wheel=$(find dist -maxdepth 1 -type f -name 'animemachine-*-py3-none-any.whl' -print -quit)
           test -n "$wheel"
-          sha256sum "$wheel" > "$wheel.sha256"
+          (cd dist && sha256sum "$(basename "$wheel")" > "$(basename "$wheel").sha256")
+          version=$(cat VERSION)
+          python scripts/offline_update_bundle.py "$wheel" "dist/AnimeMachine-$version-docker.anm-update.zip" --version "$version" --kind docker
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-app
           path: |
             dist/animemachine-*-py3-none-any.whl
             dist/animemachine-*-py3-none-any.whl.sha256
+            dist/AnimeMachine-*-docker.anm-update.zip
           if-no-files-found: error
 
   container:
@@ -167,8 +173,49 @@ jobs:
           provenance: mode=max
           sbom: true
 
+  offline-container:
+    needs: container
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        architecture: [amd64, arm64]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Export offline image
+        env:
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+          IMAGE_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          version=$(cat VERSION)
+          image="$IMAGE_REPOSITORY:$version"
+          docker pull --platform "linux/$IMAGE_ARCHITECTURE" "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$IMAGE_ARCHITECTURE"
+          docker tag "$image" "animemachine:$version"
+          mkdir -p dist
+          archive="dist/AnimeMachine-$version-docker-linux-$IMAGE_ARCHITECTURE.tar.gz"
+          docker save "animemachine:$version" | gzip -1 > "$archive"
+          gzip --test "$archive"
+          (cd dist && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-docker-${{ matrix.architecture }}
+          path: |
+            dist/AnimeMachine-*-docker-linux-*.tar.gz
+            dist/AnimeMachine-*-docker-linux-*.tar.gz.sha256
+          compression-level: 0
+          if-no-files-found: error
+
   publish-release:
-    needs: [release-windows, release-unix, release-app, container]
+    needs: [release-windows, release-unix, release-app, container, offline-container]
     runs-on: ubuntu-latest
     permissions:
       contents: write

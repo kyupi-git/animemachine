@@ -40,9 +40,10 @@ from typing import Any, Callable, Iterable
 
 from ..config.policy import ConfigStore, NON_GROUPING_RELATIONS, STRICT_SERIES_RELATIONS
 from ..config import credentials as credential_store
+from ..config.runtime import override_values
 from ..torrents import runtime as runtime_catalog
-from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup, managed_network
-from . import archive_update, relation_graph, metadata_repair, cover_pack, bootstrap as catalog_bootstrap
+from ..integrations import qbt_runtime, connectivity, playback, subtitle_service, ani_rss, viewing, catchup, managed_network, follows
+from . import archive_update, relation_graph, metadata_repair, cover_pack, entity_names, bootstrap as catalog_bootstrap
 from ..integrations import browser_launch
 from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
@@ -55,7 +56,7 @@ from ..network import (connectivity as network_connectivity, diagnostics as netw
 from ..torrents import mapper as torrent_mapper
 from .. import metrics
 from ..storage import AVAILABLE, status_for_path
-from ..storage.sleep import StorageSleepingError, require_awake, sleeping_path
+from ..storage.sleep import StorageSleepingError, require_awake, sleeping_path, clock_info as library_clock_info
 from ..storage import preflight as storage_preflight
 from ..storage import path_policy
 from ..api import auth
@@ -715,6 +716,8 @@ def related_subject_kind(subject: dict[str, Any]) -> str:
     infobox = str(subject.get("infobox") or "")
     tags = " ".join(str(x.get("name", "")) if isinstance(x, dict) else str(x) for x in subject.get("tags") or [])
     evidence = unicodedata.normalize("NFKC", f"{infobox} {tags}").casefold()
+    if platform == 1001 or 'animanga/manga' in infobox.casefold():
+        return 'manga'
     if any(value in evidence for value in ("light novel", "lightnovel", "ライトノベル", "轻小说", "輕小說")):
         return "light_novel"
     if platform == 1001 or any(value in evidence for value in ("animanga/manga", "漫画", "漫畫", "コミック")):
@@ -806,6 +809,10 @@ def alias_language(title: str, label: str | None = None) -> str:
 
 def infer_original_language(title: str, countries: Iterable[tuple[str, str]] = ()) -> str:
     """Infer conservatively: Japanese behavior is the fallback unless non-Japanese evidence is explicit."""
+    countries = list(countries)
+    if any(str(code).upper() == 'JP' and source in {'archive_tag', 'archive_infobox', 'manifest'}
+           for code, source in countries):
+        return 'ja'
     script = infer_language(title)
     if script in {"ja", "ko", "ru"}:
         return script
@@ -1143,11 +1150,17 @@ def refresh_tag_evidence_from_archive(db_path: Path, archive_path: Path) -> dict
         return {"works": len(matched), "tags": len(staged)}
 
 
-def refresh_relation_subject_metadata_from_archive(db_path: Path, archive_path: Path) -> dict[str, int]:
+def refresh_relation_subject_metadata_from_archive(db_path: Path, archive_path: Path, *,
+                                                  expected_generation: dict[str, Any] | None = None) -> dict[str, int]:
     """Backfill original titles and compact related-subject evidence in one Archive pass."""
     with contextlib.closing(sqlite3.connect(db_path, timeout=120)) as db:
         migrate_catalog_features(db)
         related_ids = {int(row[0]) for row in db.execute("SELECT DISTINCT related_bgm_id FROM anime_relation WHERE related_bgm_id IS NOT NULL")}
+        generation = {key: value for key, value in db.execute('SELECT key,value FROM metadata')
+                      if key in entity_names.GENERATION_KEYS}
+        if expected_generation is not None and any(
+                generation.get(key) != expected_generation.get(key) for key in entity_names.GENERATION_KEYS):
+            return {'requested': len(related_ids), 'resolved': 0, 'superseded': 1}
         metadata: dict[int, tuple[int, str, str, str]] = {}
         with zipfile.ZipFile(archive_path) as archive:
             for subject in iter_jsonlines(archive, "subject.jsonlines"):
@@ -1161,6 +1174,11 @@ def refresh_relation_subject_metadata_from_archive(db_path: Path, archive_path: 
                         json.dumps(detail, ensure_ascii=False, separators=(",", ":")),
                     )
         with db:
+            db.execute('BEGIN IMMEDIATE')
+            current = {key: value for key, value in db.execute('SELECT key,value FROM metadata')
+                       if key in entity_names.GENERATION_KEYS}
+            if generation != current:
+                return {'requested': len(related_ids), 'resolved': 0, 'superseded': 1}
             db.execute("CREATE TEMP TABLE relation_subject_stage(bgm_id INTEGER PRIMARY KEY,subject_type INTEGER,subject_kind TEXT,original_title TEXT,meta_json TEXT)")
             db.executemany("INSERT INTO relation_subject_stage VALUES(?,?,?,?,?)",
                            [(subject_id, subject_type, kind, title, meta_json)
@@ -1492,9 +1510,9 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
                       for links in groups.values() for link in links}
         character_ids = {link[0] for links in chars_by_subject.values() for link in links}
         character_ids.update(link[1] for links in actors_by_subject.values() for link in links)
-        people = {int(row["id"]): {"id": int(row["id"]), "name": row["name"]}
+        people = {int(row["id"]): entity_names.prepare(row, 'person')
                   for row in records("person.jsonlines") if int(row.get("id", -1)) in person_ids}
-        characters = {int(row["id"]): {"id": int(row["id"]), "name": row["name"]}
+        characters = {int(row["id"]): entity_names.prepare(row, 'character')
                       for row in records("character.jsonlines") if int(row.get("id", -1)) in character_ids}
     output: list[BuildItem] = []
     related_evidence_cache: dict[int, tuple[str, str]] = {}
@@ -1544,12 +1562,15 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
                 dedup_titles.append(title)
 
         staff: list[dict[str, Any]] = []
+        edition_names: set[tuple[str, int, str, str]] = set()
         for person_id, position in positions_by_subject.pop(bgm_id, []):
             person = people.get(person_id)
             if not person:
                 continue
             role, role_type = STAFF_POSITIONS.get(position, (f"职员 #{position}", "staff"))
             staff.append({"person_id": person["id"], "name": person["name"], "role": role, "role_type": role_type, "source": "bangumi-archive"})
+            if entry := entity_names.projection('person', person):
+                edition_names.add(entry)
 
         char_roles = {character_id: CHARACTER_ROLES.get(role, "其他")
                       for character_id, role in chars_by_subject.pop(bgm_id, [])}
@@ -1558,6 +1579,9 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
             person = people.get(person_id)
             character = characters.get(character_id)
             if person and character:
+                for kind, entity in (('person', person), ('character', character)):
+                    if entry := entity_names.projection(kind, entity):
+                        edition_names.add(entry)
                 cast.append({
                     "character_id": character["id"], "character_name": character["name"],
                     "person_id": person["id"], "person_name": person["name"],
@@ -1565,6 +1589,7 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
                     "language": cast_language(str(person["name"]), original_language), "source": "bangumi-archive"
                 })
         cast.sort(key=lambda x: ({"主角": 0, "配角": 1, "客串": 2}.get(x["character_role"], 3), x["character_name"]))
+        manifest_item['_archive_entity_names'] = sorted(edition_names)
 
         relations: list[dict[str, Any]] = []
         for related_id, relation_id in relations_by_subject.pop(bgm_id, []):
@@ -1725,6 +1750,7 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
             db.executescript(SCHEMA)
             runtime_catalog.migrate_overlay(db)
             ani_rss.migrate(db)
+            entity_names.migrate(db)
             now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
             uses_wikidata = any(
                 title.get("source") == "wikidata" for row in rows for title in row.titles
@@ -1748,6 +1774,8 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                 ])
             if instance_seed:
                 metadata_rows.append(("instance_random_seed", instance_seed))
+            if archive_meta and archive_meta.get('name') and all('_archive_entity_names' in row.manifest for row in rows):
+                metadata_rows.append(('entity_name_projection', entity_names.projection_stamp(dict(metadata_rows))))
             db.executemany("INSERT INTO metadata(key,value) VALUES(?,?)", metadata_rows)
             total_rows = len(rows)
             print(f"[catalog] Writing {total_rows:,} works to database...", flush=True)
@@ -1780,6 +1808,8 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                     (anime_id, x["character_id"], x["character_name"], x["person_id"], x["person_name"], x["character_role"], x["language"], x["source"])
                     for x in row.cast if x["person_name"]
                 ])
+                db.executemany('INSERT OR REPLACE INTO archive_entity_name VALUES(?,?,?,?)',
+                               row.manifest.get('_archive_entity_names', []))
                 db.executemany("INSERT INTO anime_relation VALUES(?,?,?,?,?,?,?,?,?,?)", [
                     (anime_id, x["related_bgm_id"], x["related_title"], x["relation_type"], x["relation_code"], x["strict_group"], x["source"], x["related_subject_type"], x["related_subject_kind"], x["related_subject_meta_json"]) for x in row.relations
                 ])
@@ -1938,7 +1968,7 @@ def localized_display_title(db: sqlite3.Connection, anime_id: int, language: str
         # English UI remains usable even when upstream metadata has no English name.
         return translated or original
     if ui_base == "ja":
-        if original_base == "ja":
+        if original_base == "ja" and entity_names._valid_japanese(original):
             return original
         return localized_archive_title(db, anime_id, "ja", original) or original
     if ui_base == original_base:
@@ -2070,6 +2100,11 @@ def rebuild_directory_titles(db: sqlite3.Connection) -> None:
             AND trim(title)<>'' ORDER BY CASE source WHEN 'bangumi-archive' THEN 0 ELSE 1 END,
             CASE title_type WHEN 'primary' THEN 0 WHEN 'label' THEN 1 ELSE 2 END,rowid LIMIT 1),title_ja)
         ELSE title_ja END""")
+    for anime_id, original in db.execute("SELECT id,title_ja FROM anime_work WHERE original_language='ja'").fetchall():
+        if not entity_names._valid_japanese(str(original or '')):
+            title = localized_archive_title(db, int(anime_id), 'ja', str(original or ''))
+            if title and entity_names._valid_japanese(title):
+                db.execute('UPDATE anime_work SET directory_title=? WHERE id=?', (title, anime_id))
 
 
 def rebuild_physical_layout(db: sqlite3.Connection) -> None:
@@ -2207,7 +2242,7 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
 
 
 def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None,
-                  *, hidden_bgm_ids: Iterable[int] = ()) -> dict[str, Any]:
+                  *, hidden_bgm_ids: Iterable[int] = (), followed_bgm_ids: Iterable[int] = ()) -> dict[str, Any]:
     ensure_catalog_features(db_path)
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as feature_db:
         has_ani_rss_media_table = bool(feature_db.execute(
@@ -2237,6 +2272,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
 
     q = value("q")
     hidden = list(hidden_bgm_ids)
+    tracked_identities = set(followed_bgm_ids)
     radar_mode = value("radar") == "1"
     requested_sort = value("sort") or "recent_episode"
     subscription_order = ("COALESCE((SELECT MAX(aa.rowid) FROM ani_rss_action aa "
@@ -2465,7 +2501,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         where.append("0")
     elif library_states:
         owner_expr = "COALESCE(w.physical_owner_anime_id,w.id)"
-        local_sql = f"EXISTS(SELECT 1 FROM runtime_work lrw WHERE lrw.anime_id={owner_expr} AND lrw.library_state='existing')"
+        local_sql = (f"(EXISTS(SELECT 1 FROM runtime_work lrw WHERE lrw.anime_id={owner_expr} AND lrw.library_state='existing') "
+                     f"OR EXISTS(SELECT 1 FROM external_media_file lm JOIN external_library_source ls USING(source_id) "
+                     f"WHERE lm.anime_id={owner_expr} AND lm.match_state='verified' AND ls.kind='local'))")
         ani_media_sql = (f"EXISTS(SELECT 1 FROM ani_rss_media lam JOIN ani_rss_subscription las ON las.remote_id=lam.remote_id WHERE lam.anime_id={owner_expr} AND las.deleted_at IS NULL)"
                          if has_ani_rss_media_table and ani_connection_ready else "0")
         external_sql = f"(EXISTS(SELECT 1 FROM external_media_file lem WHERE lem.anime_id={owner_expr} AND lem.match_state='verified') OR {ani_media_sql})"
@@ -2627,9 +2665,31 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         # Page first, then enrich only the visible rows.  Doing correlated
         # aggregates before ORDER BY made a 30k-work catalog needlessly scan
         # child tables for every work.
+        default_radar = radar_mode and not q
         rows = dict_rows(db.execute(
             f"{ranked_prefix} ORDER BY {ranking_prefix}{order} LIMIT ? OFFSET ?",
-            row_values + order_values + [limit, offset]))
+            row_values + order_values + ([1000000, 0] if default_radar else [limit, offset])))
+        radar_latest = {}
+        radar_evidence_unavailable = False
+        if radar_mode:
+            identities = {int(row['id']): int(row['bgm_id']) for row in rows}
+            try:
+                radar_latest = playback.latest_known_episodes(db_path, list(identities), config, expected_identities=identities)
+            except sqlite3.Error:
+                radar_evidence_unavailable = True
+        if default_radar and not radar_evidence_unavailable:
+            visible = []
+            for row in rows:
+                subscribed = db.execute('SELECT 1 FROM ani_rss_subscription WHERE anime_id=? AND deleted_at IS NULL LIMIT 1',
+                                        (row['id'],)).fetchone()
+                translated = db.execute(f'SELECT {translated_expr} FROM anime_work w WHERE w.id=?', (row['id'],)).fetchone()[0]
+                if (subscribed or row['bgm_id'] in tracked_identities or row['id'] in radar_latest
+                        or (row['media_code'] in {'tv', 'movie'} and translated)):
+                    visible.append(row)
+            total = len(visible)
+            rows = visible[offset:offset + limit]
+        elif default_radar:
+            rows = rows[offset:offset + limit]
         ids = [int(row["id"]) for row in rows]
         physical_ids = {
             anime_id: runtime_catalog.physical_anime_id(db, anime_id) for anime_id in ids
@@ -2735,6 +2795,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
                 row["episode_progress"] = {"current": None, "total": row.get("episode_count")}
                 row["last_episode_update_at"] = None
                 row["subscription_state"] = "unknown"
+            if radar_mode and anime_id in radar_latest:
+                row['episode_progress']['current'] = max(row['episode_progress'].get('current') or 0, radar_latest[anime_id])
             row["torrent_count"] = torrent_counts.get(owner_id, 0)
             row["usable_torrent_count"] = usable_counts.get(anime_id, 0)
             row["external_media_count"] = external_counts.get(owner_id, 0)
@@ -3023,8 +3085,9 @@ def catalog_detail(db_path: Path, anime_id: int, config: dict[str, Any] | None =
         result["title_zh_hans_localized"] = localized_archive_title(db, int(anime_id), "zh-Hans", original_title)
         result["title_en_localized"] = localized_archive_title(db, int(anime_id), "en", original_title)
         result["titles"] = dict_rows(db.execute("SELECT language,title,title_type,source FROM anime_title WHERE anime_id=? ORDER BY language,title_type,title", (anime_id,)))
-        result["staff"] = dict_rows(db.execute("SELECT name,role,role_type,source FROM anime_staff WHERE anime_id=? ORDER BY role_type,role,name", (anime_id,)))
-        result["cast"] = dict_rows(db.execute("SELECT character_name,person_name,character_role,CASE WHEN language IS NULL OR language IN ('','und') THEN original_language ELSE language END language,source FROM anime_cast JOIN anime_work ON anime_work.id=anime_cast.anime_id WHERE anime_cast.anime_id=? ORDER BY CASE character_role WHEN '主角' THEN 0 WHEN '配角' THEN 1 ELSE 2 END, character_name LIMIT 30", (anime_id,)))
+        result["staff"] = dict_rows(db.execute("SELECT person_id,name,role,role_type,source FROM anime_staff WHERE anime_id=? ORDER BY role_type,role,name", (anime_id,)))
+        result["cast"] = dict_rows(db.execute("SELECT character_id,person_id,character_name,person_name,character_role,CASE WHEN language IS NULL OR language IN ('','und') THEN original_language ELSE language END language,source FROM anime_cast JOIN anime_work ON anime_work.id=anime_cast.anime_id WHERE anime_cast.anime_id=? ORDER BY CASE character_role WHEN '主角' THEN 0 WHEN '配角' THEN 1 ELSE 2 END, character_name LIMIT 30", (anime_id,)))
+        entity_names.project_details(db, result)
         result["relations"] = dict_rows(db.execute("""SELECT ar.related_bgm_id,ar.related_title,ar.relation_type,
             ar.relation_code,ar.strict_group,ar.source,ar.related_subject_type,ar.related_subject_kind,
             ar.related_subject_meta_json,
@@ -4461,6 +4524,7 @@ _ADMIN_GET_PATHS = frozenset({
     "/api/update/status",
 })
 _ADMIN_POST_PATHS = frozenset({
+    '/api/update/offline',
     "/api/library/layout-preview",
     "/api/archive/update", "/api/archive/import", "/api/images/refresh", "/api/metadata/repair",
     "/api/catalog/reshuffle", "/api/ani-rss/sync", "/api/connections/test",
@@ -4517,6 +4581,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
     }
     media_tokens = playback.MediaTokenRegistry()
     viewing_store = viewing.Store(auth_store.path.parent / "viewing.sqlite3")
+    follow_store = follows.Store(auth_store.path.parent / "follows.sqlite3")
     viewing_store.normalize_catalog_episodes(db_path)
     playlist_tokens = playback.PlaylistTokenRegistry()
     web_boot_id = secrets.token_hex(12)
@@ -4825,6 +4890,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         payload = {
             "status": "warning" if any(item["status"] == "warning" for item in items) else "normal",
             "items": items,
+            "storage": storage,
             "updatedAt": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         }
         with health_cache_lock:
@@ -4841,10 +4907,14 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
         temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
         temporary.replace(SYNC_STATUS_FILE)
 
+    inventory_retry_at: dict[int, float] = {}
+
     def start_library_audit(anime_id: int | None = None) -> bool:
         key = str(anime_id) if anime_id is not None else "all"
         with maintenance_lock:
             if maintenance["library"].get("state") == "running":
+                if anime_id is not None and maintenance['library'].get('scope') == 'all':
+                    maintenance['library']['priorityAnimeId'] = anime_id
                 return False
             maintenance["library"] = {"state": "running", "scope": key, "done": 0,
                                       "total": 1 if anime_id is not None else 0, "updated": 0, "skipped": 0}
@@ -4857,15 +4927,44 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                                                 unavailable=int(stats.get("unavailable", 0)))
         write_recovery("libraryAudit", {"animeId": anime_id})
         def worker() -> None:
+            def priority() -> int | None:
+                with maintenance_lock:
+                    return maintenance['library'].pop('priorityAnimeId', None)
             try:
+                current = config_store.read()
+                discovery: dict[str, int] = {}
+                sources = external_library.configured_sources(current)
+                if anime_id is None:
+                    def discovered(stats: dict[str, int]) -> None:
+                        with maintenance_lock:
+                            maintenance['library'].update(phase='discovering', files=stats.get('files', 0),
+                                sources=stats.get('sources', 0), unavailable=stats.get('unavailable', 0))
+                    discovery = external_library.scan(db_path, sources, progress=discovered, force=True, config=current)
+                with maintenance_lock:
+                    maintenance['library']['phase'] = 'auditing'
                 with DATABASE_MAINTENANCE_LOCK:
                     audit_ids = None
                     if anime_id is not None:
                         with contextlib.closing(sqlite3.connect(db_path, timeout=60)) as audit_db:
                             audit_ids = [runtime_catalog.physical_anime_id(audit_db, anime_id)]
-                    summary = library_audit.audit(db_path, config_store.read(),
+                    summary = library_audit.audit(db_path, current,
                         anime_ids=audit_ids,
-                        progress=progress, throttle=background_cooperate)
+                        progress=progress, throttle=background_cooperate, priority=priority)
+                if anime_id is None:
+                    with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as inventory_db:
+                        mapped = {int(row[0]) for row in inventory_db.execute(
+                            "SELECT DISTINCT anime_id FROM runtime_work WHERE library_state='existing'")}
+                        active = {str(source['id']) for source in sources}
+                        found = set()
+                        if inventory_db.execute("SELECT 1 FROM sqlite_master WHERE name='external_media_file'").fetchone():
+                            found = {int(identity) for identity, source_id in inventory_db.execute(
+                                "SELECT DISTINCT m.anime_id,m.source_id FROM external_media_file m "
+                                "JOIN external_library_source s USING(source_id) "
+                                "WHERE m.match_state='verified' AND s.scan_state='ready'") if source_id in active}
+                    new = len(found - mapped)
+                    summary.update(total=summary['total'] + new, updated=summary['updated'] + new,
+                                   files=discovery.get('files', 0), sources=discovery.get('sources', 0),
+                                   unavailable=summary.get('unavailable', 0) + discovery.get('unavailable', 0))
                 with maintenance_lock:
                     maintenance["library"].update(state="complete", done=summary["total"], **summary)
                 log_event("INFO", "library_audit_complete", scope=key, **summary)
@@ -5695,6 +5794,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if parsed.path == "/api/update/status":
                 try:
                     query = urllib.parse.parse_qs(parsed.query)
+                    if query.get('local') == ['1']:
+                        self.json_response(application_update.local_status())
+                        return
                     force = (query.get("force") or [""])[0].casefold() in {"1", "true", "yes"}
                     self.json_response(application_update.status(force=force))
                 except (OSError, ValueError, RuntimeError, httpx.HTTPError, json.JSONDecodeError) as exc:
@@ -5703,28 +5805,36 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if parsed.path == "/api/auth/users":
                 self.json_response({"items": auth_store.users()})
                 return
+            if parsed.path == "/api/follows":
+                records = follow_store.snapshot(self.auth_session.user_id)
+                with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db:
+                    db.row_factory = sqlite3.Row
+                    works = {int(row["bgm_id"]): dict(row) for row in db.execute(
+                        "SELECT id,bgm_id,title_ja,title_zh_hans,title_en FROM anime_work "
+                        "WHERE bgm_id IN (SELECT value FROM json_each(?))",
+                        (json.dumps([row["bgmId"] for row in records]),))}
+                self.json_response({"items": [{**record, "work": works.get(record["bgmId"])} for record in records]})
+                return
             if parsed.path == "/api/anime":
                 try:
                     mark_interactive()
                     query = urllib.parse.parse_qs(parsed.query)
                     cfg = config_store.read()
                     hidden = set(auth_store.hidden_works(self.auth_session.user_id))
-                    payload = query_catalog(db_path, query, cfg, hidden_bgm_ids=hidden)
+                    tracked = follow_store.snapshot(self.auth_session.user_id)
+                    active = {row["bgmId"] for row in tracked if row["state"] != "cancelled"}
+                    payload = query_catalog(db_path, query, cfg, hidden_bgm_ids=hidden, followed_bgm_ids=active)
                     for row in payload["items"]:
                         row["hidden"] = int(row["bgm_id"]) in hidden
+                        row["follows"] = [record for record in tracked if record["bgmId"] == row["bgm_id"]
+                                          and record["state"] != "cancelled"]
                     if query.get("radar") == ["1"]:
                         try:
-                            records = {record["bgmId"]: record for record in viewing_store.snapshot(self.auth_session.user_id)}
-                            identities = {int(row["id"]): int(row["bgm_id"]) for row in payload["items"]}
-                            latest = playback.latest_cached_episodes(db_path, list(identities), cfg, expected_identities=identities)
+                            catchup.annotate_unwatched(db_path, payload['items'], cfg, viewing_store, self.auth_session.user_id)
                         except sqlite3.Error:
-                            records, latest = {}, {}
                             payload["viewingUnavailable"] = True
-                        for row in payload["items"]:
-                            record = records.get(int(row["bgm_id"]))
-                            row["viewing"] = {**record, "animeId": row["id"]} if record else None
-                            episode = latest.get(int(row["id"]))
-                            row["hasUnwatched"] = bool(episode is not None and (not record or record["episode"] is None or episode > record["episode"]))
+                            for row in payload['items']:
+                                row['hasUnwatched'] = False
                     self.json_response(payload)
                 except (ValueError, sqlite3.Error) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -5778,7 +5888,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 anime_id = int(viewing_match.group(1))
                 try:
                     bgm_id = playback.viewing_identities(db_path, [anime_id])[anime_id]
-                    self.json_response({**viewing_store.get(self.auth_session.user_id, bgm_id), "animeId": anime_id})
+                    latest = playback.latest_known_episodes(db_path, [anime_id], config_store.read(), expected_identities={anime_id: bgm_id}).get(anime_id)
+                    self.json_response({**viewing_store.get(self.auth_session.user_id, bgm_id), "animeId": anime_id,
+                                        'latestEpisode': latest})
                 except ValueError:
                     self.json_response({"error": "anime not found"}, HTTPStatus.NOT_FOUND)
                 return
@@ -5867,6 +5979,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 detail = catalog_detail(db_path, int(match.group(1)), cfg, language=language)
                 if detail:
                     detail["hidden"] = int(detail["bgm_id"]) in auth_store.hidden_works(self.auth_session.user_id)
+                    detail["follows"] = follow_store.snapshot(self.auth_session.user_id, int(detail["bgm_id"]))
                     detail["viewing"] = {**viewing_store.get(self.auth_session.user_id, int(detail["bgm_id"])), "animeId": detail["id"]}
                 self.json_response(detail or {"error": "not found"}, 200 if detail else 404)
                 return
@@ -5885,11 +5998,30 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     if cfg.get("playback", {}).get("enabled", True) is not True:
                         raise ValueError("playback is disabled")
                     anime_id = int(playback_match.group(1))
-                    source = (urllib.parse.parse_qs(parsed.query).get("source") or [""])[0]
-                    entries = playback.collect_items(db_path, anime_id, cfg, source=source)
+                    playback_params = urllib.parse.parse_qs(parsed.query)
+                    source = (playback_params.get("source") or [""])[0]
+                    edition = (playback_params.get("edition") or [""])[0]
+                    versions = playback.available_editions(db_path, anime_id, cfg, source)
+                    playback_source = edition or source
+                    edition_available = not edition or any(item['id'] == edition for item in versions)
+                    entries = playback.collect_items(db_path, anime_id, cfg, source=playback_source, cached_only=True) if edition_available else []
+                    indexing = False
+                    library_sleeping = sleeping_path(cfg.get('deployment', {}).get('libraryUncRoot', '/Library'), cfg)
+                    if not entries and not source.startswith('ani-rss:') and not library_sleeping and playback.inventory_pending(db_path, anime_id):
+                        if time.monotonic() >= inventory_retry_at.get(anime_id, 0):
+                            if start_library_audit(anime_id):
+                                inventory_retry_at[anime_id] = time.monotonic() + 300
+                                indexing = True
+                        with maintenance_lock:
+                            job = maintenance['library']
+                            indexing = indexing or (job.get('state') == 'running' and job.get('scope') in {'all', str(anime_id)})
+                    if not entries and not indexing and not source.startswith('ani-rss:'):
+                        entries = playback.collect_items(db_path, anime_id, cfg, source=playback_source, cached_only=True) if edition_available else []
                     remote_source = source.startswith("ani-rss:") or bool(entries and all(item.origin == "ani-rss" for item in entries))
                     self.json_response({
                         "available": bool(entries), "count": len(entries),
+                        "editions": versions,
+                        "librarySleeping": library_sleeping, 'indexing': indexing,
                         "viewing": {**viewing_store.get(self.auth_session.user_id, playback.viewing_identities(db_path, [anime_id])[anime_id]), "animeId": anime_id},
                         "sourceType": "ani-rss" if remote_source else "local",
                         "aniRssMediaPathState": playback.ani_rss_media_path_state(cfg) if remote_source else "not_applicable",
@@ -6011,6 +6143,9 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 effective_submission = submission_is_enabled()
                 self.json_response({"planPreview": True, "submissionAvailable": True,
                                     "submissionEnabled": effective_submission,
+                                    "librarySleepClock": library_clock_info(),
+                                    "configurationOverrides": override_values(config_store.read_persistent())
+                                        if self.auth_session.role == 'admin' else {},
                                     "submissionMode": "stopped", "oneTaskPerInfohash": True,
                                     "auth": {"enabled": auth_store.enabled, "username": self.auth_session.username,
                                              "role": self.auth_session.role},
@@ -6167,6 +6302,38 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if not self.authorize(csrf=True):
                 return
+            if parsed.path == "/api/auth/password":
+                client = f"password:{self.auth_session.user_id}:{self.client_address[0]}"
+                now = time.monotonic()
+                with login_lock:
+                    failures = login_failures.setdefault(client, deque())
+                    while failures and failures[0] < now - 300:
+                        failures.popleft()
+                    if len(failures) >= 5:
+                        self.json_response({"error": "too_many_login_attempts"}, HTTPStatus.TOO_MANY_REQUESTS)
+                        return
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict):
+                        raise ValueError("JSON object required")
+                    auth_store.change_password(self.auth_session, request.get("currentPassword"), request.get("newPassword"))
+                except ValueError as exc:
+                    with login_lock:
+                        failures.append(now)
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                with login_lock:
+                    login_failures.pop(client, None)
+                initial = Path(os.getenv("ANM_BOOTSTRAP_CREDENTIAL_FILE", str(STATE_DIR / "auth" / "initial-admin.txt")))
+                try:
+                    if initial.is_file():
+                        values = dict(line.split("=", 1) for line in initial.read_text(encoding="utf-8").splitlines() if "=" in line)
+                        if values.get("ANM_ADMIN_USERNAME") == self.auth_session.username:
+                            initial.unlink()
+                except (OSError, UnicodeError):
+                    log_event("WARNING", "bootstrap_credential_cleanup_failed")
+                self.json_response({"changed": True, "otherSessionsRevoked": True})
+                return
             hidden_match = re.fullmatch(r"/api/hidden-works/(\d+)", parsed.path)
             if hidden_match:
                 try:
@@ -6200,8 +6367,20 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     bgm_id = playback.viewing_identities(db_path, [anime_id])[anime_id]
                     if request.get("bgmId") != bgm_id:
                         raise viewing.Conflict("viewing_conflict")
+                    if type(request.get('completeLatest', False)) is not bool or (
+                            'restoreCompleted' in request and type(request['restoreCompleted']) is not bool):
+                        raise ValueError('invalid_completion_state')
+                    if request.get('completeLatest') and 'restoreCompleted' in request:
+                        raise ValueError('invalid_completion_state')
+                    if 'latestEpisode' in request:
+                        viewing.episode_number(request['latestEpisode'])
+                    latest = playback.latest_known_episodes(db_path, [anime_id], config_store.read(), expected_identities={anime_id: bgm_id}).get(anime_id)
+                    if (request.get('completeLatest') or 'restoreCompleted' in request) and request.get('latestEpisode') != latest:
+                        raise viewing.Conflict('viewing_conflict')
                     self.json_response({**viewing_store.correct(self.auth_session.user_id, bgm_id,
-                                        request.get("episode"), request["revision"], request.get("positionMs", 0)), "animeId": anime_id})
+                                        request.get("episode"), request["revision"], request.get("positionMs", 0),
+                                        latest_episode=latest, complete_latest=request.get('completeLatest', False),
+                                        restore_completed=request.get('restoreCompleted')), "animeId": anime_id})
                 except viewing.Conflict as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.CONFLICT)
                 except (ValueError, TypeError, sqlite3.Error) as exc:
@@ -6222,8 +6401,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         rows = catchup.selected_rows(rows, request.get("selectedBgmIds"))
                         ranges = catchup.episode_ranges(request.get("selectedBgmIds"), request.get("episodeRanges"))
                     items, owners, groups = catchup.queue(db_path, rows, cfg, viewing_store, self.auth_session.user_id,
-                                                        language=params["language"][0], ranges=ranges,
-                                                        include_empty=request.get("preview") is True)
+                                                        language=params["language"][0], ranges=ranges)
                     if not items:
                         if request.get("preview") is not True:
                             raise ValueError("catchup_selection_outdated")
@@ -6299,11 +6477,28 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         raise ValueError("invalid update request")
                     result = application_update.apply(host=self.server.server_address[0], port=int(self.server.server_port),
                                                       force=request.get("force") is True)
-                    self.json_response(result, HTTPStatus.ACCEPTED)
                     if restart_callback is not None:
                         threading.Timer(.35, restart_callback).start()
+                    self.json_response(result, HTTPStatus.ACCEPTED)
                 except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, httpx.HTTPError, json.JSONDecodeError) as exc:
                     self.json_response({"error": f"{type(exc).__name__}: {exc}"}, HTTPStatus.CONFLICT)
+                return
+            if parsed.path == '/api/update/offline':
+                previous_timeout = self.connection.gettimeout()
+                try:
+                    if self.headers.get('Transfer-Encoding'):
+                        raise ValueError('offline_package_invalid')
+                    self.connection.settimeout(120)
+                    result = application_update.receive_offline(self.rfile, int(self.headers.get('Content-Length', '0')),
+                                                                host=self.server.server_address[0], port=int(self.server.server_port))
+                    if restart_callback is not None:
+                        threading.Timer(.35, restart_callback).start()
+                    self.json_response(result, HTTPStatus.ACCEPTED)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.close_connection = True
+                    self.json_response({'error': str(exc)}, HTTPStatus.CONFLICT)
+                finally:
+                    self.connection.settimeout(previous_timeout)
                 return
             if parsed.path == "/api/catalog/reshuffle":
                 seed = rotate_instance_random_seed(db_path)
@@ -6397,6 +6592,30 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 except (ValueError, OSError) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
+            follow_match = re.fullmatch(r"/api/anime/(\d+)/follow", parsed.path)
+            if follow_match:
+                try:
+                    request = self.read_json()
+                    if not isinstance(request, dict):
+                        raise ValueError("JSON object required")
+                    with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db:
+                        work = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (int(follow_match.group(1)),)).fetchone()
+                    if work is None:
+                        self.json_response({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                        return
+                    mode = request.get("mode", "serial")
+                    if request.get("cancel") is True:
+                        follow_store.cancel(self.auth_session.user_id, int(work[0]), mode, request.get("revision"))
+                        self.json_response({"cancelled": True})
+                    else:
+                        result = follow_store.save(self.auth_session.user_id, int(work[0]), mode,
+                                                   request.get("groups", {}), revision=request.get("revision"))
+                        self.json_response(result, HTTPStatus.ACCEPTED)
+                except follows.Conflict as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.CONFLICT)
+                except (ValueError, sqlite3.Error) as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             subscribe_match = re.fullmatch(r"/api/ani-rss/resources/(ar-[0-9a-f]{24}(?:~[0-9a-f]{16})?)/subscribe", parsed.path)
             if subscribe_match:
                 if not submission_is_enabled():
@@ -6459,8 +6678,11 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 anime_id = int(torrent_search_match.group(1))
                 try:
                     started = start_torrent_search(anime_id)
-                except (ValueError, sqlite3.Error):
+                except ValueError:
                     self.json_response({"error": "anime not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                except sqlite3.Error:
+                    self.json_response({"error": "catalog_storage_unavailable"}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 with maintenance_lock:
                     payload = dict(maintenance["torrentSearch"].get(str(anime_id), {}))
@@ -6606,6 +6828,15 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             raise
                     # Post-commit diagnostics must never turn a completed save into an apparent failure.
                     invalidate_health_cache()
+                    media_scan_started = False
+                    try:
+                        current_sources = external_library.configured_sources(config_store.read())
+                        from ..config.runtime import apply_runtime_overrides
+                        if current_sources != external_library.configured_sources(apply_runtime_overrides(previous)):
+                            external_library.reconcile_sources(db_path, config_store.read)
+                            media_scan_started = start_library_audit()
+                    except (OSError, ValueError, sqlite3.Error) as exc:
+                        log_event('WARNING', 'media_scan_deferred', errorType=type(exc).__name__)
                     try:
                         from ..torrents.settings import publish as publish_collector_settings
                         publish_collector_settings(db_path, config_store.read())
@@ -6625,6 +6856,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                         "saved": True, "config": draft, "effective": "immediate",
                         "credentialsConfigured": sorted(field for field, environment in mapping.items() if environment in values),
                         "storage": storage,
+                        "mediaScanStarted": media_scan_started,
                     })
                 except (ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
                     self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -6795,6 +7027,39 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 name=f"anm-submit-recovery-{plan_id[:8]}",
             ).start()
 
+    @contextlib.contextmanager
+    def follow_operation():
+        acquired = not ANI_RSS_USER_ACTIVITY.is_set() and ANI_RSS_OPERATION_LOCK.acquire(blocking=False)
+        if not acquired:
+            raise RuntimeError("provider_busy")
+        try:
+            yield
+        finally:
+            ANI_RSS_OPERATION_LOCK.release()
+
+    def check_follows() -> bool:
+        def enabled_owners() -> set[int]:
+            return {int(row["id"]) for row in auth_store.users() if row["enabled"]} if auth_store.enabled else {0}
+        if ANI_RSS_USER_ACTIVITY.is_set():
+            return False
+        try:
+            owners = enabled_owners()
+            return follows.check_one(follow_store, db_path, config_store.read(), enabled_users=owners,
+                                     can_submit=submission_is_enabled, owner_enabled=lambda owner: owner in enabled_owners(),
+                                     operation=follow_operation,
+                                     schedule_torrent=None if network_connectivity.is_offline() else start_torrent_search)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error, httpx.HTTPError) as exc:
+            log_event('WARNING', 'release_follow_check_failed', errorType=type(exc).__name__)
+            return False
+
+    def poll_follows() -> bool:
+        with ani_rss.background_resource_scan_lease() as acquired:
+            if not acquired:
+                return False
+            return check_follows()
+
+    Handler.poll_follows = staticmethod(poll_follows)
+    Handler.check_follows = staticmethod(check_follows)
     Handler.catalog_warmup = catalog_warmup
     Handler.background_budget = background_budget
     Handler.set_runtime_health = staticmethod(set_runtime_health)
@@ -7188,6 +7453,36 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
 
     managed_network_changed = threading.Event()
 
+    def monitor_media() -> None:
+        """Keep each filesystem independent from API/network discovery and large pools."""
+        jobs: dict[str, threading.Thread] = {}
+        offset = 0
+        while not stop_monitor.is_set() and not restart_requested.is_set():
+            try:
+                current = config_store.read()
+                external_library.reconcile_sources(db_path, config_store.read)
+                sources = external_library.configured_sources(current)
+                offset %= max(1, len(sources))
+                for source in sources[offset:] + sources[:offset]:
+                    key = str(source['id']) + ':' + str(source['path'])
+                    if key in jobs and jobs[key].is_alive():
+                        continue
+                    if sum(job.is_alive() for job in jobs.values()) >= 3:
+                        break
+                    def scan_media(item: dict[str, Any] = source, settings: dict[str, Any] = current) -> None:
+                        try:
+                            external_library.scan(db_path, [item], config=settings)
+                        except (OSError, ValueError, sqlite3.Error) as exc:
+                            log_event('WARNING', 'media_scan_deferred', errorType=type(exc).__name__)
+                    jobs[key] = threading.Thread(target=scan_media, daemon=True, name='anm-media-inventory')
+                    jobs[key].start()
+                jobs = {key: job for key, job in jobs.items() if job.is_alive()}
+                offset += 1
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                log_event('WARNING', 'media_scan_deferred', errorType=type(exc).__name__)
+            if stop_monitor.wait(10):
+                break
+
     def monitor_managed_network() -> None:
         while not stop_monitor.is_set() and not restart_requested.is_set():
             try:
@@ -7209,24 +7504,10 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
 
     def monitor_ani_rss() -> None:
         """Keep Ani-RSS API state, resources, and optional mounted media on one scheduler."""
-        media_scan_thread: threading.Thread | None = None
         resource_scan_thread: threading.Thread | None = None
         next_resource_scan_at = 0.0
         resource_scan_epoch = 0
         reconciled_catalog: tuple[Any, ...] | None = None
-
-        def start_media_scan(source: dict[str, Any]) -> None:
-            nonlocal media_scan_thread
-            if media_scan_thread is not None and media_scan_thread.is_alive():
-                return
-
-            def run() -> None:
-                with contextlib.suppress(OSError, ValueError, sqlite3.Error):
-                    external_library.scan(db_path, [source])
-
-            media_scan_thread = threading.Thread(
-                target=run, daemon=True, name="anm-ani-rss-media-scan")
-            media_scan_thread.start()
 
         def start_resource_scan(current: dict[str, Any]) -> bool:
             nonlocal resource_scan_thread, next_resource_scan_at
@@ -7239,7 +7520,8 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                 try:
                     scan_started_at = time.monotonic()
                     result = ani_rss.refresh_background_resources(
-                        db_path, current, stop_event=stop_monitor, abort_event=ANI_RSS_USER_ACTIVITY)
+                        db_path, current, stop_event=stop_monitor, abort_event=ANI_RSS_USER_ACTIVITY,
+                        before_work=handler.check_follows)
                     # Only an actually acquired scan advances the cadence. If the
                     # shared lease is busy, keep this pass due so the scheduler
                     # retries after the previous scan finishes instead of losing a
@@ -7332,12 +7614,6 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                             and str(ani_state.get("effective_mode") or "manual") in {"prefer", "fallback"}):
                         start_resource_scan(current)
 
-                # The mounted Ani-RSS directory is useful even when its HTTP API is
-                # unconfigured or temporarily down. Scan it independently without
-                # blocking the API cadence; a still-running pass is never queued.
-                source = ani_rss.media_source(current)
-                if source.get("enabled") and source.get("path"):
-                    start_media_scan(source)
             except Exception as exc:
                 # Ani-RSS is optional: a dead/misconfigured endpoint must never
                 # block the Web server, image fallback, torrent scans or playback.
@@ -7391,7 +7667,14 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
                 break
 
     def monitor_archive_updates() -> None:
+        next_names_check = 0.0
         while not stop_monitor.is_set() and not restart_requested.is_set():
+            if warmup_ready.is_set() and time.monotonic() >= next_names_check:
+                next_names_check = time.monotonic() + 300
+                try:
+                    entity_names.refresh_cached(db_path)
+                except Exception as exc:
+                    log_event('WARNING', 'archive_entity_names_failed', errorType=type(exc).__name__)
             try:
                 if warmup_ready.is_set():
                     handler.archive_update_tick()
@@ -7421,6 +7704,16 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
     if ready_callback is not None:
         ready_callback()
     threading.Thread(target=monitor_ani_rss, daemon=True, name="anm-ani-rss-sync-monitor").start()
+    threading.Thread(target=monitor_media, daemon=True, name="anm-media-monitor").start()
+    def monitor_follows() -> None:
+        while not stop_monitor.is_set() and not restart_requested.is_set():
+            try:
+                handler.poll_follows()
+            except (OSError, ValueError, RuntimeError, sqlite3.Error):
+                log_event("WARNING", "release_follow_check_failed")
+            if stop_monitor.wait(10):
+                break
+    threading.Thread(target=monitor_follows, daemon=True, name="anm-release-follow-monitor").start()
     threading.Thread(target=monitor_managed_network, daemon=True, name="anm-managed-network").start()
     handler.catalog_warmup.start()
     threading.Thread(target=monitor_network, daemon=True, name="anm-network-monitor").start()

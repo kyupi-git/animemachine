@@ -40,6 +40,17 @@ node --check src/animemachine/web/static/app.js
 python scripts/check_compose.py
 ```
 
+## 维护用户手册
+
+手册源文件位于 `docs/manual`，使用 VitePress 生成随应用提供的离线页面。维护手册时安装 Node.js 22 或更新版本，然后运行：
+
+```sh
+npm --prefix docs/manual ci --ignore-scripts
+npm --prefix docs/manual run build
+```
+
+修改三语正文或引用的截图后，重新构建并一并提交 `src/animemachine/web/static/help`。构建会检查内部链接、图片及下载模板，测试入口会确认生成内容与源文件一致。应用用户直接从页面的“手册”进入，无需安装 Node.js。
+
 ## 文件组织
 
 | 目录 | 内容 |
@@ -55,4 +66,4 @@ python scripts/check_compose.py
 
 围绕具体问题组织修改，并说明使用效果及验证结果。作品识别、关系和资料导入的改动以可重复的样例验证；涉及已保存数据时，同时提供迁移及旧版本升级测试。界面和使用说明同步维护中文、英文和日文。
 
-测试使用合成元数据与独立临时目录；下载及播放器联调使用专用测试环境。提交内容包含源码、维护文档和可复现样例，实例配置、凭据、媒体与构建产物保存在本地。
+测试使用合成元数据与独立临时目录；下载及播放器联调使用专用测试环境。提交内容包含源码、维护文档、内置离线手册和可复现样例，实例配置、凭据、媒体与发行包保存在本地。

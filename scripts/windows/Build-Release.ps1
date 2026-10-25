@@ -27,7 +27,11 @@ try {
         }
         if (Test-Path -LiteralPath $full) { Remove-Item -LiteralPath $full -Recurse -Force }
     }
-    $pythonRoot = Split-Path -Parent $python
+    # A virtual environment contains a redirector, not a portable interpreter.
+    $pythonRoot = (& $python -c 'import sys; print(sys.base_prefix)').Trim()
+    if ($LASTEXITCODE -or -not (Test-Path -LiteralPath (Join-Path $pythonRoot 'python.exe') -PathType Leaf)) {
+        throw 'Unable to locate the base Python installation for the portable runtime.'
+    }
     $runtime = Join-Path $release 'runtime'
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
     foreach ($pattern in @('python.exe','python*.dll','vcruntime*.dll')) {
@@ -41,6 +45,8 @@ try {
         $candidate = Join-Path $runtime $relative
         if (Test-Path -LiteralPath $candidate) { Remove-Item -LiteralPath $candidate -Recurse -Force }
     }
+    & (Join-Path $runtime 'python.exe') -I -c 'import encodings, sqlite3, ssl'
+    if ($LASTEXITCODE) { throw 'The staged portable Python runtime cannot start independently.' }
     & $python -m pip install --disable-pip-version-check --no-compile --target (Join-Path $release 'app') $root
     if ($LASTEXITCODE) { throw 'Unable to install AnimeMachine into Release staging.' }
     foreach ($metadata in Get-ChildItem -LiteralPath (Join-Path $release 'app') -Directory -Filter 'animemachine-*.dist-info') {
@@ -80,6 +86,12 @@ try {
     }
     Get-ChildItem -LiteralPath (Join-Path $root 'docs') -Filter '*.md' -File |
         Copy-Item -Destination (Join-Path $release 'docs')
+    foreach ($locale in @('', 'zh-Hans', 'en', 'ja')) {
+        $manualSource = Join-Path (Join-Path $root 'docs/manual') $locale
+        $manualTarget = Join-Path (Join-Path $release 'docs/manual') $locale
+        New-Item -ItemType Directory -Force -Path $manualTarget | Out-Null
+        Get-ChildItem -LiteralPath $manualSource -Filter '*.md' -File | Copy-Item -Destination $manualTarget
+    }
     $images = Join-Path $root 'docs\images'
     if (Test-Path -LiteralPath $images -PathType Container) {
         & $python (Join-Path $root 'scripts\copy_document_images.py') $images (Join-Path $release 'docs\images')
@@ -102,6 +114,9 @@ try {
     $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     $line = "$hash  $([IO.Path]::GetFileName($archive))" + [Environment]::NewLine
     [IO.File]::WriteAllText("$archive.sha256", $line, [Text.UTF8Encoding]::new($false))
+    $offline = Join-Path $OutputDirectory "AnimeMachine-$Version-windows.anm-update.zip"
+    & $python (Join-Path $root 'scripts\offline_update_bundle.py') $archive $offline --version $Version --kind portable
+    if ($LASTEXITCODE) { throw 'Unable to create the offline update package.' }
     Write-Host "Release: $archive"
 } finally {
     if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }

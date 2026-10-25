@@ -3,6 +3,8 @@
 
 # Setup and usage guide
 
+Follow the [user manual](manual/en/index.md) from deployment to your first subscription and catch-up playlist. **Manual** in the app opens the same content offline; this page remains a quick reference for common tasks and settings.
+
 This guide covers deployment, initial setup, everyday use, and maintenance. Select a launch method for your device, sign in, and configure media folders and service connections as needed.
 
 [Launch methods](#start) · [Initial setup](#first-use) · [Everyday use](#daily-use) · [Connections and folders](#connections) · [Updates and backups](#maintenance) · [Common questions](#help)
@@ -82,7 +84,7 @@ Each setup needs only one `compose.yaml`. Accounts and service connections are c
 
 The launch window or container logs show your address, initial username, and random password. After signing in, follow the preparation progress: download and verify the Archive, prepare seasonal and recent titles, and use the seasonal covers included in the release. Remaining metadata and images load in the background. Browsing, subscriptions and playback are available first; collection folders and local download plans become available when the full metadata is ready. Preparation resumes after interruptions. Upgrades use an existing complete catalog immediately.
 
-Create accounts for other people under **Settings → Users**. You can also create your own administrator account, sign in with it, and disable the initial account.
+Change your password under **Settings → Users → Change password**. Create accounts for other people under **Settings → Users** when needed.
 
 ### Configure and check media folders
 
@@ -139,17 +141,17 @@ The latest count in “Latest / total episodes” prioritizes Ani-RSS resource a
 
 Open the Subscribed or Paused menu to pause, resume, or unsubscribe. Unsubscribing keeps downloaded files; deleting the subscription and files has a separate confirmation. New subscriptions move forward within their group, subject to the home page date filters.
 
-The radar’s **Watched episode** column shows your last played episode. Click its number or dash to edit it. Pale green marks playable new episodes for subscribed titles or titles with media. Playing the latest episode or correcting your record updates the highlight; opening title details does not clear it.
+The radar’s **Watched episode** column shows your last played episode. Click its number or dash to edit it. Pale green marks new episodes to watch for subscribed titles only; it clears when the latest episode is confirmed finished. Opening details does not clear it.
 
 Choose **Hide title** from a title’s subscription menu to remove it from this account’s radar, title lists, and newly generated Continue watching playlists. Subscriptions and downloads continue. Open **Hidden titles** at the top of the radar to search and restore titles; the home page’s title search can also find them.
 
 ### Continue watching
 
-Choose a season in **Release radar**, click **Continue watching**, select the titles you want to watch, then open a player. Use each row’s From and To fields to edit its playback range (for example, change the default 2–4 to 1–4 or 3–4), selecting only playable episodes in that range. Drag title rows to change the order. Only selected titles enter the playlist, from top to bottom; playback buttons stay disabled until you select a title. If media availability or viewing progress changes before you launch playback, reopen the playlist to refresh the playable range. The list includes subscribed TV titles or TV titles already in your media library. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode. Fully watched titles do not play by default; enter both endpoints to replay selected episodes.
+Choose a season in **Release radar**, click **Continue watching**, select the titles you want to watch, then open a player. Use each row’s From and To fields to edit its playback range (for example, change the default 2–4 to 1–4 or 3–4), selecting only playable episodes in that range. Drag title rows to change the order. Only selected titles enter the playlist, from top to bottom; playback buttons stay disabled until you select a title. If media availability or viewing progress changes before you launch playback, reopen the playlist to refresh the playable range. The list includes only subscribed TV titles with new episodes to watch. Each starts with your last played episode and continues to the latest available episode; a new title starts with its earliest available episode. Completed episodes are skipped by default. Other titles remain playable from title details.
 
 ![Continue watching: review playable episodes and saved positions](images/continue-watching.en.png)
 
-Records belong to your account and are shared by title details and the radar. Click **Watched episode** in the radar or **Continue: Ep X** in title details to change the starting episode or position, mark a title as not started, or undo a change. Opening a playlist or editing an episode range does not change viewing records. Actual playback updates the record: ≥99% of an episode counts as completed, while ≤1% does not count as watched. Players with the position extension also save precise playback time; you can correct entries as needed. With sign-in disabled, all devices share one record.
+Records belong to your account and are shared by title details and the radar. Click **Watched episode** or **Continue: Ep X** to change the next starting episode or position, watch from the beginning, or undo a change. Subscribed titles with a new episode to watch have a pale green background. It clears when you select **Latest episode finished**, save an episode number higher than the latest release, or the player reports at least 90% playback of the latest episode. **Continue watching** includes only these subscribed TV titles. Opening a playlist does not change the record. The position extension saves precise playback time; playback of 1% or less does not count as watched. With sign-in disabled, all devices share one record.
 
 ![Correct a viewing record by setting the starting episode and position](images/viewing-record.en.png)
 
@@ -161,6 +163,8 @@ Records belong to your account and are shared by title details and the radar. Cl
 
 If Edge or Chrome on Windows asks for confirmation every time, choose **Copy permission command**, press `Win + R`, enter `cmd`, press Enter, then paste and run the command, then reopen the browser. The command adds PotPlayer and VLC permissions for this site and keeps existing permissions.
 
+If automatic copying is blocked, a dialog shows the full command selected. Press `Ctrl+C`, then paste and run it in `cmd`.
+
 ### Fill gaps and download
 
 After connecting qBittorrent, click **Search Torrents** in title details. When the search finishes, the view moves to the release choices. Select one and click **Preview download plan**, then check the files and save location before submitting. Releases with an unconfirmed title match show an explanation and cannot be submitted yet.
@@ -171,7 +175,7 @@ After connecting qBittorrent, click **Search Torrents** in title details. When t
 
 Put existing `.torrent` files in your **Torrent pool** folder. The full Compose stack includes a resource collector that adds files there in the background. **Settings → Connections → Torrent Collector** lets you choose per-work search sources and limits, and control scheduled scans, automatic collection and older-release collection. Admission and ranking follow your existing resource preferences.
 
-For currently airing series, candidates must match the season and include consecutive episodes starting at episode 1, at most one episode behind Ani-RSS. Versions with gaps or episodes beyond the known latest release are omitted. Completed works and films remain available for backfilling.
+Ongoing series are checked for the correct season and consecutive episodes, at most one episode behind the latest known release. Long series use the most recent 24 episodes. Wrong seasons, gaps, and stale versions are filtered out; completed titles and films remain available for collection downloads.
 
 1. Find a title and check candidate releases and existing files in its details.
 2. Select the works to collect, generate a plan, and review the files and destination folders.
@@ -279,6 +283,10 @@ On Windows, enter a path such as `D:\Anime` or `\\nas\Anime`. On Linux / macOS, 
 
 ## 5. Preferences, updates, and backups
 
+Local videos become playable after the background scan, without renaming existing folders. Ordinary and nested folders are matched using titles and aliases. When several DVD, BD, or release-group editions are available, choose an **Edition** in the title details, then select the starting episode.
+
+Configure local library quiet hours in **Settings → Connections**, using the displayed server time. AnimeMachine leaves that library untouched during quiet hours; Ani-RSS and external libraries at other paths continue to work.
+
 In **Settings → History**, search folder creation, file moves, renames, and removals by path, and restore reversible operations. In **Settings → Logs**, filter warnings and errors, then expand technical details when needed.
 
 For updates, keep the original deployment folder and data. Replace `compose.yaml` there and run `docker compose up -d`. Use `--remove-orphans` only when switching setups and after checking that obsolete services can be removed; existing mounted data is retained.
@@ -305,6 +313,26 @@ For a backup, stop AnimeMachine and copy:
 | Both | Keep separate backups of your media and Torrent pool |
 
 To restore, put these files back in their corresponding locations and start with the same configuration. After moving to a new machine, adjust the media paths. Review and restore recorded moves, renames, and version replacements under **Settings → History**.
+
+### Offline updates
+
+In 0.5.1 and later, open **Settings → Updates → Upload offline update**, select the `.anm-update.zip` for your installation, and confirm. Uploading, verification, and installation take place locally. Settings, catalog data, and viewing history are retained.
+
+For Docker 0.5.0 or earlier, first import the offline image:
+
+```sh
+docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
+```
+
+In the original deployment folder, change the AnimeMachine and Torrent Collector image fields (if present) in `compose.yaml` to `animemachine:0.5.1`. Keep mounts and other service settings, then run:
+
+```sh
+docker compose up -d --pull never
+```
+
+After the page returns, confirm the current version in **Settings → Updates**. Use the same image-import procedure if a later package requires an updated base image.
+
+For Windows, you can also extract the release into a new folder, copy `config.json`, `.env.local` (if present), and the entire `data` folder from the previous installation, then start the new `AnimeMachine.cmd`.
 
 <a id="help"></a>
 

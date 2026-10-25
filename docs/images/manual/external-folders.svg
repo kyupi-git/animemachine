@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="300" viewBox="0 0 900 300" role="img" aria-labelledby="title">
+  <title id="title">已有媒体目录与容器路径的对应关系</title>
+  <rect x="1" y="1" width="898" height="298" rx="16" fill="#f7faf9" stroke="#d4dfdb"/>
+  <g font-family="system-ui,sans-serif" text-anchor="middle" fill="#193e35">
+    <text x="450" y="42" font-size="26" font-weight="600">同一批文件，两个位置看到的路径</text>
+    <rect x="35" y="72" width="330" height="125" rx="12" fill="#fff" stroke="#c8d7d1"/>
+    <rect x="535" y="72" width="330" height="125" rx="12" fill="#eaf4ef" stroke="#a8cfbc"/>
+    <text x="200" y="108" font-size="21">NAS 数据盘上的已有媒体</text>
+    <text x="200" y="154" font-size="23" font-family="monospace">/volume1/anime</text>
+    <path d="M390 135H498l-14-10m14 10-14 10" fill="none" stroke="#55816d" stroke-width="3"/>
+    <text x="450" y="112" font-size="17">只读挂载</text>
+    <text x="700" y="108" font-size="21">AnimeMachine 中填写</text>
+    <text x="700" y="154" font-size="23" font-family="monospace">/External</text>
+    <text x="450" y="239" font-size="19" font-family="monospace">ANM_EXTERNAL_LIBRARY_DIR=/volume1/anime</text>
+    <text x="450" y="271" font-size="18">上面这一行写入 compose.yaml 同目录的 .env</text>
+  </g>
+</svg>

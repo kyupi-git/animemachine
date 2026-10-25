@@ -85,7 +85,7 @@ docker compose pull
 docker compose up -d
 ```
 
-前两条分别检查运行状态及最近日志；后两条用于更新镜像和重新建立容器。镜像默认固定版本 `0.5.0`，升级到后续版本前须先更新 `compose.yaml` 中的镜像标签（或 `.env` 里的 `ANM_IMAGE` 等覆盖值）。仅重复执行 `pull` 不会自动变更固定版本号。
+前两条分别检查运行状态及最近日志；后两条用于更新镜像和重新建立容器。镜像默认固定版本 `0.5.1`，升级到后续版本前须先更新 `compose.yaml` 中的镜像标签（或 `.env` 里的 `ANM_IMAGE` 等覆盖值）。仅重复执行 `pull` 不会自动变更固定版本号。
 
 维护前可执行 `docker compose down` 停止容器并保留数据。备份 `compose.yaml`、`.env`（若有）、`config`、`data`、`library` 和实际使用的媒体、Torrent 目录；完整组合中的采集器命名卷也应单独备份。备份完成后运行 `docker compose up -d`。多实例应各自使用独立的 `data` 文件夹。更新旧项目配置时，可以执行 `docker compose up -d --remove-orphans` 清理不再使用的旧服务，先确认没有需要保留的自定义服务。
 

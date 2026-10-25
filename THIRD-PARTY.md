@@ -13,6 +13,7 @@ AnimeMachine 用于作品检索、收藏整理和下载管理。作品资料在�
 | [FFmpeg](https://ffmpeg.org/) | Docker 镜像安装 `ffprobe`，仅用于只读媒体流检查；本地部署可使用用户自行安装并配置的版本。 |
 | [7-Zip](https://www.7-zip.org/) | Docker 镜像安装 7-Zip，用于安全解压支持的字幕压缩包；本地部署可使用用户自行安装并配置的版本。 |
 | [truststore](https://github.com/sethmlarson/truststore) | 使用操作系统证书库完成经过验证的 HTTPS 连接（MIT）。 |
+| [VitePress](https://vitepress.dev/) / [Vue](https://vuejs.org/) | 构建随应用提供的三语离线手册与本地搜索；不增加运行服务。前端及构建依赖的许可文本随手册保留在 `help/licenses.txt`。 |
 | [certifi](https://github.com/certifi/python-certifi) | 为经过验证的 HTTPS 提供可移植的 Mozilla CA 备用证书集（MPL-2.0）。 |
 | [OpenCC](https://github.com/BYVoid/OpenCC/tree/ver.1.1.9) | 仅使用 1.1.9 的 `TSCharacters` 和 `JPVariants` 字典生成离线姓名检索字形表，不嵌入转换库，不改写人物身份或原名。派生字形表省略有歧义的日文字形，来源地址、原文件 SHA-256 和完整 Apache-2.0 许可证保留在 `person-name-fold.json` 中。 |
 

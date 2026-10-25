@@ -164,7 +164,10 @@ def serial_group_matches(text: str, group: str, language: str,
             continue
         result.append({"id": rule_id, "displayName": display_name, "order": order,
                        "wildcardGroup": "*" in group_keywords, "subtitleMatched": subtitle_match})
-    return result
+    # Generic platform rules are a fallback for unlisted publishers; they must
+    # not bypass a known publisher's explicit child-version restriction.
+    specific = [row for row in result if not row['wildcardGroup']]
+    return specific or result
 
 
 def serial_rule_enabled(policy: dict[str, Any], language: str, rule_id: str) -> bool:
@@ -199,6 +202,29 @@ def archive_group_enabled(policy: dict[str, Any], group: Any) -> bool:
     return bool(policy.get("allowUnlisted", {}).get("resourceGroup", False))
 
 
+def group_variant_enabled(policy: dict[str, Any], family: str, group_id: str, text: str,
+                          language: str | None = None) -> bool:
+    """A missing restriction includes all variants; a saved empty list includes none."""
+    choices = policy.get("groupVariants", {}).get(family, {})
+    if family == 'serial' and any(isinstance(value, dict) for value in choices.values()):
+        choices = choices.get(language or 'zh', {})
+    if group_id not in choices:
+        return True
+    # Lazy import keeps metadata classification independent of preference loading.
+    from ..torrents.variants import release_variant
+    platform = release_variant(text).platform or "unknown"
+    return platform.casefold() in {value.casefold() for value in choices[group_id]}
+
+
+def archive_group_id(policy: dict[str, Any], group: Any) -> str:
+    normalized = str(group or "unknown").strip().casefold()
+    for item in policy.get("resourceGroups", []):
+        names = [item.get("name"), item.get("id"), *(item.get("aliases") or [])]
+        if normalized in {str(name).strip().casefold() for name in names if name}:
+            return str(item["id"])
+    return normalized
+
+
 def torrent_policy_eligible(policy: dict[str, Any], source_class: Any, group: Any,
                             resolution: Any, subtitle: Any, text: str = "",
                             ui_language: str | None = None) -> bool:
@@ -209,12 +235,14 @@ def torrent_policy_eligible(policy: dict[str, Any], source_class: Any, group: An
         return False
     family = source_family(policy, source_class)
     if family == "archive":
-        return archive_group_enabled(policy, group)
+        return (archive_group_enabled(policy, group)
+                and group_variant_enabled(policy, family, archive_group_id(policy, group), text))
     if family == "serial":
         pseudo = {"torrentPolicy": policy, "ui": {"language": ui_language or "zh"}}
         language = serial_profile_language(pseudo, ui_language)
         matches = serial_group_matches(text, str(group or ""), language)
-        return (any(serial_rule_enabled(policy, language, match["id"]) for match in matches)
+        return (any(serial_rule_enabled(policy, language, match["id"])
+                    and group_variant_enabled(policy, family, match["id"], text, language) for match in matches)
                 if matches else bool(allow.get("resourceGroup", False)))
     return (resource_group_enabled(policy.get("resourceGroups"), group, allow.get("resourceGroup", False))
             and option_enabled(policy.get("subtitles"), subtitle, allow.get("subtitle", True)))
@@ -319,6 +347,7 @@ def _validate(data: Any) -> dict[str, Any]:
     if not isinstance(tags, list) or not all(isinstance(value, str) and value.strip() for value in tags):
         raise ConfigError("components.downloadClient.tags must be a list of non-empty strings")
     policy = data["torrentPolicy"]
+    policy.setdefault('groupVariants', {'serial': {'zh': {'kirara-fantasia': ['Baha']}}})
     if policy.get("oneTaskPerInfohash") is not True or policy.get("reuseTaskForAdditionalFiles") is not True:
         raise ConfigError("one infohash/task with reusable file selection is mandatory")
     methods = policy.get("acquisitionMethods")
@@ -504,6 +533,19 @@ def _validate(data: Any) -> dict[str, Any]:
             or any(value not in strategy_dimensions for value in strategy_order)):
         raise ConfigError("torrentPolicy.strategyOrder must contain unique supported dimensions")
     group_ids = {str(item.get("id")) for item in policy.get("resourceGroups", [])}
+    variants = policy.get("groupVariants", {})
+    def valid_variant_groups(groups: Any) -> bool:
+        return isinstance(groups, dict) and all(
+            isinstance(group, str) and isinstance(values, list) and len(values) <= 32
+            and all(isinstance(value, str) and len(value) <= 40 for value in values)
+            for group, values in groups.items())
+    serial_variants = variants.get('serial', {}) if isinstance(variants, dict) else {}
+    nested_serial = (isinstance(serial_variants, dict) and set(serial_variants) <= {'zh','en','ja'}
+                     and all(valid_variant_groups(groups) for groups in serial_variants.values()))
+    if (not isinstance(variants, dict) or set(variants) - {"archive", "serial"}
+            or not valid_variant_groups(variants.get('archive', {}))
+            or not (nested_serial or valid_variant_groups(serial_variants))):
+        raise ConfigError("torrentPolicy.groupVariants must map release groups to platform lists")
     if not policy.get("archiveGroupIds") or not set(map(str, policy["archiveGroupIds"])).issubset(group_ids):
         raise ConfigError("torrentPolicy.archiveGroupIds must reference configured resource groups")
     download = data["download"]

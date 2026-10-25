@@ -37,6 +37,10 @@ cp "$script_dir/Clean-AnimeMachine.sh" "$root/scripts/clean_runtime.py" "$releas
 
 cp "$root/README.md" "$root/README.en.md" "$root/README.ja.md" "$root/CHANGELOG.md" "$root/CHANGELOG.en.md" "$root/CHANGELOG.ja.md" "$root/LICENSE" "$root/THIRD-PARTY.md" "$root/SECURITY.md" "$root/CONTRIBUTING.md" "$root/CONTRIBUTING.en.md" "$root/CONTRIBUTING.ja.md" "$release/"
 find "$root/docs" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/" \;
+for locale in '' zh-Hans en ja; do
+    mkdir -p "$release/docs/manual/$locale"
+    find "$root/docs/manual/$locale" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/manual/$locale/" \;
+done
 if [ -d "$root/docs/images" ]; then
     "$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$release/docs/images"
 fi
@@ -53,4 +57,5 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   shasum -a 256 "$archive" > "$archive.sha256"
 fi
+"$python_cmd" "$root/scripts/offline_update_bundle.py" "$archive" "$dist/AnimeMachine-$version-$platform-$arch.anm-update.zip" --version "$version" --kind portable
 printf 'Release: %s\n' "$archive"

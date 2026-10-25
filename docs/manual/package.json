@@ -1,0 +1,12 @@
+{
+  "name": "animemachine-manual",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node .vitepress/build.mjs",
+    "preview": "vitepress preview --outDir ../../src/animemachine/web/static/help --host 127.0.0.1"
+  },
+  "devDependencies": { "vitepress": "1.6.4" },
+  "overrides": { "vite": "6.4.5" },
+  "engines": { "node": ">=22" }
+}

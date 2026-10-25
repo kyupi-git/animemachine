@@ -9,6 +9,31 @@ from animemachine.library import external as external_library
 
 
 class ExternalLibraryTests(unittest.TestCase):
+    def test_filesystem_scan_does_not_hold_catalog_writer_and_supports_generic_local_structure(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            database = root / 'catalog.sqlite3'
+            folder = root / 'media' / 'アニメ' / '2008' / 'Example Show (2008)' / 'BDRip' / 'Disc 1'
+            folder.mkdir(parents=True)
+            video = folder / '[Group] Example Show - 01 [BDRip 1080p].mkv'
+            video.write_bytes(b'media')
+            with contextlib.closing(sqlite3.connect(database)) as db, db:
+                db.executescript('CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,title_zh_hans TEXT,title_en TEXT,start_month TEXT,media_code TEXT); CREATE TABLE anime_title(anime_id INTEGER,title TEXT); CREATE TABLE concurrent_write(value INTEGER);')
+                db.execute("INSERT INTO anime_work VALUES(1,'Example Show',NULL,NULL,'2008-01','tv')")
+                db.execute("INSERT INTO anime_title VALUES(1,'Example Show')")
+            original = external_library._media_files
+            def files(path):
+                for item in original(path):
+                    with contextlib.closing(sqlite3.connect(database, timeout=.1)) as other, other:
+                        other.execute('INSERT INTO concurrent_write VALUES(1)')
+                    yield item
+            source = external_library.local_source({'deployment': {'libraryUncRoot': str(root / 'media')}})
+            with mock.patch.object(external_library, '_media_files', side_effect=files):
+                result = external_library.scan(database, [source])
+            self.assertEqual(1, result['verified'])
+            with contextlib.closing(sqlite3.connect(database)) as db:
+                self.assertEqual('existing', external_library.status(db, 1)['state'])
+
     def test_catalog_named_folders_retain_year_and_remap_older_unmatched_records(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -294,6 +319,33 @@ class ExternalLibraryTests(unittest.TestCase):
             result = external_library.scan(db_path, [{"id":"generic","kind":"generic","enabled":True,
                                                       "path":str(root / 'incoming'),"readOnly":True}])
             self.assertEqual(result["verified"], 1)
+
+    def test_discs_and_editions_share_one_work_source_without_including_neighbours(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            db_path = root / 'catalog.sqlite3'
+            for relative in ('作品名/BDRip/Disc 1/作品名 - EP01.mkv',
+                             '作品名/BDRip/Disc 2/作品名 - EP02.mkv',
+                             '作品名/DVDRip/作品名 - EP01.avi',
+                             '別の作品/別の作品 - EP01.mkv'):
+                path = root / 'media' / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'media')
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.executescript('''CREATE TABLE anime_work(id INTEGER PRIMARY KEY,title_ja TEXT,
+                    title_zh_hans TEXT,title_en TEXT,start_month TEXT,media_code TEXT);
+                    CREATE TABLE anime_title(anime_id INTEGER,title TEXT);
+                    INSERT INTO anime_work VALUES(1,'作品名',NULL,NULL,'2026-01','tv');
+                    INSERT INTO anime_title VALUES(1,'作品名');
+                    INSERT INTO anime_work VALUES(2,'別の作品',NULL,NULL,'2026-01','tv');
+                    INSERT INTO anime_title VALUES(2,'別の作品');''')
+            external_library.scan(db_path, [{'id': 'local', 'kind': 'local', 'enabled': True,
+                'path': str(root / 'media'), 'readOnly': True}])
+            with contextlib.closing(sqlite3.connect(db_path)) as db:
+                status = external_library.status(db, 1)
+            self.assertEqual(1, len(status['targets']))
+            self.assertEqual(str(root / 'media/作品名'), status['targets'][0]['path'])
+            self.assertEqual(3, status['targets'][0]['fileCount'])
 
 
 if __name__ == "__main__":

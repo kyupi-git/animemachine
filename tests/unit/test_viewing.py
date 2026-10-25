@@ -30,6 +30,36 @@ class ViewingTests(unittest.TestCase):
         with self.assertRaises(viewing.Conflict):
             self.store.correct(1, 10, 9, anchor["revision"])
 
+    def test_latest_completion_is_explicit_or_measured_and_does_not_mark_future_updates(self):
+        record = self.store.correct(1, 10, 3, 0, latest_episode=3)
+        self.assertEqual({10}, self.store.unwatched(1, {10: 3}))
+        record = self.store.correct(1, 10, 3, record['revision'], latest_episode=3, complete_latest=True)
+        self.assertEqual(set(), self.store.unwatched(1, {10: 3}))
+        self.assertEqual({10}, self.store.unwatched(2, {10: 3}))
+        self.assertEqual({10}, self.store.unwatched(1, {10: 4}))
+        record = self.store.correct(1, 10, 3, record['revision'], latest_episode=3)
+        self.assertEqual({10}, self.store.unwatched(1, {10: 3}))
+        self.assertTrue(self.store.started(1, 10, 3, record['epoch'], 100, 'potplayer', position_ms=8999, duration_ms=10000))
+        self.assertEqual({10}, self.store.unwatched(1, {10: 3}))
+        self.assertTrue(self.store.started(1, 10, 3, record['epoch'], 100, 'potplayer', position_ms=9000, duration_ms=10000))
+        self.assertEqual(set(), self.store.unwatched(1, {10: 3}))
+        record = self.store.get(1, 10)
+        record = self.store.correct(1, 10, 100, record['revision'], latest_episode=3)
+        self.assertEqual(set(), self.store.unwatched(1, {10: 3}))
+        self.assertEqual({10}, self.store.unwatched(1, {10: 4}))
+        self.store.correct(1, 10, None, record['revision'], latest_episode=3)
+        self.assertEqual({10}, self.store.unwatched(1, {10: 3}))
+
+    def test_completion_threshold_upgrade_runs_once_and_respects_later_manual_corrections(self):
+        self.store.started(1, 10, 3, 0, 100, 'potplayer', position_ms=9500, duration_ms=10000)
+        with contextlib.closing(sqlite3.connect(self.store.path)) as db, db:
+            db.execute('UPDATE viewing_episode SET completed=0')
+            db.execute('PRAGMA user_version=0')
+        upgraded = viewing.Store(self.store.path)
+        self.assertEqual(set(), upgraded.unwatched(1, {10: 3}))
+        upgraded.correct(1, 10, 3, upgraded.get(1, 10)['revision'], latest_episode=3)
+        self.assertEqual({10}, viewing.Store(self.store.path).unwatched(1, {10: 3}))
+
     def test_cumulative_episode_anchors_migrate_without_losing_position(self):
         catalog = self.path / 'catalog.sqlite3'
         with contextlib.closing(sqlite3.connect(catalog)) as db, db:
@@ -87,8 +117,8 @@ class ViewingTests(unittest.TestCase):
         self.assertFalse(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=100, duration_ms=10000))
         self.assertEqual(saved, self.store.get(1, 10))
         self.assertTrue(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=101, duration_ms=10000))
-        self.assertFalse(viewing.completed(9899, 10000))
-        self.assertTrue(viewing.completed(9900, 10000))
+        self.assertFalse(viewing.completed(8999, 10000))
+        self.assertTrue(viewing.completed(9000, 10000))
         self.assertTrue(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=9900, duration_ms=10000))
         self.assertTrue(self.store.started(1, 10, 3, 0, 200, 'potplayer', position_ms=2000, duration_ms=10000))
         self.assertTrue(self.store.episode_position(1, 10, 3)['completed'])
@@ -103,10 +133,10 @@ class ViewingTests(unittest.TestCase):
             return registry.issue_many([locator], 900, 900,
                 [playback.ViewingBinding(1, 10, number, 0, order, playback.media_identity(locator))])[0]
         first, second = issue(1, 100), issue(2, 200)
-        registry.started(first, self.store, native_event=1, position_ms=9000, duration_ms=10000)
+        registry.started(first, self.store, native_event=1, position_ms=8500, duration_ms=10000)
         registry.started(second, self.store, native_event=1, position_ms=6000, duration_ms=10000)
         replay = issue(1, 300)
-        self.assertEqual(4000, registry.resume_ms(replay, self.store))
+        self.assertEqual(3500, registry.resume_ms(replay, self.store))
         registry.started(replay, self.store, native_event=1, position_ms=7000, duration_ms=10000)
         self.assertEqual(1000, registry.resume_ms(second, self.store))
         self.assertEqual(6000, self.store.episode_position(1, 10, 2)['positionMs'])
@@ -121,8 +151,9 @@ class ViewingTests(unittest.TestCase):
         before = self.store.get(1, 10)
         media = [playback.PlaybackItem(playback.MediaLocator.local(self.path / f'{ep}.mp4'),
                   'episode', ep, 100, 'managed') for ep in range(1, 5)]
-        rows = [{'id': 1, 'bgm_id': 10, 'media_code': 'tv', 'title_ja': 'Test'}]
+        rows = [{'id': 1, 'bgm_id': 10, 'media_code': 'tv', 'title_ja': 'Test', 'subscription_state': 'active'}]
         with mock.patch.object(playback, 'collect_items', return_value=media), \
+             mock.patch.object(playback, 'latest_known_episodes', return_value={1: 4}), \
              mock.patch.object(catchup.ani_rss, 'state', return_value={}):
             for ranges, expected in ((None, [2, 3, 4]), ({10: (1, 4)}, [1, 2, 3, 4]),
                                      ({10: (3, 4)}, [3, 4]), ({10: (2.5, 3.5)}, [3])):
@@ -135,6 +166,9 @@ class ViewingTests(unittest.TestCase):
             self.assertEqual([3, 4], [x.episode for x in catchup.queue(db_path, rows, {}, self.store, 1)[0]])
             self.store.started(1, 10, 2, before['epoch'], 300, 'potplayer', position_ms=2500, duration_ms=10000)
             self.assertEqual([3, 4], [x.episode for x in catchup.queue(db_path, rows, {}, self.store, 1)[0]])
+            record = self.store.get(1, 10)
+            self.store.correct(1, 10, 100, record['revision'], latest_episode=3)
+            self.assertEqual([4], [x.episode for x in catchup.queue(db_path, rows, {}, self.store, 1)[0]])
 
     def test_stale_catchup_selection_omits_empty_work(self):
         db_path = self.path / 'catalog.sqlite3'
@@ -144,12 +178,12 @@ class ViewingTests(unittest.TestCase):
         self.store.started(1, 10, 2, 0, 100, 'potplayer', position_ms=9900, duration_ms=10000)
         media = [playback.PlaybackItem(playback.MediaLocator.local(self.path / f'{ep}.mp4'),
                   'episode', ep, 100, 'managed') for ep in (1, 2)]
-        rows = [{'id': 1, 'bgm_id': 10, 'media_code': 'tv', 'title_ja': 'Test'}]
+        rows = [{'id': 1, 'bgm_id': 10, 'media_code': 'tv', 'title_ja': 'Test', 'subscription_state': 'active'}]
         with mock.patch.object(playback, 'collect_items', return_value=media), \
+             mock.patch.object(playback, 'latest_known_episodes', return_value={1: 2}), \
              mock.patch.object(catchup.ani_rss, 'state', return_value={}):
             self.assertEqual(([], [], []), catchup.queue(db_path, rows, {}, self.store, 1, ranges={}))
-            self.assertEqual([1, 2], [item.episode for item in
-                catchup.queue(db_path, rows, {}, self.store, 1, ranges={10: (1, 2)})[0]])
+            self.assertEqual(([], [], []), catchup.queue(db_path, rows, {}, self.store, 1, ranges={10: (1, 2)}))
 
     def test_catchup_range_payload_validation(self):
         self.assertEqual({}, catchup.episode_ranges([10], None))
@@ -203,9 +237,11 @@ class ViewingTests(unittest.TestCase):
                                           "episode", ep, 100, "managed") for ep in numbers]
         for anime_id, episode in ((1, 3), (2, 4), (3, 10)):
             self.store.correct(1, anime_id, episode, 0)
-        rows = [{"id": anime_id, "bgm_id": anime_id, "media_code": "tv", "title_ja": str(anime_id)} for anime_id in (1, 2, 3)]
-        rows.append({"id": 999, "media_code": "movie"})
+        rows = [{"id": anime_id, "bgm_id": anime_id, "media_code": "tv", "title_ja": str(anime_id),
+                 'subscription_state': 'active'} for anime_id in (1, 2, 3)]
+        rows.append({"id": 999, 'bgm_id': 999, "media_code": "movie"})
         with mock.patch.object(playback, "collect_items", side_effect=collect), \
+             mock.patch.object(playback, 'latest_known_episodes', return_value={1: 4, 2: 5, 3: 12}), \
              mock.patch.object(catchup.ani_rss, "state", return_value={}):
             items, owners, groups = catchup.queue(db_path, rows, {}, self.store, 1)
         self.assertEqual([3, 4, 4, 5, 10, 11, 12], [item.episode for item in items])

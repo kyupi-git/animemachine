@@ -23,6 +23,7 @@
             <option value="ja">日本語</option>
           </select>
           <button id="viewToggle" data-icon="table" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格" data-i18n-aria-label="table" data-i18n-title="table">表格</button>
+          <a id="manualLink" class="tool manual-link" href="/help/zh-Hans/" target="_blank" rel="noopener" data-icon="help" data-i18n="manual">手册</a>
           <button id="settingsButton" data-icon="settings" class="tool" data-i18n="settings" hidden>设置</button>
           <button id="authButton" data-icon="exit" class="tool" data-i18n="logout" hidden>退出</button>
         </div>
@@ -264,6 +265,7 @@
           <h2 id="radarTitle" data-icon="radar" data-i18n="radar">新作雷达</h2>
           <div class="radar-actions">
             <button id="radarCatchup" class="text-button radar-button" type="button" data-icon="play" data-i18n="catchup">一键继续观看</button>
+            <button id="radarFollows" class="text-button radar-button" type="button" data-icon="subscribe" data-i18n="followWork">资源跟踪</button>
             <button id="radarSync" class="text-button radar-button" type="button" data-i18n-title="radarSync" data-i18n-aria-label="radarSync"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1a8 8 0 0 1 13.2 3.2M17.9 17.9A8 8 0 0 1 4.7 14.7"/></svg><span data-i18n="radarSyncShort">同步状态</span></button>
             <button id="radarSearch" class="text-button radar-button" type="button" data-i18n-title="radarSearch" data-i18n-aria-label="radarSearch"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><span data-i18n="radarSearchShort">检索资源</span></button>
             <button id="radarHidden" class="text-button radar-button" type="button" data-i18n-title="hiddenWorks" data-i18n-aria-label="hiddenWorks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10 5h2c6 0 10 7 10 7a20 20 0 0 1-4 4M6 6a20 20 0 0 0-4 6s4 7 10 7c2 0 4-.6 5-1.5M10 10a3 3 0 0 0 4 4"/></svg><span data-i18n="hiddenWorks">已隐藏作品</span></button>
@@ -278,6 +280,18 @@
         <div id="radarTabs" class="radar-tabs" role="tablist" data-i18n-aria-label="season"></div>
         <div id="radarPanel" class="radar-panel" role="tabpanel" tabindex="0">
           <p id="radarStatus" class="muted" role="status"></p>
+          <div class="radar-mobile-sort">
+            <label for="radarMobileSort" data-i18n="sortBy">排序</label>
+            <select id="radarMobileSort">
+              <option value="" data-i18n="radarDefaultSort">默认顺序</option>
+              <option value="title" data-i18n="radarTitleColumn">作品</option>
+              <option value="premiere" data-i18n="radarStart">开始时间</option>
+              <option value="progress" data-i18n="radarProgress">最新 / 总集数</option>
+              <option value="subscription" data-i18n="radarSubscription">订阅状态</option>
+              <option value="updated" data-i18n="radarUpdated">新集更新时间</option>
+            </select>
+            <button id="radarMobileDirection" type="button" class="text-button" data-i18n-aria-label="sortDirectionLabel">↑</button>
+          </div>
           <div id="radarResults" class="table-wrap"></div>
         </div>
       </div>
@@ -306,9 +320,9 @@
       <form id="viewingForm">
         <h2 id="viewingTitle" data-icon="activity" data-i18n="viewingEdit">修改续看集数</h2>
         <p id="viewingWork"></p>
-        <label><span data-i18n="viewingEpisode">下次从这一集开始（包含本集）</span><input id="viewingEpisode" type="number" min="0" max="100000" step="any" list="viewingEpisodes" inputmode="decimal"><datalist id="viewingEpisodes"></datalist></label>
+        <label><span data-i18n="viewingEpisode">下次从这一集开始观看</span><input id="viewingEpisode" type="number" min="0" max="100000" step="any" list="viewingEpisodes" inputmode="decimal"><datalist id="viewingEpisodes"></datalist></label>
         <label><span data-i18n="viewingPosition">播放位置（时:分:秒）</span><input id="viewingPosition" type="text" placeholder="00:00:00" pattern="[0-9]{1,3}:[0-5][0-9]:[0-5][0-9]" inputmode="numeric"></label>
-        <div class="playback-actions"><button id="viewingSave" class="primary" type="submit" data-i18n="save">保存</button><button id="viewingClear" class="tool dark-tool" type="button" data-i18n="viewingClear">设为未开始</button><button id="viewingUndo" class="text-button" type="button" data-i18n="viewingUndo" hidden>撤销</button></div>
+        <div class="playback-actions viewing-actions"><button id="viewingSave" class="primary" type="submit" data-i18n="save">保存</button><button id="viewingClear" class="tool dark-tool" type="button" data-i18n="viewingClear">从头开始观看</button><button id="viewingComplete" class="tool dark-tool" type="button" data-icon="check" data-i18n="viewingComplete">已看完最新集</button><button id="viewingUndo" class="text-button" type="button" data-i18n="viewingUndo" hidden>撤销</button></div>
         <p id="viewingStatus" class="muted" role="status" aria-live="polite"></p>
       </form>
     </dialog>
@@ -318,6 +332,25 @@
       <p id="layoutPreviewStatus" class="muted" role="status" aria-live="polite"></p>
       <div id="layoutPreviewResults" class="table-wrap"></div>
       <button id="layoutPreviewExport" type="button" class="tool dark-tool" data-icon="download" data-i18n="layoutPreviewExport" hidden>下载预览</button>
+    </dialog>
+    <dialog id="followListDialog" aria-labelledby="followListTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <h2 id="followListTitle" data-icon="subscribe" data-i18n="followWork">资源跟踪</h2>
+      <p id="followListStatus" class="muted" role="status"></p>
+      <div id="followList" class="hidden-works-list"></div>
+    </dialog>
+    <dialog id="followDialog" aria-labelledby="followTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <form id="followForm">
+        <h2 id="followTitle" data-icon="subscribe" data-i18n="followWork">资源跟踪</h2>
+        <p id="followWorkTitle" class="subscription-work"></p>
+        <label><span data-i18n="followMode">跟踪方式</span><select id="followMode"><option value="serial" data-i18n="advanceSubscribe">提前订阅连载</option><option value="archive" data-i18n="followArchive">跟踪收藏资源</option></select></label>
+        <p id="followHint" class="muted"></p>
+        <label class="check"><input id="followUsePreferences" type="checkbox" checked><span data-i18n="followPreferences">使用设置中的资源组偏好</span></label>
+        <ol id="followGroups" class="follow-groups" hidden></ol>
+        <p id="followStatus" class="muted" role="status"></p>
+        <footer class="follow-actions"><button id="followCancel" type="button" class="tool dark-tool" data-icon="remove" data-i18n="followCancel" hidden>停止跟踪</button><button id="followSave" type="submit" class="primary" data-icon="subscribe" data-i18n="save">保存</button></footer>
+      </form>
     </dialog>
     <dialog id="radarSubscribeDialog" aria-labelledby="radarSubscribeTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
@@ -350,6 +383,19 @@
         <label><span data-i18n="password">密码</span><input id="loginPassword" type="password" autocomplete="current-password" required /></label>
         <p id="loginError" class="error" aria-live="polite"></p>
         <button type="submit" class="primary" data-i18n="login">登录</button>
+      </form>
+    </dialog>
+    <dialog id="passwordDialog" aria-labelledby="passwordTitle">
+      <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <form id="passwordForm">
+        <input id="passwordUsername" type="hidden" autocomplete="username">
+        <h2 id="passwordTitle" data-icon="user" data-i18n="accountSettings">账户设置</h2>
+        <p id="passwordAccount" class="subscription-work"></p>
+        <p class="muted" data-i18n="changePasswordHint">新密码为 10–256 个字符；修改后，其它设备需要重新登录。</p>
+        <label><span data-i18n="currentPassword">当前密码</span><input id="currentPassword" type="password" autocomplete="current-password" required></label>
+        <div class="password-new-fields"><label><span data-i18n="newPassword">新密码</span><input id="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="256" required></label><label><span data-i18n="confirmPassword">确认新密码</span><input id="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="256" required></label></div>
+        <p id="passwordStatus" class="muted" role="status" aria-live="polite"></p>
+        <footer class="follow-actions"><button id="passwordSave" type="submit" class="primary" data-icon="user" data-i18n="changePassword">修改密码</button></footer>
       </form>
     </dialog>
     <dialog id="settingsDialog">
@@ -514,10 +560,10 @@
             </select>
           </label>
           <div class="group-policy-columns">
-            <fieldset><legend data-i18n="archiveGroups">收藏类 / 归档类</legend><ol id="archiveGroups" class="sortable vertical check-sort"></ol><p data-i18n="archiveGroupsHint">默认全部启用，排序不考虑字幕。</p></fieldset>
-            <fieldset><legend data-i18n="chineseSerialGroups">中文连载资源</legend><ol id="serialGroupsZh" class="sortable vertical check-sort"></ol></fieldset>
-            <fieldset><legend data-i18n="englishSerialGroups">English serial releases</legend><ol id="serialGroupsEn" class="sortable vertical check-sort"></ol></fieldset>
-            <fieldset><legend data-i18n="japaneseSerialGroups">日本語連載リリース</legend><ol id="serialGroupsJa" class="sortable vertical check-sort"></ol></fieldset>
+            <fieldset><legend class="group-policy-heading"><span data-i18n="archiveGroups">收藏类 / 归档类</span><button type="button" class="text-button group-toggle" data-group-toggle="archiveGroups" data-i18n="selectAllGroups">全选</button></legend><ol id="archiveGroups" class="sortable vertical check-sort"></ol><p data-i18n="archiveGroupsHint">默认全部启用，排序不考虑字幕。</p></fieldset>
+            <fieldset><legend class="group-policy-heading"><span data-i18n="chineseSerialGroups">中文连载资源</span><button type="button" class="text-button group-toggle" data-group-toggle="serialGroupsZh" data-i18n="selectAllGroups">全选</button></legend><ol id="serialGroupsZh" class="sortable vertical check-sort"></ol></fieldset>
+            <fieldset><legend class="group-policy-heading"><span data-i18n="englishSerialGroups">English serial releases</span><button type="button" class="text-button group-toggle" data-group-toggle="serialGroupsEn" data-i18n="selectAllGroups">全选</button></legend><ol id="serialGroupsEn" class="sortable vertical check-sort"></ol></fieldset>
+            <fieldset><legend class="group-policy-heading"><span data-i18n="japaneseSerialGroups">日本語連載リリース</span><button type="button" class="text-button group-toggle" data-group-toggle="serialGroupsJa" data-i18n="selectAllGroups">全选</button></legend><ol id="serialGroupsJa" class="sortable vertical check-sort"></ol></fieldset>
           </div>
           <label class="check other-groups"><input id="otherGroupsEnabled" type="checkbox"><span data-i18n="otherResourceGroups">其它（未识别或不符合上述规则）</span></label>
         </section>
@@ -525,6 +571,12 @@
           <p class="muted" data-i18n="connectionHint">
             Compose 部署会以服务名覆盖回环地址；持久凭据从 .env 环境变量读取。
           </p>
+          <details class="path-examples"><summary data-i18n="pathExamples">路径填写示例</summary>
+            <p data-i18n="pathWindowsHint">Windows：填写本机文件夹，或当前运行账号可访问的网络共享。</p>
+            <code>C:\Anime</code><span> · </span><code>\\NAS\Anime</code>
+            <p data-i18n="pathDockerHint">Docker：填写容器内的挂载路径，对应部署文件中的目录映射。</p>
+            <code>/Library</code><span> · </span><code>/Torrents</code><span> · </span><code>/Media</code><span> · </span><code>/External</code>
+          </details>
           <fieldset>
             <legend>qBittorrent</legend>
             <label
@@ -535,8 +587,8 @@
               ><input id="qbtApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label
             ><small id="qbtCredentialState" class="muted" data-i18n="qbtApiKeyHint">保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。</small
             ><label
-              ><span data-i18n="qbtLibraryPath">qBittorrent 容器内路径</span
-              ><input id="qbtLibraryPath" type="text" /></label
+              ><span data-i18n="qbtLibraryPath">qBittorrent 保存路径</span
+              ><input id="qbtLibraryPath" type="text" /><small class="path-hint" data-i18n="qbtPathHint">填写 qBittorrent 所在设备中的保存路径；联合部署通常为 /Library。</small></label
             >
             <button
               id="testQbt" data-icon="link"
@@ -549,8 +601,8 @@
           </fieldset>
           <fieldset>
             <legend data-i18n="localLibrarySettings">本地收藏库</legend>
-            <label><span data-i18n="libraryPath">动画收藏库路径</span><input id="libraryPath" type="text" /></label>
-            <label class="check"><input id="librarySleepEnabled" type="checkbox" /><span data-i18n="librarySleepEnabled">启用每日休眠时段</span></label>
+            <label><span data-i18n="libraryPath">动画收藏库路径</span><input id="libraryPath" type="text" /><small id="libraryPathStatus" class="path-status muted" role="status" aria-live="polite"></small></label>
+            <div class="sleep-header"><label class="check"><input id="librarySleepEnabled" type="checkbox" /><span data-i18n="librarySleepEnabled">启用每日休眠时段</span></label><small id="librarySleepClock" class="muted"></small></div>
             <div class="setting-row update-schedule-row">
               <label><span data-i18n="librarySleepStart">开始时间</span><input id="librarySleepStart" type="time" value="00:00" /></label>
               <label><span data-i18n="librarySleepEnd">结束时间</span><input id="librarySleepEnd" type="time" value="08:00" /></label>
@@ -572,8 +624,8 @@
               </div>
             </details>
             <h4 data-i18n="collectorPool">Torrent 资源池</h4>
-            <label><span data-i18n="torrentPoolPath">Torrent 池路径</span><input id="torrentPoolPath" type="text" /></label>
-            <p class="explain" data-i18n="torrentPoolHint">将 .torrent 文件放入此目录，AnimeMachine 会自动读取。</p>
+            <label><span data-i18n="torrentPoolPath">Torrent 池路径</span><input id="torrentPoolPath" type="text" /><small id="torrentPoolPathStatus" class="path-status muted" role="status" aria-live="polite"></small></label>
+            <p class="explain" data-i18n="torrentPoolHint">已有 .torrent 文件可直接放入此目录。仅使用现成种子池时，保留定时扫描，关闭自动采集即可。</p>
             <label class="check"><input id="collectorMonitor" type="checkbox" /><span data-i18n="collectorMonitor">定时扫描资源池</span></label>
             <label><span data-i18n="pollMinutes">资源池扫描间隔（分钟）</span><input id="pollMinutes" type="number" min="5" required /></label>
             <label class="check"><input id="collectorCollection" type="checkbox" /><span data-i18n="collectorCollection">自动采集 Torrent</span></label>
@@ -590,7 +642,7 @@
             <label><span data-i18n="endpoint">服务地址</span><input id="aniRssEndpoint" type="url" /></label>
             <label><span data-i18n="aniRssApiKey">API Key</span><input id="aniRssApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="qbtApiKeyPlaceholder" /></label>
             <small id="aniRssCredentialState" class="muted" data-i18n="aniRssApiKeyHint">保存后重启仍生效；不会写入 config.json、浏览器存储或接口响应。部署环境/Secret 已提供凭据时仍以部署配置为准。</small>
-            <label><span data-i18n="aniRssMediaPath">Ani-RSS 媒体路径</span><input id="aniRssMediaPath" type="text" /></label>
+            <label><span data-i18n="aniRssMediaPath">Ani-RSS 媒体路径</span><input id="aniRssMediaPath" type="text" /><small id="aniRssMediaPathStatus" class="path-status muted" role="status" aria-live="polite"></small></label>
             <label><span data-i18n="aniRssSyncMinutes">状态同步间隔（分钟）</span><input id="aniRssSyncMinutes" type="number" min="5" /></label>
             <p class="explain" data-i18n="aniRssHint">连接无效时自动按“手动调用”运行；连接恢复后使用所选模式。媒体目录始终只读。</p>
             <button id="testAniRss" data-icon="link" type="button" class="tool dark-tool" data-i18n="testConnection">测试连接</button><span id="aniRssState" class="muted"></span>
@@ -605,8 +657,8 @@
             ><label
               ><span data-i18n="externalReadOnlyType">目录结构</span><select id="externalReadOnlyKind"><option value="generic" data-i18n="genericLayout">通用目录</option><option value="ani-rss" data-i18n="aniRssLayout">ani-rss 兼容目录</option></select></label
             ><label
-              ><span data-i18n="externalReadOnlyPath">容器内只读路径</span
-              ><input id="externalReadOnlyPath" type="text" /></label
+              ><span data-i18n="externalReadOnlyPath">媒体库路径</span
+              ><input id="externalReadOnlyPath" type="text" /><small id="externalReadOnlyPathStatus" class="path-status muted" role="status" aria-live="polite"></small></label
             ><label
               ><span data-i18n="externalScanMinutes">只读扫描间隔（分钟）</span
               ><input id="externalScanMinutes" type="number" min="5" /></label
@@ -678,6 +730,7 @@
           <div id="watchList" class="log-list"></div>
         </section>
         <section class="tab-panel users-panel" data-panel="users" id="settingsPanel-users" role="tabpanel" aria-labelledby="settingsTab-users" tabindex="0" data-admin-only>
+          <div id="accountSettingsRow" class="account-settings-row"><span class="account-settings-identity"><small class="muted" data-i18n="currentUser">当前用户</small><strong id="accountSettingsName"></strong></span><button id="changePassword" type="button" class="tool dark-tool" data-icon="user" data-i18n="changePassword">修改密码</button></div>
           <p class="muted" data-i18n="usersHint">普通用户可浏览和提交下载，但不能修改设置。</p>
           <div class="user-management-card">
             <div class="user-section-heading">
@@ -720,6 +773,8 @@
           <div class="update-toolbar">
             <button id="checkApplicationUpdateDetail" data-icon="refresh" type="button" class="tool dark-tool" data-i18n="checkUpdate">检测更新</button>
             <button id="applyApplicationUpdateDetail" data-icon="download" type="button" class="primary" data-i18n="updateNow" hidden>更新</button>
+            <button id="uploadApplicationUpdate" data-icon="upload" type="button" class="tool dark-tool" data-i18n="offlineUpdate">上传离线升级包</button>
+            <input id="offlineUpdateFile" type="file" accept=".anm-update.zip" hidden />
             <span id="updateDetailStatus" class="muted" aria-live="polite"></span>
           </div>
           <fieldset>

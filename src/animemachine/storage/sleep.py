@@ -43,6 +43,12 @@ def sleeping(config: dict[str, Any] | None = None, *, now: dt.datetime | None = 
     return start <= moment < end if start < end else moment >= start or moment < end
 
 
+def clock_info() -> str:
+    current = dt.datetime.now().astimezone()
+    zone = os.getenv('TZ') or current.tzname() or ''
+    return f"{current:%Y-%m-%d %H:%M} · {zone} (UTC{current:%z})"
+
+
 def _within(path: str | Path, root: str | Path) -> bool:
     """Lexical containment must not resolve/stat the sleeping disk."""
     target = os.path.normcase(os.path.abspath(str(path)))

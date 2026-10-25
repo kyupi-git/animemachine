@@ -3,6 +3,7 @@
   "serialProfiles": {
     "zh": [
       ["ani", "ANi", ["ANi"], ["CHT", "Baha"]],
+      ["kirara-fantasia", "Kirara Fantasia", ["Kirara Fantasia", "Kirara"], ["Baha"]],
       ["lolihouse", "LoliHouse", ["LoliHouse"], ["简繁内封字幕", "簡繁內封字幕", "简繁日内封字幕", "簡繁日內封字幕"]],
       ["sweetsub", "SweetSub", ["SweetSub"], ["简日双语", "簡日雙語", "繁日双语", "繁日雙語", "简繁日内封", "簡繁日內封"]],
       ["nekomoe", "喵萌奶茶屋", ["喵萌"], ["简日双语", "簡日雙語", "繁日双语", "繁日雙語", "简繁日内封", "簡繁日內封"]],
@@ -34,6 +35,7 @@
       ["ktxp", "极影字幕社", ["极影", "極影"], ["GB_CN", "BIG5"]]
     ],
     "en": [
+      ["kirara-fantasia", "Kirara Fantasia", ["Kirara Fantasia", "Kirara"], ["ENG", "English"]],
       ["subsplease", "SubsPlease", ["SubsPlease"], ["*"]], ["erai-raws", "Erai-raws", ["Erai-raws"], ["MultiSub"]],
       ["judas", "Judas", ["Judas"], ["Multi-Subs", "Eng-Subs"]], ["asw", "ASW", ["ASW"], ["*"]],
       ["anime-time", "Anime Time", ["Anime Time"], ["Multi Sub", "Multi-Subs", "Eng Sub", "ENG Sub"]],
@@ -48,7 +50,7 @@
       ["nest", "NEST", ["NEST"], ["简繁日内封", "簡繁日內封", "简日内封", "簡日內封"]],
       ["lolihouse", "LoliHouse", ["LoliHouse"], ["简繁内封字幕", "簡繁內封字幕", "简繁日内封字幕", "簡繁日內封字幕"]],
       ["nix-raws", "Nix-Raws", ["Nix-Raws"], ["简繁内封", "簡繁內封"]],
-      ["kirara-fantasia", "Kirara Fantasia", ["Kirara Fantasia"], ["ABEMA"]], ["kuro-nezumi", "黒ネズミたち", ["黒ネズミたち"], ["ABEMA"]],
+      ["kirara-fantasia", "Kirara Fantasia", ["Kirara Fantasia", "Kirara"], ["ABEMA"]], ["kuro-nezumi", "黒ネズミたち", ["黒ネズミたち"], ["ABEMA"]],
       ["erai-raws", "Erai-raws", ["Erai-raws"], ["MultiSub", "Multi Subs", "Multi-Subs", "Multiple Subtitle"]],
       ["varyg", "VARYG", ["VARYG"], ["Multi-Subs", "Multi Subs"]], ["toonshub", "ToonsHub", ["ToonsHub"], ["Multi-Subs", "Multi Subs"]],
       ["judas", "Judas", ["Judas"], ["Multi-Subs", "Multi Subs", "Eng-Subs"]], ["dkb", "DKB", ["DKB"], ["Multi-Subs", "Multi Subs"]],

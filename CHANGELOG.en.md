@@ -5,6 +5,27 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.5.1
+
+0.5.1 improves playback from existing collections and adds release tracking, offline updates, and an illustrated manual in three languages.
+
+### Added and improved
+
+- Added release tracking for future series and collection editions, using your selected groups and variants. Series can subscribe automatically; collection releases wait for your confirmation.
+- Added password changes for every account in Settings.
+- Added offline updates: upload the matching package while keeping settings, catalog data, and viewing history.
+- Added an illustrated offline manual covering deployment, subscriptions, playback, and collections in three languages.
+- Improved existing collections with ordinary and nested folder detection, DVD/BD and release-group edition selection, and Japanese metadata for Japanese animation.
+- Improved release selection and Continue watching: select all groups or individual variants, check the latest 24 episodes of long series, and confirm the newest episode manually or at 90% playback.
+- Improved the interface with one tracking entry, path examples and access status, and compact radar entries with full sorting on narrow screens.
+
+### Fixed
+
+- Fixed existing media failing to play, changed library paths not discovering files, and verification finishing too early.
+- Fixed stale archive-check progress and historical update failures appearing after redeployment.
+- Fixed permission commands, playlists, and paths failing to copy from LAN pages.
+- Fixed inconsistent connection addresses, time zones, and source checks in bundled deployments; improved library quiet hours and source switching.
+
 ## 0.5.0
 
 0.5.0 speeds up initial title preparation and cover fetching, adds precise release selection and viewing controls, and improves Collector settings, bundled deployment and player actions. Upgrades retain existing catalogs, settings and records.

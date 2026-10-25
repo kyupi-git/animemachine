@@ -31,7 +31,7 @@ services:
         condition: service_healthy
       qbittorrent:
         condition: service_started
-    image: ${ANI_RSS_IMAGE:-ghcr.io/wushuo894/ani-rss:v3.2.51}
+    image: ${ANI_RSS_IMAGE:-ghcr.io/wushuo894/ani-rss:v3.2.53}
     restart: unless-stopped
     environment:
       PUID: ${PUID:-1000}
@@ -54,12 +54,13 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 6
-    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.0}
+    image: ${ANM_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.1}
     restart: unless-stopped
     init: true
     environment:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
+      TZ: ${TZ:-Asia/Shanghai}
       ANM_CONFIG_PATH: /Config/config.json
       ANM_STATE_DIR: /Data/state
       ANM_IMPORTS_DIR: /Imports
@@ -114,7 +115,7 @@ services:
     depends_on:
       animemachine:
         condition: service_healthy
-    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.0}
+    image: ${TORRENT_COLLECTOR_IMAGE:-ghcr.io/kyupi-git/animemachine:0.5.1}
     restart: unless-stopped
     init: true
     environment:

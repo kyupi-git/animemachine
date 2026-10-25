@@ -14,6 +14,21 @@ from ..storage import path_policy
 from ..storage.sleep import sleeping_path
 
 
+def annotate_unwatched(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
+                       store: viewing.Store, user_id: int) -> None:
+    identities = {int(row['id']): int(row['bgm_id']) for row in rows}
+    latest = playback.latest_known_episodes(db_path, list(identities), config, expected_identities=identities)
+    records = {record['bgmId']: record for record in store.snapshot(user_id)}
+    pending = store.unwatched(user_id, {identities[key]: number for key, number in latest.items() if key in identities})
+    for row in rows:
+        record = records.get(int(row['bgm_id']))
+        row['viewing'] = {**record, 'animeId': row['id']} if record else None
+        row['latestEpisode'] = latest.get(int(row['id']))
+        subscribed = row.get('subscription_state') == 'active' or any(
+            item.get('enabled') for item in row.get('ani_rss_subscriptions', []))
+        row['hasUnwatched'] = subscribed and int(row['bgm_id']) in pending
+
+
 def season_params(request: dict[str, Any]) -> dict[str, list[str]]:
     start, end = str(request.get("from") or ""), str(request.get("to") or "")
     if not all(re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value) for value in (start, end)):
@@ -67,17 +82,17 @@ def episode_ranges(selection: Any, values: Any) -> dict[int, tuple[float, float]
 
 def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
           store: viewing.Store, user_id: int, *, language: str | None = None,
-          ranges: dict[int, tuple[float, float]] | None = None,
-          include_empty: bool = False) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
+          ranges: dict[int, tuple[float, float]] | None = None) -> tuple[list[playback.PlaybackItem], list[int], list[dict[str, Any]]]:
     items: list[playback.PlaybackItem] = []
     owners: list[int] = []
     groups: list[dict[str, Any]] = []
+    annotate_unwatched(db_path, rows, config, store, user_id)
     remote_available = ani_rss.state_available(ani_rss.state(db_path, config))
     language = language or str(config.get("ui", {}).get("language") or "en")
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for row in rows:
-            if row.get("media_code") != "tv":
+            if row.get("media_code") != "tv" or not row.get('hasUnwatched'):
                 continue
             anime_id = int(row["id"])
             current = db.execute("SELECT bgm_id FROM anime_work WHERE id=?", (anime_id,)).fetchone()
@@ -96,6 +111,10 @@ def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
                             title or name, playback.playback_episode(db, anime_id, episode), size or 0, "ani-rss"))
             record = store.get(user_id, int(row["bgm_id"]))
             anchor = record["episode"]
+            if anchor is not None and row.get('latestEpisode') is not None:
+                # A manual value beyond today's release must not make tomorrow's
+                # newly available episode permanently unreachable.
+                anchor = min(anchor, row['latestEpisode'])
             available = [item for item in playback._default_main_queue(candidates) if item.episode is not None]
             available.sort(key=lambda item: item.episode)
             if not available:
@@ -114,7 +133,7 @@ def queue(db_path: Path, rows: list[dict[str, Any]], config: dict[str, Any],
             else:
                 selected = default
             selected.sort(key=lambda item: item.episode)
-            if not selected and not include_empty:
+            if not selected:
                 continue
             title = str(row.get("title_zh_hans_localized") if language == "zh-Hans"
                         else row.get("title_en_localized") if language == "en"

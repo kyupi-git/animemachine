@@ -64,6 +64,34 @@ class ReleaseStreamTests(unittest.TestCase):
         native=self.stream('native',[1,2,3])
         self.assertEqual([native],self.filter([native],frontier=None))
 
+    def test_long_series_require_24_recent_contiguous_episodes_with_one_episode_lag(self):
+        self.db.execute("UPDATE anime_work SET episode_count=1500,episode_start_number=1,start_month='1999-10'")
+        current = self.stream('current',list(range(1077,1101)))
+        previous = self.stream('one-behind',list(range(1076,1100)))
+        incomplete = self.stream('missing',list(range(1078,1101)))
+        old = self.stream('old',list(range(1075,1099)))
+        gap = self.stream('gap',[value for value in range(1077,1101) if value != 1080])
+        wrong = self.stream('wrong',list(range(1077,1101)),name='Nocturne S02')
+        self.assertEqual([current,previous],self.filter([current,previous,incomplete,old,gap,wrong],frontier=1100))
+
+    def test_long_series_native_search_and_archive_backfill_remain_available(self):
+        self.db.execute("UPDATE anime_work SET episode_count=1500,episode_start_number=1,start_month='1999-10'")
+        current = self.stream('current',list(range(1077,1101)))
+        older = self.stream('older',list(range(1050,1074)))
+        archive = {**self.stream('BD',[1,2,3]),'sourceFamily':'archive'}
+        self.assertEqual([current,archive],self.filter([current,older,archive],frontier=None))
+        self.assertEqual([current,older,archive],self.filter([current,older,archive],frontier=1500))
+
+    def test_long_running_work_without_total_uses_recent_release_evidence(self):
+        self.db.executescript("""CREATE TABLE ani_rss_release_state(anime_id INTEGER,current_episode INTEGER,last_episode_update_at TEXT);
+            INSERT INTO ani_rss_release_state VALUES(1,1100,'2026-10-18T12:00:00+00:00');
+            UPDATE anime_work SET episode_count=0,episode_start_number=NULL,start_month='1999-10';""")
+        valid = self.stream('current',list(range(1077,1101)))
+        gap = self.stream('gap',list(range(1078,1101)))
+        self.assertEqual([valid],self.filter([valid,gap],frontier=1100))
+        self.db.execute("UPDATE ani_rss_release_state SET last_episode_update_at='2020-10-18T12:00:00+00:00'")
+        self.assertEqual([valid,gap],self.filter([valid,gap],frontier=1100))
+
     def test_variant_filters_match_their_own_releases_and_exclude_siblings(self):
         titles=['[ANi] Example - 01 [Baha][1080p][CHS][HEVC-10bit]',
                 '[ANi] Example - 02 [CR][1080p][HEVC-10bit]',

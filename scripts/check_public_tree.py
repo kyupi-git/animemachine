@@ -15,9 +15,9 @@ from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 SKIP_DIRS = {".git", ".venv", "dist", "build", "__pycache__", ".codex", ".agents"}
-SOURCE_PRIVATE_DIRS = {".local", ".playwright-mcp", ".anm-history", "archive", "audit", "state"}
+SOURCE_PRIVATE_DIRS = {".local", ".playwright-mcp", ".anm-history", "archive", "audit", "state", "node_modules"}
 SOURCE_PRIVATE_FILES = {"AGENTS.md", "config.json"}
-SOURCE_PRIVATE_PREFIXES = {"deploy/private", "tools/private-library"}
+SOURCE_PRIVATE_PREFIXES = {"deploy/private", "tools/private-library", "docs/manual/.vitepress/cache"}
 PRIVATE_LAUNCHER_PATTERNS = ("start-codex*.cmd", "resume-codex*.cmd")
 OS_METADATA_NAMES = {"Thumbs.db", ".DS_Store", "desktop.ini"}
 FORBIDDEN_NAMES = {"config.json", ".env", ".env.local", *OS_METADATA_NAMES}

@@ -1908,6 +1908,23 @@ class AniRssTest(unittest.TestCase):
         with ani_rss.background_resource_scan_lease() as after_completion:
             self.assertTrue(after_completion)
 
+    def test_rolling_scan_services_release_intents_between_works_without_releasing_lease(self):
+        self.assertTrue(ani_rss.sync(self.db_path, self.config)['snapshotComplete'])
+        calls = []
+        def check_intents():
+            with ani_rss.background_resource_scan_lease() as acquired:
+                self.assertFalse(acquired)
+            calls.append('intent')
+        def search(*_args):
+            calls.append('ordinary')
+            return {}
+        with mock.patch.object(ani_rss, 'automatic_search_ids', return_value=[1, 1]), \
+             mock.patch.object(ani_rss, 'background_search_due', return_value=True), \
+             mock.patch.object(ani_rss, 'search', side_effect=search):
+            result = ani_rss.refresh_background_resources(self.db_path, self.config, before_work=check_intents)
+        self.assertEqual(2, result['refreshed'])
+        self.assertEqual(['intent', 'ordinary', 'intent', 'ordinary'], calls)
+
     def test_background_search_order_prioritizes_recent_six_months_then_walks_backward(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             db.executemany("INSERT INTO anime_work VALUES(?,?,?,?,?,?,?)", [

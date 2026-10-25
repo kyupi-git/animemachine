@@ -82,6 +82,7 @@ const selected = new Set(),
   expandedTorrentWorks = new Set(),
   policyOverrides = new Map(),
   playbackSources = new Map(),
+  playbackEditions = new Map(),
   planState = { id: null },
   relationHiddenCodes = new Set();
 const modalStack = [];
@@ -127,6 +128,18 @@ function scrollModalFallback(event, dialog) {
 }
 const i18n = {
   "zh-Hans": {
+    pathExamples: "路径填写示例",
+    pathWindowsHint: "Windows：填写本机文件夹，或当前运行账号可访问的网络共享。",
+    pathDockerHint: "Docker：填写容器内的挂载路径，对应部署文件中的目录映射。",
+    qbtPathHint: "填写 qBittorrent 所在设备中的保存路径；联合部署通常为 /Library。",
+    pathReadable: "可读取",
+    pathSaveToCheck: "保存后检查此路径",
+    pathMissing: "目录不存在，请检查路径或挂载",
+    pathPermissionDenied: "无权读取，请检查运行账号和共享权限",
+    pathUnavailable: "暂时无法访问，请检查设备连接或挂载",
+    pathCredentialsInvalid: "共享认证失败，请检查挂载凭据",
+    pathNotChecked: "尚未取得路径状态",
+    radarDefaultSort: "默认顺序",
     catalog: "AnimeMachine",
     catalogTagline: "全自动动画收藏库",
     aboutTitle: "关于 AnimeMachine",
@@ -191,6 +204,12 @@ const i18n = {
     cards: "卡片",
     table: "表格",
     settings: "设置",
+    accountSettings: "账户设置", changePassword: "修改密码", currentPassword: "当前密码", newPassword: "新密码", confirmPassword: "确认新密码",
+    changePasswordHint: "新密码为 10–256 个字符；修改后，其它设备需要重新登录。", passwordMismatch: "两次输入的新密码不一致。",
+    passwordChanged: "密码已修改。当前设备可继续使用，其它设备请重新登录。", currentPasswordIncorrect: "当前密码不正确，请重新输入。",
+    passwordLength: "新密码须为 10–256 个字符。", passwordUnchanged: "请输入与当前密码不同的新密码。", passwordRetry: "账户状态已变化，请重新登录后再试。",
+    passwordRateLimited: "尝试次数较多，请 5 分钟后重试。",
+    manual: "手册",
     loginTitle: "登录 AnimeMachine",
     login: "登录",
     logout: "退出",
@@ -300,6 +319,8 @@ const i18n = {
     stopped: "停止",
     save: "保存",
     saved: "已保存",
+    savedScanning: "已保存，正在后台扫描媒体目录",
+    mediaScanProgress: "正在清点媒体 · {files} 个文件",
     availability: "可用来源",
     available: "有可用来源",
     unavailable: "无可用来源",
@@ -331,7 +352,7 @@ const i18n = {
     taskPreview: "任务预览",
     torrents: "资源",
     reloadList: "重新载入",
-    collectorWorkSearch: "作品资源检索", collectorSearchLimits: "检索数量与时限", collectorMaxResults: "最多保存资源数", collectorTimeout: "检索时限（秒）", collectorPool: "Torrent 资源池", collectorMonitor: "定时扫描资源池", collectorCollection: "自动采集 Torrent", collectorHistory: "补充历史资源", collectorHint: "作品检索可直接使用；自动采集由联合部署中的 Torrent Collector 执行。资源收录与排序沿用“通用”和“资源组”中的偏好。", collectorSourcesRequired: "请至少选择一个 Torrent 检索来源。",
+    collectorWorkSearch: "作品资源检索", collectorSearchLimits: "检索数量与时限", collectorMaxResults: "最多保存资源数", collectorTimeout: "检索时限（秒）", collectorPool: "Torrent 资源池", collectorMonitor: "定时扫描资源池", collectorCollection: "自动采集 Torrent", collectorHistory: "补充历史资源", collectorHint: "作品检索可直接使用；自动采集由联合部署中的 Torrent Collector 执行。资源收录与排序沿用“常规”和“资源组”中的偏好。", collectorSourcesRequired: "请至少选择一个 Torrent 检索来源。",
     aniRssSubscriptionResources: "Ani-RSS 订阅", torrentResources: "Torrent 下载", exactResourceHint: "订阅仅使用所选资源组和版本。", resourceVariantChanged: "资源版本已更新，请重新选择。",
     noTorrent: "暂未找到资源，可尝试重新搜索。",
     excludedSourceClass: "片源类型不符",
@@ -395,6 +416,21 @@ const i18n = {
     settingsSectionsLabel: "设置分区",
     remotePlaybackSource: "Ani-RSS 远程播放",
     playbackSource: "播放来源",
+    playbackEdition: "播放版本",
+    playbackAutomatic: "自动选择",
+    indexingLocalMedia: "正在识别本地视频…",
+    offlineUpdate: "上传离线升级包",
+    offlinePackageHint: "请选择适合当前系统的 .anm-update.zip 离线升级包。",
+    offlineUpdateConfirm: "校验并安装此离线升级包？安装完成后会自动重启，配置和收藏库保持不变。",
+    offlineNotNewer: "此包不是更新版本，请选择较新的升级包。",
+    offlinePlatform: "此包不适用于当前部署方式，请选择对应的 Windows 或 Docker 升级包。",
+    offlineChecksum: "升级包校验未通过，请重新复制完整文件后重试。",
+    offlineIncomplete: "文件上传未完成，请重新选择并上传。",
+    updatePending: "更新正在完成，请稍后重试。",
+    updateLocalReady: "可点击“检测更新”，或直接上传离线升级包。",
+    updateRolledBack: "新版未能启动，已自动恢复原版本，可继续使用。",
+    offlineBaseImage: "此版本需要更新 Docker 基础镜像，请导入对应的离线镜像，再按用户指南重新建立容器。",
+    upgradeHistorical: "当前版本已运行；上次安装尝试未完成",
     aniRssRemoteOnlyLibrary: "媒体由 Ani-RSS 远程提供，请在“播放”中选择来源。",
     subtitleActions: "字幕",
     playbackStartFile: "起始媒体文件",
@@ -422,11 +458,11 @@ const i18n = {
     sortBy: "排序",
     recentEpisodeSort: "新作追更",
     catchup: "一键继续观看", catchupEmpty: "本季度暂无可继续观看的 TV 集数。", catchupPreparing: "正在整理可播放集数…",
-    catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "默认跳过已看完（≥99%）的集数；已全部看完的作品可填写起始与结束集重看。",
+    catchupCount: "{works} 部作品 · {episodes} 集", catchupHint: "仅列出已订阅且有新集待看的 TV 动画，默认跳过已看完（≥90%）的集数。",
     catchupSelectHint: "勾选作品、调整集数范围，拖动排序。", catchupRangeFrom: "起始集", catchupRangeTo: "结束集", catchupRangeFromShort: "起始", catchupRangeToShort: "结束", catchupRangeInvalid: "请检查集数范围（必须在可播放集数内，且起始集不大于结束集）。", catchupSelectionOutdated: "作品或媒体状态已变化，请关闭窗口后重新打开续播列表。", catchupSelectRequired: "请先勾选要看的作品。", catchupSelectedCount: "已选择 {works} 部作品 · {episodes} 集",
     catchupDrag: "拖动排序，也可使用上下方向键",
     viewingResume: "续看：第 {episode} 集", viewingNew: "未开始", viewingEdit: "修改续看集数",
-    viewingEpisode: "下次从这一集开始（包含本集）", viewingClear: "设为未开始", viewingUndo: "撤销",
+    viewingEpisode: "下次从这一集开始观看", viewingClear: "从头开始观看", viewingUndo: "撤销", viewingComplete: "已看完最新集",
     viewingSaved: "已修改", viewingConflict: "记录已在其它设备更新，请重新打开后修改。",
     potplayerInstall: "安装扩展以记忆播放进度", potplayerHint: "仅 PotPlayer 需要。安装扩展后可记录位置并续播；未安装时正常播放，只记录集数。", viewingPosition: "播放位置（时:分:秒）",
     radar: "新作雷达",
@@ -436,6 +472,16 @@ const i18n = {
     episodeUpdated: "第{episode}集",
     radarSubscription: "订阅状态", radarSubscribed: "已订阅", radarPaused: "已暂停",
     radarSubscribe: "订阅", radarChooseResource: "选择订阅资源",
+    followWork: "资源跟踪", followMode: "跟踪方式", advanceSubscribe: "提前订阅连载", followArchive: "跟踪收藏资源",
+    followPreferences: "使用设置中的资源组偏好", followCancel: "停止跟踪", followPending: "待资源", followAvailable: "发现资源",
+    followSerialHint: "定期检索，找到符合偏好和所选版本的资源后，自动启用 Ani-RSS 订阅。",
+    followArchiveHint: "定期检索收藏类资源，发现后提示，由你选择是否下载。",
+    followOfflineHint: "保存后保留订阅意向；连接 Ani-RSS 并发现匹配资源后，自动启用订阅。", followSaved: "已保存，将在后台定期检查。",
+    followChooseGroup: "请至少选择一个资源组。", groupVersions: "版本", allVersions: "全部", unknownVersion: "未标注平台",
+    selectAllGroups: "全选", clearAllGroups: "全不选",
+    followUnmatched: "有资源，暂未匹配偏好", followManaged: "已有 Ani-RSS 订阅", followEmpty: "暂无跟踪记录。可在作品详情中提前订阅或跟踪收藏资源。",
+    followOpen: "查看资源",
+    followChanged: "跟踪记录已变化，请重新打开后再修改。", followRemove: "移除记录", followManagedHint: "已有订阅继续按 Ani-RSS 的设置运行。调整资源组或暂停订阅，请使用作品详情的订阅菜单。",
     radarNoResources: "暂未找到可订阅资源，请稍后重试。", radarSubscribeHint: "选择资源组后订阅，下载由 Ani-RSS 按其配置执行。",
     radarEmpty: "这一季暂无作品。", radarLoading: "正在加载…",
     radarSubscriptionDone: "订阅已提交；状态将在同步后更新。", radarSubscriptionPending: "等待同步",
@@ -481,7 +527,7 @@ const i18n = {
     auditLibraryHint: "重新扫描目录并评估已有内容的完整度。",
     archiveReady: "动画底库",
     torrentAssets: "个 Torrent 资源",
-    archiveUpdating: "正在更新动画底库…",
+    archiveChecking: "正在检查底库更新…", archivePreparing: "正在准备新版底库…", archiveMerging: "正在合并更新资料…",
     archiveUnchanged: "动画底库已是最新",
     archiveComplete: "更新完成",
     archiveFailed: "动画底库更新失败",
@@ -627,6 +673,7 @@ const i18n = {
     catalogFullDeferred: "当季作品可以继续使用，其余资料稍后自动重试",
     catalogHistoryPreparing: "历史作品资料正在后台准备，请稍后再查。",
     copyBrowserPermission: "复制授权命令",
+    copyManually: "浏览器未能自动复制。请复制下方选中的内容（Ctrl+C；Mac 使用 ⌘C）。",
     browserPermissionHint: "在本机命令提示符（cmd）中粘贴运行一次，然后重开 Edge 或 Chrome。仅允许当前账号从本站调用 PotPlayer 和 VLC，保留已有授权。",
     startupWarming: "网页已就绪，后台准备中",
     startupWarm: "后台准备完成",
@@ -657,14 +704,15 @@ const i18n = {
     metadataNetworkHint: "按健康与延迟自动选择，失败后冷却并切换；支持系统代理。Archive 文件无论来自何处都必须通过官方 SHA-256。",
     metadataEndpointsRequired: "Archive 清单和 Bangumi API 至少各保留一个端点。",
     connectionHint:
-      "Compose 部署会以服务名覆盖回环地址；页面保存的凭据写入受限状态文件，部署环境变量或 Secret 仍具有更高优先级。",
+      "联合部署会自动连接服务。带“部署设置”标记的选项在部署文件中修改，重新启动后生效。",
+    deploymentManaged: "部署设置",
     endpoint: "服务地址",
     qbtApiKey: "API Key",
     qbtApiKeyPlaceholder: "留空则沿用已保存或部署凭据",
     qbtApiKeyHint: "密钥单独保存，重启后仍可用；部署配置中的密钥优先。",
     qbtCredentialConfigured: "API Key 已保存到受限凭据存储",
     torrentPoolPath: "Torrent 池路径",
-    torrentPoolHint: "将 .torrent 文件放入此目录，AnimeMachine 会自动读取。",
+    torrentPoolHint: "已有 .torrent 文件可直接放入此目录。仅使用现成种子池时，保留定时扫描，关闭自动采集即可。",
     libraryPath: "动画收藏库路径",
     librarySleepEnabled: "启用每日休眠时段",
     localLibrarySettings: "本地收藏库",
@@ -726,7 +774,7 @@ const i18n = {
     placeholdersProgress: "已处理 {done}/{total} · 新建 {created} · 已有 {existing}",
     placeholdersResult: "新建 {created} · 已有 {existing} · 跳过 {skipped} · 失败 {failed}",
     placeholdersConnectionRequired: "请在设置中连接可读写的本地库后重试。",
-    auditProgress: "已核验 {done}/{total} · 更新 {updated} · 跳过 {skipped}",
+    auditProgress: "媒体 {files} 个文件 · 已核验 {done}/{total} · 更新 {updated} · 跳过 {skipped}",
     maintenanceRunning: "正在后台处理…",
     maintenanceFailed: "处理失败",
     maintenanceFinished: "处理完成",
@@ -768,6 +816,18 @@ const i18n = {
     stateOther: "状态待确认",
   },
   en: {
+    pathExamples: "Path examples",
+    pathWindowsHint: "Windows: use a local folder or a network share accessible to the account running AnimeMachine.",
+    pathDockerHint: "Docker: use the path inside the container, as mapped in your Compose file.",
+    qbtPathHint: "Use the save path on the device running qBittorrent; bundled deployments normally use /Library.",
+    pathReadable: "Readable",
+    pathSaveToCheck: "Save to check this path",
+    pathMissing: "Folder not found. Check the path or mount.",
+    pathPermissionDenied: "Read access denied. Check the service account and share permissions.",
+    pathUnavailable: "Temporarily unavailable. Check the device connection or mount.",
+    pathCredentialsInvalid: "Share authentication failed. Check the mount credentials.",
+    pathNotChecked: "Path status is not available yet",
+    radarDefaultSort: "Default order",
     catalog: "AnimeMachine",
     catalogTagline: "Automated Anime Library",
     aboutTitle: "About AnimeMachine",
@@ -832,6 +892,12 @@ const i18n = {
     cards: "Cards",
     table: "Table",
     settings: "Settings",
+    accountSettings: "Account settings", changePassword: "Change password", currentPassword: "Current password", newPassword: "New password", confirmPassword: "Confirm new password",
+    changePasswordHint: "Use 10–256 characters. Other devices will need to sign in again.", passwordMismatch: "The new passwords do not match.",
+    passwordChanged: "Password changed. This device stays signed in; sign in again on other devices.", currentPasswordIncorrect: "The current password is incorrect. Try again.",
+    passwordLength: "Use 10–256 characters for the new password.", passwordUnchanged: "Choose a password different from your current one.", passwordRetry: "Your account changed. Sign in again and retry.",
+    passwordRateLimited: "Too many attempts. Try again in five minutes.",
+    manual: "Manual",
     loginTitle: "Sign in to AnimeMachine",
     login: "Sign in",
     logout: "Sign out",
@@ -945,6 +1011,8 @@ const i18n = {
     stopped: "Stopped",
     save: "Save",
     saved: "Saved",
+    savedScanning: "Saved. Scanning media folders in the background.",
+    mediaScanProgress: "Scanning media · {files} files",
     availability: "Available sources",
     available: "Has an available source",
     unavailable: "No available source",
@@ -1040,6 +1108,21 @@ const i18n = {
     settingsSectionsLabel: "Settings sections",
     remotePlaybackSource: "Ani-RSS remote playback",
     playbackSource: "Playback source",
+    playbackEdition: "Edition",
+    playbackAutomatic: "Automatic",
+    indexingLocalMedia: "Identifying local videos…",
+    offlineUpdate: "Upload offline update",
+    offlinePackageHint: "Choose the .anm-update.zip package for this system.",
+    offlineUpdateConfirm: "Verify and install this offline update? AnimeMachine will restart and keep your settings and library.",
+    offlineNotNewer: "Choose a package newer than the running version.",
+    offlinePlatform: "Choose the update package for this Windows or Docker installation.",
+    offlineChecksum: "The checksum does not match. Copy the complete package and try again.",
+    offlineIncomplete: "The upload was incomplete. Select the file and try again.",
+    updatePending: "The update is finishing. Please try again shortly.",
+    updateLocalReady: "Check for updates, or upload an offline update package.",
+    updateRolledBack: "The new version could not start. The previous version was restored and is ready to use.",
+    offlineBaseImage: "This version needs a newer Docker base image. Import its offline image and recreate the container as described in the guide.",
+    upgradeHistorical: "Current version running; a previous installation attempt did not complete",
     aniRssRemoteOnlyLibrary: "Media is provided remotely by Ani-RSS. Choose it under Playback.",
     subtitleActions: "Subtitles",
     playbackStartFile: "Starting media file",
@@ -1067,11 +1150,11 @@ const i18n = {
     sortBy: "Sort",
     recentEpisodeSort: "New Episode Follow-up",
     catchup: "Continue watching", catchupEmpty: "No playable TV episodes to continue this season.", catchupPreparing: "Preparing playable episodes…",
-    catchupCount: "{works} titles · {episodes} episodes", catchupHint: "Completed episodes (≥99%) are skipped by default. For fully watched titles, enter a start and end episode to replay.",
+    catchupCount: "{works} titles · {episodes} episodes", catchupHint: "Only subscribed TV titles with new episodes to watch are listed. Completed episodes (≥90%) are skipped by default.",
     catchupSelectHint: "Select titles, adjust episode ranges, and drag to reorder.", catchupRangeFrom: "From episode", catchupRangeTo: "Through episode", catchupRangeFromShort: "From", catchupRangeToShort: "To", catchupRangeInvalid: "Check episode ranges: choose available episodes in ascending order.", catchupSelectionOutdated: "Titles or media have changed. Close this window and reopen Continue watching.", catchupSelectRequired: "Select at least one title to watch.", catchupSelectedCount: "Selected: {works} titles · {episodes} episodes",
     catchupDrag: "Drag to reorder, or use the up and down arrow keys",
     viewingResume: "Continue: Ep {episode}", viewingNew: "Not started", viewingEdit: "Change starting episode",
-    viewingEpisode: "Next time, start here (including this episode)", viewingClear: "Mark as not started", viewingUndo: "Undo",
+    viewingEpisode: "Start watching from this episode next time", viewingClear: "Watch from the beginning", viewingUndo: "Undo", viewingComplete: "Latest episode finished",
     viewingSaved: "Updated", viewingConflict: "This record changed on another device. Reopen it to make your change.",
     potplayerInstall: "Install progress extension", potplayerHint: "PotPlayer only. Install the extension to save positions and resume. Without it, playback works and records episodes only.", viewingPosition: "Position (hours:minutes:seconds)",
     radar: "Release radar",
@@ -1081,6 +1164,16 @@ const i18n = {
     episodeUpdated: "Ep. {episode}",
     radarSubscription: "Subscription", radarSubscribed: "Subscribed", radarPaused: "Paused",
     radarSubscribe: "Subscribe", radarChooseResource: "Choose a release",
+    followWork: "Track releases", followMode: "Tracking mode", advanceSubscribe: "Subscribe when available", followArchive: "Track archive releases",
+    followPreferences: "Use release groups from Settings", followCancel: "Stop tracking", followPending: "Awaiting releases", followAvailable: "Releases found",
+    followSerialHint: "Check periodically and enable an Ani-RSS subscription when a release matches your preferences and selected version.",
+    followArchiveHint: "Check for archive releases and notify you. Choose whether to download when a match appears.",
+    followOfflineHint: "Checks and automatic subscriptions begin when Ani-RSS is connected.", followSaved: "Saved. Releases will be checked in the background.",
+    followChooseGroup: "Select at least one release group.", groupVersions: "Versions", allVersions: "All", unknownVersion: "Unspecified platform",
+    selectAllGroups: "Select all", clearAllGroups: "Clear all",
+    followUnmatched: "Releases found; preferences not matched", followManaged: "Already managed by Ani-RSS", followEmpty: "No tracked releases. Open a title to subscribe in advance or track archive releases.",
+    followOpen: "View releases",
+    followChanged: "This tracking record changed. Reopen it before editing.", followRemove: "Remove record", followManagedHint: "The existing subscription keeps its Ani-RSS settings. Use the subscription menu in title details to change the group or pause it.",
     radarNoResources: "No subscription releases found yet. Try again later.", radarSubscribeHint: "Choose a release group. Ani-RSS downloads using its own settings.",
     radarEmpty: "No works in this season yet.", radarLoading: "Loading…",
     radarSubscriptionDone: "Subscription submitted; status will update after synchronization.", radarSubscriptionPending: "Awaiting sync",
@@ -1126,7 +1219,7 @@ const i18n = {
     auditLibraryHint: "Rescan directories and reassess completeness of existing content.",
     archiveReady: "Catalog base",
     torrentAssets: "torrent assets",
-    archiveUpdating: "Updating catalog base…",
+    archiveChecking: "Checking for a catalog update…", archivePreparing: "Preparing the new catalog…", archiveMerging: "Applying catalog changes…",
     archiveUnchanged: "Catalog base is current",
     archiveComplete: "Catalog base updated",
     archiveFailed: "Catalog update failed",
@@ -1272,6 +1365,7 @@ const i18n = {
     catalogFullDeferred: "Seasonal titles remain available; preparation will retry automatically",
     catalogHistoryPreparing: "Historical titles are still being prepared. Please try again shortly.",
     copyBrowserPermission: "Copy permission command",
+    copyManually: "Your browser could not copy automatically. Copy the selected text below (Ctrl+C, or ⌘C on Mac).",
     browserPermissionHint: "Run once in Command Prompt (cmd) on this PC, then reopen Edge or Chrome. Allows this site to launch PotPlayer and VLC for your Windows account and keeps existing permissions.",
     startupWarming: "Ready to use; background preparation continues",
     startupWarm: "Background preparation complete",
@@ -1302,14 +1396,15 @@ const i18n = {
     metadataNetworkHint: "Chooses by health and latency, cools down failures, and honors the system proxy. Every Archive asset must pass the official SHA-256.",
     metadataEndpointsRequired: "Keep at least one Archive manifest and one Bangumi API endpoint.",
     connectionHint:
-      "Compose overrides loopback addresses with service names. Web-saved credentials use restricted state files; deployment environment variables or Secrets retain precedence.",
+      "Bundled services connect automatically. Options marked Deployment are managed in your deployment file; restart after changing them.",
+    deploymentManaged: "Deployment",
     endpoint: "Endpoint",
     qbtApiKey: "API Key",
     qbtApiKeyPlaceholder: "Leave blank to keep the saved or deployment credential",
     qbtApiKeyHint: "Keys are stored separately and remain available after restart. Deployment credentials take precedence.",
     qbtCredentialConfigured: "API Key saved to restricted credential storage",
     torrentPoolPath: "Torrent pool path",
-    torrentPoolHint: "Place .torrent files in this directory for AnimeMachine to read automatically.",
+    torrentPoolHint: "Place existing .torrent files here. To use only your own pool, keep scheduled scans enabled and turn off automatic collection.",
     libraryPath: "Anime library path",
     librarySleepEnabled: "Enable daily library quiet hours",
     localLibrarySettings: "Local library",
@@ -1371,7 +1466,7 @@ const i18n = {
     placeholdersProgress: "Processed {done}/{total} · Created {created} · Existing {existing}",
     placeholdersResult: "Created {created} · Existing {existing} · Skipped {skipped} · Failed {failed}",
     placeholdersConnectionRequired: "Connect a writable local library in Settings, then retry.",
-    auditProgress: "Verified {done}/{total} · Updated {updated} · Skipped {skipped}",
+    auditProgress: "{files} media files · Verified {done}/{total} · Updated {updated} · Skipped {skipped}",
     maintenanceRunning: "Working in the background…",
     maintenanceFailed: "Operation failed",
     maintenanceFinished: "Completed",
@@ -1413,6 +1508,18 @@ const i18n = {
     stateOther: "Status needs review",
   },
   ja: {
+    pathExamples: "パスの入力例",
+    pathWindowsHint: "Windows：ローカルフォルダー、または AnimeMachine の実行アカウントからアクセスできる共有フォルダーを指定します。",
+    pathDockerHint: "Docker：Compose ファイルで割り当てたコンテナー内のパスを指定します。",
+    qbtPathHint: "qBittorrent を実行する機器側の保存先を指定します。一括構成では通常 /Library です。",
+    pathReadable: "読み取り可能",
+    pathSaveToCheck: "保存後にこのパスを確認します",
+    pathMissing: "フォルダーが見つかりません。パスやマウントを確認してください。",
+    pathPermissionDenied: "読み取り権限がありません。実行アカウントと共有権限を確認してください。",
+    pathUnavailable: "現在アクセスできません。機器の接続やマウントを確認してください。",
+    pathCredentialsInvalid: "共有の認証に失敗しました。マウントの認証情報を確認してください。",
+    pathNotChecked: "パスの状態はまだ取得されていません",
+    radarDefaultSort: "既定の順序",
     catalog: "AnimeMachine",
     catalogTagline: "全自動アニメライブラリ",
     aboutTitle: "AnimeMachineについて",
@@ -1477,6 +1584,12 @@ const i18n = {
     cards: "カード",
     table: "表",
     settings: "設定",
+    accountSettings: "アカウント設定", changePassword: "パスワードを変更", currentPassword: "現在のパスワード", newPassword: "新しいパスワード", confirmPassword: "新しいパスワードの確認",
+    changePasswordHint: "10～256 文字で設定します。変更後、ほかの端末では再ログインが必要です。", passwordMismatch: "新しいパスワードが一致しません。",
+    passwordChanged: "変更しました。この端末はそのまま利用できます。ほかの端末では再ログインしてください。", currentPasswordIncorrect: "現在のパスワードを確認してください。",
+    passwordLength: "新しいパスワードは 10～256 文字で入力してください。", passwordUnchanged: "現在とは異なるパスワードを設定してください。", passwordRetry: "アカウントの状態が変わりました。再ログインしてお試しください。",
+    passwordRateLimited: "試行回数が多いため、5 分後にもう一度お試しください。",
+    manual: "マニュアル",
     loginTitle: "AnimeMachine にログイン",
     login: "ログイン",
     logout: "ログアウト",
@@ -1590,6 +1703,8 @@ const i18n = {
     stopped: "停止",
     save: "保存",
     saved: "保存しました",
+    savedScanning: "保存しました。メディアフォルダーを確認中です。",
+    mediaScanProgress: "メディアを確認中 · {files} ファイル",
     availability: "利用可能なソース",
     available: "利用可能なソースあり",
     unavailable: "利用可能なソースなし",
@@ -1685,6 +1800,21 @@ const i18n = {
     settingsSectionsLabel: "設定セクション",
     remotePlaybackSource: "Ani-RSS リモート再生",
     playbackSource: "再生元",
+    playbackEdition: "再生バージョン",
+    playbackAutomatic: "自動選択",
+    indexingLocalMedia: "ローカル動画を確認しています…",
+    offlineUpdate: "オフライン更新をアップロード",
+    offlinePackageHint: "この環境用の .anm-update.zip 更新パッケージを選択してください。",
+    offlineUpdateConfirm: "このパッケージを検証してインストールしますか？完了後に自動で再起動します。設定とライブラリは引き継がれます。",
+    offlineNotNewer: "現在より新しいバージョンのパッケージを選択してください。",
+    offlinePlatform: "この Windows または Docker 環境に対応する更新パッケージを選択してください。",
+    offlineChecksum: "チェックサムが一致しません。ファイルをコピーし直して再試行してください。",
+    offlineIncomplete: "アップロードが完了していません。ファイルを選び直してください。",
+    updatePending: "更新を完了しています。少し待ってから再度お試しください。",
+    updateLocalReady: "更新を確認するか、オフライン更新パッケージをアップロードしてください。",
+    updateRolledBack: "新版を起動できなかったため、元のバージョンに戻しました。そのまま利用できます。",
+    offlineBaseImage: "このバージョンには新しい Docker ベースイメージが必要です。対応するオフラインイメージを読み込み、ガイドに従ってコンテナーを再作成してください。",
+    upgradeHistorical: "現在のバージョンは稼働中です。過去のインストールは完了しませんでした。",
     aniRssRemoteOnlyLibrary: "メディアは Ani-RSS からリモート提供されます。「再生」で再生元を選択してください。",
     subtitleActions: "字幕",
     playbackStartFile: "開始メディアファイル",
@@ -1712,11 +1842,11 @@ const i18n = {
     sortBy: "並び順",
     recentEpisodeSort: "新作追従",
     catchup: "まとめて続きを再生", catchupEmpty: "このシーズンには続けて再生できる TV の話数がありません。", catchupPreparing: "再生できる話数を確認中…",
-    catchupCount: "{works} 作品 · {episodes} 話", catchupHint: "99%以上視聴した話は既定で除外します。全話視聴済みの作品は開始話数と終了話数を入力して再視聴できます。",
+    catchupCount: "{works} 作品 · {episodes} 話", catchupHint: "登録中で新着の未視聴エピソードがある TV アニメのみ表示します。90%以上視聴した話は既定で除外します。",
     catchupSelectHint: "作品と話数範囲を選択し、ドラッグで再生順を変更できます。", catchupRangeFrom: "開始話数", catchupRangeTo: "終了話数", catchupRangeFromShort: "開始", catchupRangeToShort: "終了", catchupRangeInvalid: "話数範囲を確認してください。再生可能な話数を昇順で指定してください。", catchupSelectionOutdated: "作品または動画の状態が変わりました。画面を閉じて続き再生リストを開き直してください。", catchupSelectRequired: "視聴する作品を選択してください。", catchupSelectedCount: "選択中：{works} 作品 · {episodes} 話",
     catchupDrag: "ドラッグ、または上下の方向キーで並べ替え",
     viewingResume: "続き：第 {episode} 話", viewingNew: "未再生", viewingEdit: "再開する話数を変更",
-    viewingEpisode: "次回はこの話から再生（この話を含む）", viewingClear: "未再生に戻す", viewingUndo: "元に戻す",
+    viewingEpisode: "次回はこの話から視聴", viewingClear: "最初から視聴", viewingUndo: "元に戻す", viewingComplete: "最新話を視聴済みにする",
     viewingSaved: "変更しました", viewingConflict: "別の端末で記録が更新されました。開き直して変更してください。",
     potplayerInstall: "再生位置を記録する拡張を導入", potplayerHint: "PotPlayer 専用です。拡張を導入すると再生位置から再開できます。未導入でも通常どおり再生でき、話数のみ記録します。", viewingPosition: "再生位置（時:分:秒）",
     radar: "新作レーダー",
@@ -1726,6 +1856,16 @@ const i18n = {
     episodeUpdated: "第{episode}話",
     radarSubscription: "購読状態", radarSubscribed: "購読中", radarPaused: "一時停止中",
     radarSubscribe: "購読", radarChooseResource: "購読リリースを選択",
+    followWork: "リリース追跡", followMode: "追跡方法", advanceSubscribe: "配信開始時に購読", followArchive: "アーカイブ向けリリースを追跡",
+    followPreferences: "設定のリリースグループを使用", followCancel: "追跡を停止", followPending: "リリース待ち", followAvailable: "リリースあり",
+    followSerialHint: "定期的に検索し、設定と選択したバージョンに一致するリリースが見つかると Ani-RSS の購読を開始します。",
+    followArchiveHint: "アーカイブ向けリリースを定期的に検索して通知します。ダウンロードは通知後に選択できます。",
+    followOfflineHint: "Ani-RSS に接続すると、検索と自動購読を開始します。", followSaved: "保存しました。バックグラウンドで定期的に確認します。",
+    followChooseGroup: "リリースグループを選択してください。", groupVersions: "バージョン", allVersions: "すべて", unknownVersion: "配信元の記載なし",
+    selectAllGroups: "全選択", clearAllGroups: "全解除",
+    followUnmatched: "リリースあり・設定に一致せず", followManaged: "Ani-RSS で購読済み", followEmpty: "追跡中の作品はありません。作品詳細から事前購読やアーカイブ向けリリースの追跡を設定できます。",
+    followOpen: "リリースを表示",
+    followChanged: "追跡設定が更新されました。開き直してから変更してください。", followRemove: "記録を削除", followManagedHint: "既存の購読は Ani-RSS の設定で継続します。グループの変更や一時停止は作品詳細の購読メニューから行えます。",
     radarNoResources: "購読できるリリースがありません。後でもう一度お試しください。", radarSubscribeHint: "リリースグループを選択してください。Ani-RSS の設定に従ってダウンロードします。",
     radarEmpty: "このシーズンの作品はまだありません。", radarLoading: "読み込み中…",
     radarSubscriptionDone: "購読を送信しました。同期後に状態が更新されます。", radarSubscriptionPending: "同期待ち",
@@ -1771,7 +1911,7 @@ const i18n = {
     auditLibraryHint: "フォルダーを再走査し、既存コンテンツの完全性を再評価します。",
     archiveReady: "カタログベース",
     torrentAssets: "件の Torrent リソース",
-    archiveUpdating: "カタログベースを更新中…",
+    archiveChecking: "カタログの更新を確認中…", archivePreparing: "新しいカタログを準備中…", archiveMerging: "カタログの変更を反映中…",
     archiveUnchanged: "カタログベースは最新です",
     archiveComplete: "カタログベースを更新しました",
     archiveFailed: "カタログ更新失敗",
@@ -1917,6 +2057,7 @@ const i18n = {
     catalogFullDeferred: "今期の作品は引き続き利用できます。残りの資料は自動で再試行します",
     catalogHistoryPreparing: "過去の作品情報を準備中です。しばらくしてから再検索してください。",
     copyBrowserPermission: "許可コマンドをコピー",
+    copyManually: "自動コピーできませんでした。下の選択された内容をコピーしてください（Ctrl+C、Mac は ⌘C）。",
     browserPermissionHint: "この PC のコマンドプロンプト（cmd）で一度実行し、Edge または Chrome を開き直してください。現在の Windows アカウントで、このサイトから PotPlayer と VLC を起動することを許可します。既存の許可は保持されます。",
     startupWarming: "画面を利用できます。バックグラウンドで準備中です",
     startupWarm: "バックグラウンド準備完了",
@@ -1947,14 +2088,15 @@ const i18n = {
     metadataNetworkHint: "健全性と遅延で自動選択し、失敗した接続先を冷却して切り替えます。システムプロキシに対応し、Archiveは必ず公式SHA-256で検証します。",
     metadataEndpointsRequired: "ArchiveマニフェストとBangumi APIの接続先を1件以上残してください。",
     connectionHint:
-      "Compose ではループバックアドレスをサービス名で上書きします。画面保存の資格情報は制限付き状態ファイルを使い、デプロイ環境変数／Secret を優先します。",
+      "標準構成のサービスは自動で接続します。「デプロイ設定」の項目は導入時の設定ファイルで変更し、再起動すると反映されます。",
+    deploymentManaged: "デプロイ設定",
     endpoint: "接続先",
     qbtApiKey: "API Key",
     qbtApiKeyPlaceholder: "空欄の場合は保存済み／デプロイ資格情報を使用",
     qbtApiKeyHint: "キーは別途保存され、再起動後も利用できます。デプロイ設定のキーがある場合はそちらを優先します。",
     qbtCredentialConfigured: "API Key を制限付き資格情報ストレージへ保存済み",
     torrentPoolPath: "Torrent プールのパス",
-    torrentPoolHint: "このフォルダーに .torrent ファイルを入れると、AnimeMachine が自動で読み込みます。",
+    torrentPoolHint: "手持ちの .torrent をこのフォルダーに置けます。既存のプールだけを使う場合は、定期スキャンを有効にし、自動収集を無効にします。",
     libraryPath: "アニメライブラリのパス",
     librarySleepEnabled: "毎日のライブラリ休止時間を設定",
     localLibrarySettings: "ローカルライブラリ",
@@ -2016,7 +2158,7 @@ const i18n = {
     placeholdersProgress: "処理 {done}/{total} · 作成 {created} · 既存 {existing}",
     placeholdersResult: "作成 {created} · 既存 {existing} · スキップ {skipped} · 失敗 {failed}",
     placeholdersConnectionRequired: "設定で書き込み可能なローカルライブラリを接続してから、再度お試しください。",
-    auditProgress: "確認 {done}/{total} · 更新 {updated} · スキップ {skipped}",
+    auditProgress: "メディア {files} ファイル · 確認 {done}/{total} · 更新 {updated} · スキップ {skipped}",
     maintenanceRunning: "バックグラウンドで処理中…",
     maintenanceFailed: "処理に失敗しました",
     maintenanceFinished: "完了",
@@ -2257,12 +2399,14 @@ const priorityValueLabel = (value) => ({
   unknown: ["其它 / 未识别", "Other / unrecognized", "その他 / 未識別"],
 }[value]?.[li()] || value);
 function localizedError(message, status = 0) {
+  if (message === "catalog_storage_unavailable") return ["作品资料暂时无法读取，请检查运行设备的磁盘空间后重试。", "The catalog could not be read. Check the server's free disk space, then try again.", "作品情報を読み取れません。稼働端末のディスク空き容量を確認してから再試行してください。"][li()];
   if (message === "catalog_metadata_preparing") return t("catalogLocalPreparing");
   if (String(message || "").includes("local_library_sleeping")) return t("librarySleeping");
   const value = String(message || "");
   const capacity = value.match(/insufficient free space: submission would leave ([\d.]+) TiB; minimum reserve is ([\d.]+) TiB/);
   if (capacity) return t("errorReservedSpace").replace("{available}", capacity[1]).replace("{reserve}", capacity[2]);
   const mappings = [
+    [/Docker base image (?:update required|is missing)/, 'offlineBaseImage'],
     [/collector_search_sources_required/, "collectorSourcesRequired"],
     [/resource_variant_changed/, "resourceVariantChanged"],
     [/torrent_search_busy/, "torrentSearchBusy"],
@@ -2419,6 +2563,7 @@ function applyTheme() {
 }
 function applyLanguage() {
   localizeStaticUi();
+  $("manualLink").href = `/help/${language}/`;
   applyTheme();
   document
     .querySelectorAll("option[data-group]")
@@ -2432,7 +2577,7 @@ function applyLanguage() {
   updateSeasonControl();
   updateViewToggle();
   renderMediaChecks();
-  if ($("settingsDialog").open) renderPolicy();
+  if ($("settingsDialog").open) { renderPolicy(); applyDeploymentSettings(); renderConnectionPaths(); }
   render();
   updateSelection();
   updateSortControls();
@@ -5218,15 +5363,19 @@ function localizedSummary(x) {
 function playbackHtml(state) {
   if (state?.loading) return `<section class="playback-panel">${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<p class="muted" role="status">${esc(t("radarLoading"))}</p></section>`;
   if (state?.viewing) updateViewing(state.viewing);
+  const versions = (state.editions || []).length > 1 ? `<label class="playback-source-picker"><span>${t("playbackEdition")}</span><select id="playbackEdition"><option value="">${t("playbackAutomatic")}</option>${state.editions.map(item => `<option value="${esc(item.id)}" ${item.id === state.selectedEdition ? "selected" : ""}>${esc(item.label)} · ${item.count}</option>`).join("")}</select></label>` : "";
   if (!state?.available)
-    return `<section class="playback-panel unavailable">${state?.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<p class="muted">${esc(state?.error || t("noPlayableMedia"))}</p></section>`;
+    return `<section class="playback-panel unavailable">${versions}${state?.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}<p class="muted">${esc(state?.error || t(state?.librarySleeping ? "librarySleeping" : state?.indexing ? 'indexingLocalMedia' : "noPlayableMedia"))}</p></section>`;
   const episodeOptions = (state.items || []).map((item) => `<option value="${Number(item.index)}">${esc(item.title)}</option>`).join("");
-  return `<section class="playback-panel"><div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select>${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}</div><div class="playback-actions">${playerActionsHtml("data-player")}</div></section>`;
+  return `<section class="playback-panel">${versions}<div class="playback-scope"><select id="playbackEpisode" aria-label="${t("playbackStartFile")}">${episodeOptions}</select>${state.viewing ? viewingButton(state.viewing.animeId, state.viewing) : ""}</div><div class="playback-actions">${playerActionsHtml("data-player")}</div></section>`;
 }
 
 const viewingRecords = new Map();
 let viewingEditId = 0, viewingEditRevision = 0, viewingUndoRecord = null, viewingGeneration = 0;
+let viewingLatestEpisode = null;
+let viewingBusy = false;
 let catchupRequest = null;
+let applicationUpdateBusy = false;
 let catchupGroups = [], catchupBusy = false;
 const catchupSelected = new Set();
 function viewingLabel(record) {
@@ -5254,9 +5403,11 @@ function updateViewing(record) {
 }
 async function openViewing(animeId, title = "", bgmId = 0) {
   const generation = ++viewingGeneration;
+  viewingBusy = false;
   viewingEditId = animeId; viewingUndoRecord = null;
   $("viewingUndo").hidden = true;
-  $("viewingSave").disabled = $("viewingClear").disabled = true;
+  $("viewingSave").disabled = $("viewingClear").disabled = $('viewingComplete').disabled = true;
+  viewingLatestEpisode = null;
   $("viewingWork").textContent = title;
   $("viewingEpisode").value = "";
   $("viewingEpisodes").replaceChildren();
@@ -5268,10 +5419,12 @@ async function openViewing(animeId, title = "", bgmId = 0) {
     if (bgmId && record.bgmId !== bgmId) throw new Error(t("viewingConflict"));
     updateViewing(record);
     viewingEditRevision = record.revision;
+    viewingLatestEpisode = record.latestEpisode;
     $("viewingEpisode").value = record.episode ?? "";
     $("viewingPosition").value = positionText(record.positionMs || 0);
     $("viewingStatus").textContent = "";
     $("viewingSave").disabled = $("viewingClear").disabled = false;
+    $('viewingComplete').disabled = viewingLatestEpisode == null;
     $("viewingEpisode").focus();
     // Suggestions are optional: an unavailable source must not block correction.
     api(`/api/anime/${animeId}/playback`).then((state) => {
@@ -5281,25 +5434,35 @@ async function openViewing(animeId, title = "", bgmId = 0) {
     }).catch(() => {});
   } catch (error) { $("viewingStatus").textContent = error.message; }
 }
-async function saveViewing(episode, undo = false, positionMs = 0) {
+async function saveViewing(episode, undo = false, positionMs = 0, completeLatest = false) {
+  if (viewingBusy) return;
+  viewingBusy = true;
   const generation = viewingGeneration;
-  $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = true;
+  $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = $('viewingComplete').disabled = true;
   try {
     const record = await api(`/api/anime/${viewingEditId}/viewing`, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ episode, positionMs, revision: viewingEditRevision, bgmId: viewingRecords.get(viewingEditId)?.bgmId }) });
+      body: JSON.stringify({ episode, positionMs, completeLatest, latestEpisode: viewingLatestEpisode,
+        ...(undo ? {restoreCompleted: viewingUndoRecord.latestCompleted} : {}),
+        revision: viewingEditRevision, bgmId: viewingRecords.get(viewingEditId)?.bgmId }) });
     updateViewing(record);
     if (generation !== viewingGeneration) return;
     if ($("radarDialog").open) radarRefreshPending = true;
     viewingEditRevision = record.revision;
-    viewingUndoRecord = { episode: record.previousEpisode, positionMs: record.previousPositionMs };
+    viewingUndoRecord = { episode: record.previousEpisode, positionMs: record.previousPositionMs,
+      latestCompleted: record.previousLatestCompleted };
     $("viewingEpisode").value = record.episode ?? "";
     $("viewingPosition").value = positionText(record.positionMs || 0);
     $("viewingUndo").hidden = undo;
     $("viewingStatus").textContent = t("viewingSaved");
+    if ($('catchupDialog').open) { $('catchupDialog').close(); }
   } catch (error) {
     $("viewingStatus").textContent = error.message.includes("viewing_conflict") ? t("viewingConflict") : error.message;
   } finally {
-    if (generation === viewingGeneration) $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = false;
+    if (generation === viewingGeneration) {
+      viewingBusy = false;
+      $("viewingSave").disabled = $("viewingClear").disabled = $("viewingUndo").disabled = false;
+      $('viewingComplete').disabled = viewingLatestEpisode == null;
+    }
   }
 }
 function playerActionsHtml(attribute = "data-catchup-player") {
@@ -5311,7 +5474,7 @@ function playerActionsHtml(attribute = "data-catchup-player") {
 }
 async function deliverPlayback(kind, handoff, button) {
   if (kind === "copy") {
-    await copyPlainText(handoff.playlistUrl || handoff.url);
+    if (!await copyPlainText(handoff.playlistUrl || handoff.url)) return;
     const previous = button.innerHTML;
     button.textContent = t("copiedPlaylist");
     setTimeout(() => { if (button.isConnected) button.innerHTML = previous; }, 1800);
@@ -5458,9 +5621,11 @@ document.addEventListener("click", async (event) => {
   button.disabled = true;
   try {
     const value = await api(`/api/playback/browser-permission-command?origin=${encodeURIComponent(location.origin)}`);
-    await copyPlainText(value.command);
-    button.textContent = t("copiedPlaylist");
-    alert(t("browserPermissionHint"));
+    if (!button.isConnected || !button.closest("dialog[open]")) return;
+    if (await copyPlainText(value.command, t("browserPermissionHint"))) {
+      button.textContent = t("copiedPlaylist");
+      alert(t("browserPermissionHint"));
+    }
   } catch (error) { alert(error.message); }
   finally {
     if (button.isConnected) button.innerHTML = previous;
@@ -5519,6 +5684,7 @@ document.addEventListener("click", async (event) => {
 });
 $("viewingForm").onsubmit = (event) => { event.preventDefault(); try { saveViewing($("viewingEpisode").value === "" ? null : Number($("viewingEpisode").value), false, positionValue($("viewingPosition").value)); } catch(error) { $("viewingStatus").textContent = error.message; } };
 $("viewingClear").onclick = () => saveViewing(null);
+$('viewingComplete').onclick = () => saveViewing(viewingLatestEpisode, false, 0, true);
 $("viewingUndo").onclick = () => { if (viewingUndoRecord) saveViewing(viewingUndoRecord.episode, true, viewingUndoRecord.positionMs); };
 $("radarCatchup").onclick = openCatchup;
 
@@ -5567,28 +5733,53 @@ function clientVisiblePath(value) {
   return raw.startsWith("/") ? "" : raw;
 }
 
-async function copyPlainText(value) {
+async function copyPlainText(value, hint = "") {
   const text = String(value || "");
   if (!text) throw new Error(t("copyPlaylist"));
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
-      return;
+      return true;
     } catch (_error) {
       // Clipboard access is commonly rejected on non-secure LAN origins.
       // Continue with the selection-based fallback instead of failing.
     }
   }
   const field = document.createElement("textarea");
+  const previous = document.activeElement;
+  const selection = typeof previous?.selectionStart === "number"
+    ? [previous.selectionStart, previous.selectionEnd, previous.selectionDirection] : null;
   field.value = text;
   field.setAttribute("readonly", "");
   field.style.position = "fixed";
+  field.style.top = "0";
+  field.style.left = "0";
+  field.style.width = "1px";
+  field.style.height = "1px";
   field.style.opacity = "0";
-  document.body.append(field);
-  field.select();
-  const copied = document.execCommand("copy");
-  field.remove();
-  if (!copied) throw new Error(t("copyPlaylist"));
+  // A modal makes the rest of the document inert. Copying from a field outside
+  // it can report success while leaving the clipboard empty or unchanged.
+  const host = topModalDialog() || previous?.closest("dialog[open]") || document.body;
+  let copied = false;
+  try {
+    host.append(field);
+    field.focus({ preventScroll: true });
+    field.select();
+    field.setSelectionRange(0, text.length);
+    if (document.activeElement === field && field.selectionEnd - field.selectionStart === text.length) {
+      copied = document.execCommand("copy");
+    }
+  } catch (_error) {
+    // Browsers may disable both clipboard APIs. Keep the text available below.
+  } finally {
+    field.remove();
+    if (previous?.isConnected) {
+      previous.focus({ preventScroll: true });
+      if (selection) previous.setSelectionRange(...selection);
+    }
+  }
+  if (!copied) window.prompt([t("copyManually"), hint].filter(Boolean).join("\n\n"), text);
+  return copied;
 }
 
 async function handoffPlayback(kind, animeId, button, generation = detailGeneration) {
@@ -5596,7 +5787,7 @@ async function handoffPlayback(kind, animeId, button, generation = detailGenerat
     payload = {
       player: kind,
       mode: "playlist",
-      source: playbackSources.get(animeId) || "",
+      source: playbackEditions.get(animeId) || playbackSources.get(animeId) || "",
       start: selectedEpisode,
       enhanced: true,
     },
@@ -5609,6 +5800,113 @@ async function handoffPlayback(kind, animeId, button, generation = detailGenerat
 function visibilityButton(bgmId, animeId, hidden = false) {
   return `<button type="button" class="text-button" data-work-visibility="${Number(bgmId)}" data-work-id="${Number(animeId) || ""}" data-hidden-value="${!hidden}">${esc(t(hidden ? "restoreWork" : "hideWork"))}</button>`;
 }
+function followButton(item, mode = "serial") {
+  const combined = mode === "all";
+  if (combined) mode = (item.follows || []).find((row) => row.state !== "cancelled")?.mode || "serial";
+  const record = (item.follows || []).find((row) => row.mode === mode && row.state !== "cancelled");
+  const text = combined ? "followWork" : record?.state === "available" ? "followAvailable" : record?.state === "subscribed" ? "radarSubscribed"
+    : record ? "followPending" : mode === "archive" ? "followArchive" : "advanceSubscribe";
+  return `<button type="button" class="text-button" data-follow-work="${Number(item.id)}" data-follow-mode="${mode}" data-icon="subscribe">${esc(t(text))}</button>`;
+}
+const followStateLabel = (state) => t(({ available: "followAvailable", unmatched: "followUnmatched",
+  subscribed: "radarSubscribed", subscription_exists: "followManaged" })[state] || "followPending");
+let followListGeneration = 0;
+async function loadFollows() {
+  const generation = ++followListGeneration;
+  $("followListStatus").textContent = t("radarLoading");
+  try {
+    const response = await api("/api/follows");
+    if (generation !== followListGeneration || !$("followListDialog").open) return;
+    const rows = response.items.filter((row) => row.state !== "cancelled");
+    $("followList").innerHTML = rows.length ? rows.map((row) => `<div class="hidden-work"><div><strong>${esc(row.work ? preferred(row.work) : `Bangumi #${row.bgmId}`)}</strong><small>${esc(t(row.mode === "archive" ? "followArchive" : "advanceSubscribe"))} · ${esc(followStateLabel(row.state))}</small></div>${row.work ? `<div class="follow-list-actions"><button type="button" class="text-button" data-follow-detail="${row.work.id}" data-icon="play">${esc(t("followOpen"))}</button><button type="button" class="text-button" data-follow-work="${row.work.id}" data-follow-mode="${row.mode}" data-icon="settings">${esc(t("settings"))}</button></div>` : ""}</div>`).join("") : `<p class="empty">${esc(t("followEmpty"))}</p>`;
+    $("followListStatus").textContent = "";
+  } catch (error) { if (generation === followListGeneration) $("followListStatus").textContent = error.message; }
+}
+$("radarFollows").onclick = () => { showModalDialog($("followListDialog")); loadFollows(); };
+$("followListDialog").addEventListener("close", () => { if (!$("followListDialog").open) followListGeneration++; });
+let followDetail = null, followGeneration = 0;
+function serialPolicyLanguage(settings) {
+  const choice = settings.torrentPolicy?.serialSubtitle?.language || "auto";
+  const profile = String(choice === "auto" ? settings.ui?.language || "zh" : choice).toLowerCase();
+  return profile.startsWith("zh") ? "zh" : profile.startsWith("ja") ? "ja" : "en";
+}
+function renderFollowChoices() {
+  if (!followDetail) return;
+  const mode = $("followMode").value, policy = config.torrentPolicy;
+  const record = (followDetail.follows || []).find((row) => row.mode === mode);
+  const active = record && record.state !== "cancelled";
+  $("followForm").dataset.revision = String(record?.revision || 0);
+  $("followCancel").hidden = !active;
+  $("followCancel").textContent = t(["subscribed", "subscription_exists"].includes(record?.state) ? "followRemove" : "followCancel");
+  $("followHint").textContent = t(mode === "serial" ? "followSerialHint" : "followArchiveHint");
+  if (mode === "serial" && !capabilities.aniRssCredentialConfigured) $("followHint").textContent = t("followOfflineHint");
+  if (mode === "serial" && ["subscribed", "subscription_exists"].includes(record?.state)) $("followHint").textContent = t("followManagedHint");
+  const selectedLanguage = serialPolicyLanguage(config);
+  const entries = mode === "archive" ? policy.resourceGroups.filter((group) => policy.archiveGroupIds.includes(group.id))
+    : (groupCatalog.serialProfiles?.[selectedLanguage] || []).filter((group) => !group.wildcard).map((group) => ({ ...group, name: group.displayName }));
+  const groups = active ? record.groups : {}, custom = Object.keys(groups).length > 0;
+  $("followUsePreferences").checked = !custom;
+  setCheckList("followGroups", entries.map((group) => ({ ...group, enabled: custom && Object.hasOwn(groups, group.id) })));
+  // Stored unknown groups remain editable after a catalog/policy update.
+  for (const key of Object.keys(groups).filter((key) => !entries.some((group) => group.id === key))) {
+    const row = document.createElement("li"); row.dataset.value = key;
+    row.innerHTML = `<label class="check"><input type="checkbox" checked><span>${esc(key)}</span></label>`;
+    $("followGroups").append(row);
+  }
+  addGroupVersions("followGroups", Object.fromEntries(Object.entries(groups).filter(([, values]) => values !== null)));
+  $("followGroups").hidden = !custom;
+  $("followStatus").textContent = active ? followStateLabel(record.state) : "";
+}
+async function openFollow(animeId, mode = "serial") {
+  const generation = ++followGeneration;
+  followDetail = null;
+  $("followWorkTitle").textContent = "";
+  $("followStatus").textContent = t("radarLoading");
+  $("followSave").disabled = true; $("followCancel").hidden = true;
+  $("followCancel").disabled = false;
+  $("followGroups").hidden = true;
+  showModalDialog($("followDialog"));
+  try {
+    const detail = await api(`/api/anime/${animeId}?language=${encodeURIComponent(language)}`);
+    if (generation !== followGeneration || !$("followDialog").open) return;
+    followDetail = detail; $("followWorkTitle").textContent = preferred(detail); $("followMode").value = mode;
+    renderFollowChoices(); $("followSave").disabled = false;
+  } catch (error) { if (generation === followGeneration) $("followStatus").textContent = error.message === "follow_changed_reload" ? t("followChanged") : error.message; }
+}
+$("followMode").onchange = renderFollowChoices;
+$("followUsePreferences").onchange = () => { $("followGroups").hidden = $("followUsePreferences").checked; };
+$("followDialog").addEventListener("close", () => { if (!$("followDialog").open) followGeneration++; });
+async function saveFollow(cancel = false) {
+  if (!followDetail || $("followSave").disabled) return;
+  const generation = followGeneration, groups = {};
+  if (!cancel && !$("followUsePreferences").checked) {
+    const variants = readGroupVersions("followGroups");
+    $("followGroups").querySelectorAll(":scope > li").forEach((row) => {
+      if (row.querySelector("input").checked) groups[row.dataset.value] = variants[row.dataset.value] || null;
+    });
+    if (!Object.keys(groups).length) { $("followStatus").textContent = t("followChooseGroup"); return; }
+  }
+  $("followSave").disabled = true; $("followCancel").disabled = true;
+  try {
+    const result = await api(`/api/anime/${followDetail.id}/follow`, { method: "POST", body: JSON.stringify({ mode: $("followMode").value,
+      groups, revision: Number($("followForm").dataset.revision), cancel }) });
+    if (generation !== followGeneration || !$("followDialog").open) return;
+    if (!cancel) $("followForm").dataset.revision = String(result.revision);
+    $("followDialog").close(); invalidateCatalogPages();
+    if ($("followListDialog").open) loadFollows();
+    if (detailDialog.open) await showDetail(followDetail.id);
+    if ($("radarDialog").open) loadRadar();
+  } catch (error) { if (generation === followGeneration) $("followStatus").textContent = error.message === "follow_changed_reload" ? t("followChanged") : error.message; }
+  finally { if (generation === followGeneration) { $("followSave").disabled = false; $("followCancel").disabled = false; } }
+}
+$("followForm").onsubmit = (event) => { event.preventDefault(); saveFollow(); };
+$("followCancel").onclick = () => saveFollow(true);
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-follow-work]");
+  if (button && !button.disabled) openFollow(Number(button.dataset.followWork), button.dataset.followMode);
+  const detail = event.target.closest("[data-follow-detail]");
+  if (detail && !detail.disabled) showDetail(Number(detail.dataset.followDetail)).catch((error) => { $("followListStatus").textContent = error.message; });
+});
 let hiddenWorks = [], hiddenWorksGeneration = 0, hiddenWorksPage = 0;
 function renderHiddenWorks() {
   const query = $("hiddenWorksSearch").value.trim().toLocaleLowerCase();
@@ -5821,7 +6119,7 @@ async function showDetail(id) {
       || aniResources.some((y) => y.eligible || (y.canOverride && policyOverrides.get(id) === `ani-rss:${y.resourceId}`));
   if (generation !== detailGeneration) return;
   $("detail").innerHTML =
-    `<div class="detail-hero"><header class="detail-intro"><div class="detail-meta-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><div class="detail-visibility">${x.hidden ? `<span class="muted">${t("workHidden")}</span>` : ""}${visibilityButton(x.bgm_id, x.id, x.hidden)}</div></div><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}<div id="detailPlayback">${playbackHtml(playbackState)}</div>${aniRssManagement}<section id="detailResources" class="detail-resources"><h3>${t("torrents")}</h3><p id="resourceChoiceHint" class="muted resource-choice-hint">${hasEligibleResource ? t("resourcePickHint") : ""}</p><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button><small id="searchWorkState" class="muted" role="status"></small></div></section><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
+    `<div class="detail-hero"><header class="detail-intro"><div class="detail-meta-row"><span class="date">${esc(localMonth(x.start_month))} · ${esc(label("media", x.media_code))}</span><div class="detail-visibility">${x.hidden ? `<span class="muted">${t("workHidden")}</span>` : ""}${visibilityButton(x.bgm_id, x.id, x.hidden)}</div></div><h2>${esc(preferred(x))}</h2>${detailSubtitleRow}</header><div class="detail-overview ${imagesEnabled ? "with-poster" : ""}">${imagesEnabled ? `<div class="detail-cover" data-cover="${x.id}"><button type="button" class="cover-reload" data-cover-reload="${x.id}" data-icon="refresh">${t("reloadImage")}</button></div>` : ""}<div class="detail-grid">${factHtml("country-fact", t("country"), countries)}${factHtml("source-type-fact", t("sourceType"), sourceType)}${factHtml("episodes-fact", t("episodes"), episodes)}${factHtml("original-name-fact", t("originalName"), originalName)}${factHtml("original-author-fact", t("originalAuthor"), originalAuthors)}${factHtml("director-fact", t("director"), directors)}${factHtml("series-composition-fact", t("seriesComposition"), seriesComposition)}${factHtml("character-design-fact", t("characterDesign"), characterDesign)}${factHtml("music-fact", t("music"), music)}${factHtml("studio-fact", t("studio"), studios)}${factHtml("tags-fact", t("tag"), displayTags)}</div></div></div><div class="detail-section-heading playback-title"><h3>${t("playback")}</h3></div>${playbackSourceSelector}<div id="detailPlayback">${playbackHtml(playbackState)}</div>${aniRssManagement}<section id="detailResources" class="detail-resources"><h3>${t("torrents")}</h3><p id="resourceChoiceHint" class="muted resource-choice-hint">${hasEligibleResource ? t("resourcePickHint") : ""}</p><div class="torrent-list">${resourceList || `<p class="muted">${t("noTorrent")}</p>`}</div><div class="resource-search-actions"><button type="button" id="searchWorkTorrents" data-icon="search" class="tool dark-tool" ${capabilities.qbtCredentialConfigured ? "" : "hidden"}>${t("searchPoolNow")}</button><button type="button" id="searchAniRss" data-icon="search" class="tool dark-tool">${t("searchAniRss")}</button><button type="button" id="startWorkDownload" data-icon="download" class="primary" ${hasEligibleResource ? "" : "disabled"}>${t("previewPlan")}</button>${followButton(x, "all")}<small id="searchWorkState" class="muted" role="status"></small></div></section><div class="detail-section-heading library-heading"><h3>${t("library")}</h3></div>${libraryContent}${subtitleToolsHtml(subtitleTarget)}<h3>${t("titles")}</h3><ul class="list">${titles}</ul><h3>${t("cast")}</h3><ul class="list">${cast}</ul>${others.length ? `<details><summary>${t("allCast")}</summary><ul class="list">${allCast}</ul></details>` : ""}<h3>${t("relations")}</h3><ul class="list">${relations}</ul><h3>${t("summary")}</h3><p class="summary-text">${esc(summary || "—").replace(/\n/g, "<br>")}</p><p class="source">Bangumi Archive · <a href="${esc(x.source_url)}" target="_blank" rel="noreferrer">BGM #${x.bgm_id}</a></p>`;
   bindCoverReloadButtons($("detail"));
   $("detail").querySelector(".native-torrents").ontoggle = (event) => {
     if (event.target.open) expandedTorrentWorks.add(id);
@@ -5868,18 +6166,14 @@ async function showDetail(id) {
     };
   });
   $("detail").querySelectorAll(".audit-work").forEach((button) => {
-    button.onclick = async () => {
-      button.disabled = true;
-      button.textContent = t("verifyRunning");
-      await api(`/api/anime/${id}/library/audit`, { method: "POST" });
-      setTimeout(() => showDetail(id), 900);
-    };
+    button.onclick = () => verifyWorkLibrary(button, id, generation);
   });
   $("startWorkDownload").dataset.defaultProvider = !(x.torrents || []).some((row) => row.eligible)
     && aniResources.some((row) => row.eligible) ? "ani-rss" : "torrent";
   updateDetailResourceAction();
   if ($("playbackSource")) $("playbackSource").onchange = (event) => {
     playbackSources.set(id, event.target.value);
+    playbackEditions.delete(id);
     showDetail(id).catch((error) => alert(error.message));
   };
   $("detail").querySelectorAll(".subtitle-tools").forEach((tool) => {
@@ -5993,7 +6287,7 @@ async function showDetail(id) {
     };
   $("detail").querySelectorAll(".copy-library-path").forEach((button) => {
     button.onclick = async () => {
-      await copyPlainText(button.dataset.copyPath);
+      if (!await copyPlainText(button.dataset.copyPath)) return;
       const previous = button.textContent;
       button.textContent = t("copiedPath");
       setTimeout(() => { button.textContent = previous; }, 1600);
@@ -6004,11 +6298,27 @@ async function showDetail(id) {
       detailDialog.close();
       showRelationGraph(id);
     };
-  api(`/api/anime/${id}/playback${selectedPlaybackSource ? `?source=${encodeURIComponent(selectedPlaybackSource)}` : ""}`)
+  const playbackParams = new URLSearchParams();
+  if (selectedPlaybackSource) playbackParams.set('source', selectedPlaybackSource);
+  if (playbackEditions.has(id)) playbackParams.set('edition', playbackEditions.get(id));
+  const playbackUrl = `/api/anime/${id}/playback?${playbackParams}`;
+  api(playbackUrl)
     .then((state) => { if (generation === detailGeneration && detailDialog.open) renderDetailPlayback(state); })
     .catch((error) => { if (generation === detailGeneration && detailDialog.open) renderDetailPlayback({ viewing: x.viewing, error: error.message }); });
   function renderDetailPlayback(state) {
+    state.selectedEdition = playbackEditions.get(id) || "";
     $("detailPlayback").innerHTML = playbackHtml(state);
+    if (state.indexing) setTimeout(() => {
+      if (generation !== detailGeneration || !detailDialog.open) return;
+      api(playbackUrl)
+        .then(next => { if (generation === detailGeneration && detailDialog.open) renderDetailPlayback(next); })
+        .catch(error => { if (generation === detailGeneration && detailDialog.open) renderDetailPlayback({ viewing: x.viewing, error: error.message }); });
+    }, 2000);
+    if ($("playbackEdition")) $("playbackEdition").onchange = (event) => {
+      if (event.target.value) playbackEditions.set(id, event.target.value);
+      else playbackEditions.delete(id);
+      showDetail(id).catch((error) => alert(error.message));
+    };
     $("detailPlayback").querySelectorAll("[data-player]").forEach((button) => {
       button.onclick = async () => {
         const buttons = $("detailPlayback").querySelectorAll("[data-player]");
@@ -6206,6 +6516,62 @@ function setCheckList(id, entries) {
   ).join("");
   draggable(list);
 }
+const releasePlatforms = ["Baha", "CR", "NF", "ABEMA", "AMZN", "ADN", "ViuTV", "DSNP", "B-Global", "BiliBili", "U-NEXT", "Hulu", "DMM", "FOD", "unknown"];
+const groupVersionSelections = new WeakMap();
+function updateGroupToggle(id) {
+  const button = document.querySelector(`[data-group-toggle="${id}"]`);
+  if (!button) return;
+  const parents = [...$(id).querySelectorAll(":scope > li > .check > input")];
+  button.disabled = !parents.length;
+  button.textContent = t(parents.length && parents.every((input) => input.checked) ? "clearAllGroups" : "selectAllGroups");
+}
+document.querySelectorAll("[data-group-toggle]").forEach((button) => {
+  button.onclick = () => {
+    const parents = [...$(button.dataset.groupToggle).querySelectorAll(":scope > li > .check > input")];
+    const checked = !parents.every((input) => input.checked);
+    parents.forEach((input) => { input.checked = checked; input.dispatchEvent(new Event("change", { bubbles: true })); });
+    updateGroupToggle(button.dataset.groupToggle);
+  };
+});
+function addGroupVersions(id, restrictions = {}) {
+  $(id).querySelectorAll(":scope > li").forEach((row) => {
+    const parent = row.querySelector("input"), group = row.dataset.value;
+    const selected = Object.hasOwn(restrictions, group) ? new Set(restrictions[group]) : new Set(releasePlatforms);
+    let remembered = new Set(selected);
+    const platforms = [...new Set([...releasePlatforms, ...selected])];
+    const details = document.createElement("details");
+    details.className = "group-versions";
+    details.innerHTML = `<summary></summary><div>${platforms.map((platform) => `<label class="check"><input type="checkbox" data-platform="${esc(platform)}" ${parent.checked && selected.has(platform) ? "checked" : ""}><span>${esc(platform === "unknown" ? t("unknownVersion") : platform)}</span></label>`).join("")}</div>`;
+    row.append(details);
+    const summary = details.querySelector("summary");
+    summary.title = t("groupVersions");
+    summary.setAttribute("aria-label", `${row.querySelector(".check span").textContent} · ${t("groupVersions")}`);
+    const boxes = [...details.querySelectorAll("input")];
+    groupVersionSelections.set(row, () => [...remembered]);
+    const update = () => {
+      const count = boxes.filter((box) => box.checked).length;
+      if (count) remembered = new Set(boxes.filter((box) => box.checked).map((box) => box.dataset.platform));
+      parent.checked = count > 0;
+      parent.indeterminate = count > 0 && count < boxes.length;
+      summary.textContent = count ? count === boxes.length ? t("allVersions") : String(count) : "";
+      updateGroupToggle(id);
+    };
+    parent.onchange = () => {
+      if (parent.checked && !remembered.size) remembered = new Set(platforms);
+      boxes.forEach((box) => { box.checked = parent.checked && remembered.has(box.dataset.platform); });
+      update();
+    };
+    boxes.forEach((box) => { box.onchange = update; });
+    update();
+  });
+}
+function readGroupVersions(id) {
+  return Object.fromEntries([...$(id).querySelectorAll(":scope > li")].flatMap((row) => {
+    const boxes = [...row.querySelectorAll("[data-platform]")];
+    const chosen = groupVersionSelections.get(row)?.() || boxes.filter((box) => box.checked).map((box) => box.dataset.platform);
+    return boxes.length && chosen.length !== boxes.length ? [[row.dataset.value, chosen]] : [];
+  }));
+}
 const enabled = (id) =>
     new Set([...$(id).querySelectorAll("input:checked")].map((x) => x.value)),
   mergeOrder = (cur, vis) => [
@@ -6331,6 +6697,7 @@ function renderGroupPolicy() {
   const p = config.torrentPolicy, serial = p.serialSubtitle || (p.serialSubtitle = { language: "auto" });
   const archiveIds = new Set(p.archiveGroupIds || []);
   setCheckList("archiveGroups", p.resourceGroups.filter((x) => archiveIds.has(x.id)).sort((a,b) => a.tier-b.tier || a.order-b.order).map(x => ({id:x.id,name:x.name,enabled:x.enabled!==false})));
+  addGroupVersions("archiveGroups", p.groupVariants?.archive);
   const enabledByLanguage = serial.enabledByLanguage || {};
   const selectedLanguage = serial.language === "auto" || !serial.language
     ? (language.startsWith("zh") ? "zh" : language.startsWith("ja") ? "ja" : "en")
@@ -6338,6 +6705,8 @@ function renderGroupPolicy() {
   [["zh","serialGroupsZh"],["en","serialGroupsEn"],["ja","serialGroupsJa"]].forEach(([lang,id]) => {
     const explicit = Object.hasOwn(enabledByLanguage, lang) ? new Set(enabledByLanguage[lang]) : null;
     setCheckList(id, (groupCatalog.serialProfiles?.[lang] || []).filter(x => !x.wildcard).map(x => ({...x,name:x.displayName,enabled:explicit ? explicit.has(x.id) : lang === selectedLanguage})));
+    const variants = p.groupVariants?.serial || {};
+    addGroupVersions(id, Object.values(variants).some((value) => !Array.isArray(value)) ? variants[lang] : variants);
   });
   $("serialSubtitleLanguage").value = serial.language || "auto";
   $("serialSubtitleLanguage").onchange = (event) => {
@@ -6384,7 +6753,81 @@ function saveOperationalSettings(target) {
     ? "hash_and_skip"
     : "size_and_skip";
 }
+let passwordGeneration = 0;
+function openPasswordSettings() {
+  if (!authSession?.authEnabled) return;
+  passwordGeneration++;
+  $("passwordForm").reset();
+  $("confirmPassword").setCustomValidity("");
+  $("passwordStatus").textContent = "";
+  $("passwordAccount").textContent = authSession.username;
+  $("passwordUsername").value = authSession.username;
+  $("passwordSave").disabled = false;
+  showModalDialog($("passwordDialog"));
+  $("currentPassword").focus();
+}
+$("changePassword").onclick = openPasswordSettings;
+$("passwordDialog").addEventListener("close", () => {
+  if (!$("passwordDialog").open) { passwordGeneration++; $("passwordForm").reset(); }
+});
+$("confirmPassword").oninput = $("newPassword").oninput = () => $("confirmPassword").setCustomValidity("");
+$("passwordForm").onsubmit = async (event) => {
+  event.preventDefault();
+  if ($("passwordSave").disabled) return;
+  if ($("newPassword").value !== $("confirmPassword").value) {
+    $("confirmPassword").setCustomValidity(t("passwordMismatch")); $("confirmPassword").reportValidity(); return;
+  }
+  const generation = passwordGeneration;
+  $("passwordSave").disabled = true;
+  $("passwordStatus").textContent = "";
+  try {
+    await api("/api/auth/password", { method: "POST", body: JSON.stringify({ currentPassword: $("currentPassword").value, newPassword: $("newPassword").value }) });
+    if (generation !== passwordGeneration) return;
+    $("passwordForm").reset();
+    $("passwordStatus").textContent = t("passwordChanged");
+  } catch (error) {
+    if (generation !== passwordGeneration) return;
+    const errors = { current_password_incorrect: "currentPasswordIncorrect", password_length: "passwordLength",
+      password_unchanged: "passwordUnchanged", password_changed_retry: "passwordRetry", too_many_login_attempts: "passwordRateLimited" };
+    $("passwordStatus").textContent = errors[error.message] ? t(errors[error.message]) : error.message;
+  } finally { if (generation === passwordGeneration) $("passwordSave").disabled = false; }
+};
+const deploymentControls = {
+  'components.downloadClient.endpoint': 'qbtEndpoint', 'components.aniRss.endpoint': 'aniRssEndpoint',
+  'components.aniRss.mode': 'aniRssMode', 'components.aniRss.mediaPath': 'aniRssMediaPath',
+  'deployment.libraryUncRoot': 'libraryPath', 'deployment.qbtLibraryRoot': 'qbtLibraryPath',
+  'deployment.torrentPoolRoot': 'torrentPoolPath', 'externalLibraries.0.path': 'externalReadOnlyPath',
+  'metadata.network.archiveManifestEndpoints': 'archiveManifestEndpoints',
+  'metadata.network.archiveAssetProxyTemplates': 'archiveAssetProxyTemplates',
+};
+function applyDeploymentSettings() {
+  const overrides = capabilities.configurationOverrides || {};
+  for (const [path, id] of Object.entries(deploymentControls)) {
+    const field = $(id), managed = Object.hasOwn(overrides, path);
+    if (!field) continue;
+    field.closest('label')?.querySelector('.deployment-badge')?.remove();
+    if (managed) {
+      field.value = Array.isArray(overrides[path]) ? overrides[path].join('\n') : overrides[path];
+      field.title = t('connectionHint');
+      const label = field.closest('label')?.querySelector('span');
+      if (label) { const badge = document.createElement('small'); badge.className = 'deployment-badge'; badge.textContent = t('deploymentManaged'); label.append(badge); }
+    } else field.removeAttribute('title');
+    if (field.tagName === 'SELECT') field.disabled = managed;
+    else field.readOnly = managed;
+  }
+}
+function retainPersistentOverrides(nextConfig) {
+  for (const path of Object.keys(capabilities.configurationOverrides || {})) {
+    const parts = path.split('.'), key = parts.pop();
+    let current = config, next = nextConfig;
+    for (const part of parts) { current = current?.[part]; next = next?.[part]; }
+    if (!next || typeof next !== 'object') continue;
+    if (current && Object.hasOwn(current, key)) next[key] = JSON.parse(JSON.stringify(current[key]));
+    else delete next[key];
+  }
+}
 function openSettings() {
+  if (authSession?.role !== "admin") { openPasswordSettings(); return; }
   renderPolicy();
   loadOperationalSettings();
   $("submissionAllowed").checked = config.components.downloadClient.submissionEnabled ?? capabilities.submissionEnabled ?? true;
@@ -6408,6 +6851,10 @@ function openSettings() {
   $("librarySleepEnabled").checked = librarySleep.enabled === true;
   $("librarySleepStart").value = librarySleep.start || "00:00";
   $("librarySleepEnd").value = librarySleep.end || "08:00";
+  $('librarySleepClock').textContent = capabilities.librarySleepClock || '';
+  const sleepFields = () => { $('librarySleepStart').disabled = $('librarySleepEnd').disabled = !$('librarySleepEnabled').checked; };
+  $('librarySleepEnabled').onchange = sleepFields;
+  sleepFields();
   $("qbtLibraryPath").value = config.deployment.qbtLibraryRoot || "";
   const externalSource = (config.externalLibraries || [])[0] || { id: "external-read-only", kind: "generic", enabled: false, path: "/External", scanMinutes: 60 };
   $("externalReadOnlyEnabled").checked = Boolean(externalSource.enabled);
@@ -6437,9 +6884,11 @@ function openSettings() {
   $("automaticUpdateEnabled").checked = automaticUpdate.enabled !== false;
   $("automaticUpdateMode").value = automaticUpdate.mode || "notify";
   $("automaticUpdateTime").value = automaticUpdate.time || "04:35";
-  refreshArchiveStatus();
   loadLogs();
   showModalDialog($("settingsDialog"));
+  startArchiveStatusPolling();
+  applyDeploymentSettings();
+  connectionStorage = null;
   loadSystemHealth();
 }
 async function saveSettings(e) {
@@ -6472,8 +6921,10 @@ async function saveSettings(e) {
   p.serialSubtitle = p.serialSubtitle || {};
   p.serialSubtitle.language = $("serialSubtitleLanguage").value;
   p.serialSubtitle.enabledByLanguage = {};
+  p.groupVariants = { archive: readGroupVersions("archiveGroups"), serial: {} };
   [["zh","serialGroupsZh"],["en","serialGroupsEn"],["ja","serialGroupsJa"]].forEach(([lang,id]) => {
     p.serialSubtitle.enabledByLanguage[lang] = [...$(id).querySelectorAll("li")].filter(x => x.querySelector("input").checked).map(x => x.dataset.value);
+    p.groupVariants.serial[lang] = readGroupVersions(id);
   });
   p.strategyOrder = order("strategyOrder");
   p.contentClassPriority = mergeOrder(
@@ -6579,12 +7030,14 @@ async function saveSettings(e) {
   };
 
   // Commit configuration and newly entered credentials as one server-side transaction.
-  await api("/api/settings", {
+  retainPersistentOverrides(nextConfig);
+  const savedSettings = await api("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ config: nextConfig, credentials }),
   });
   config = nextConfig;
+  renderConnectionPaths(savedSettings.storage || null);
   if (credentials.qbittorrent) {
     $("qbtApiKey").value = "";
     capabilities.qbtCredentialConfigured = true;
@@ -6602,8 +7055,8 @@ async function saveSettings(e) {
   } catch (_) {
     // The settings transaction is already complete; a status refresh failure must not report it as failed.
   }
-  $("saveState").textContent = t("saved");
-  setTimeout(() => ($("saveState").textContent = ""), 1600);
+  $("saveState").textContent = t(savedSettings.mediaScanStarted ? "savedScanning" : "saved");
+  setTimeout(() => ($("saveState").textContent = ""), savedSettings.mediaScanStarted ? 6000 : 1600);
   page = 0;
   loadSystemHealth();
   search();
@@ -6616,31 +7069,59 @@ function archiveText(s) {
       : s.state === "complete"
         ? `${t("archiveComplete")}+${fmt(s.addedWorks || 0)}`
         : ["checking", "building", "merging"].includes(s.state)
-          ? t("archiveUpdating")
+          ? t({ checking: "archiveChecking", building: "archivePreparing", merging: "archiveMerging" }[s.state])
           : "";
 }
-async function refreshArchiveStatus() {
-  const s = await api("/api/archive/update");
-  $("archiveStatus").textContent = archiveText(s);
-  $("updateArchive").disabled = ["checking", "building", "merging"].includes(
-    s.state,
-  );
-  return s;
+let archiveStatusTimer = null, archiveStatusGeneration = 0, archiveStatusRequest = null;
+function stopArchiveStatusPolling() {
+  clearTimeout(archiveStatusTimer);
+  archiveStatusTimer = null;
+  archiveStatusGeneration++;
 }
-async function startArchiveUpdate() {
-  await api("/api/archive/update", { method: "POST" });
-  const poll = setInterval(async () => {
-    try {
-      const s = await refreshArchiveStatus();
-      if (!["checking", "building", "merging"].includes(s.state)) {
-        clearInterval(poll);
-        if (s.state === "complete") await pollSyncSummary();
-      }
-    } catch (error) {
-      clearInterval(poll);
+async function refreshArchiveStatus(generation = archiveStatusGeneration) {
+  if (!archiveStatusRequest) archiveStatusRequest = api("/api/archive/update").finally(() => { archiveStatusRequest = null; });
+  const state = await archiveStatusRequest;
+  if (generation === archiveStatusGeneration && $("settingsDialog").open) {
+    $("archiveStatus").textContent = archiveText(state);
+    $("updateArchive").disabled = ["checking", "building", "merging"].includes(state.state);
+  }
+  return state;
+}
+async function pollArchiveStatus() {
+  const generation = archiveStatusGeneration;
+  let delay = 15000;
+  try {
+    const state = await refreshArchiveStatus(generation);
+    if (["checking", "building", "merging"].includes(state.state)) delay = 3000;
+  } catch (error) {
+    if (generation === archiveStatusGeneration && $("settingsDialog").open) {
       $("archiveStatus").textContent = error.message;
+      $("updateArchive").disabled = false;
     }
-  }, 3000);
+    delay = 10000;
+  }
+  if (generation === archiveStatusGeneration && $("settingsDialog").open) {
+    archiveStatusTimer = setTimeout(pollArchiveStatus, delay);
+  }
+}
+function startArchiveStatusPolling() {
+  stopArchiveStatusPolling();
+  pollArchiveStatus();
+}
+$("settingsDialog").addEventListener("close", stopArchiveStatusPolling);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && $("settingsDialog").open) startArchiveStatusPolling();
+});
+async function startArchiveUpdate() {
+  $("updateArchive").disabled = true;
+  $("archiveStatus").textContent = t("archiveChecking");
+  try {
+    await api("/api/archive/update", { method: "POST" });
+  } catch (error) {
+    $("updateArchive").disabled = false;
+    throw error;
+  }
+  startArchiveStatusPolling();
 }
 async function importArchive(file) {
   if (!file) return;
@@ -6682,6 +7163,36 @@ $("previewLibraryLayout").onclick = async () => {
   } catch (error) { if (generation === layoutPreviewGeneration) $("layoutPreviewStatus").textContent = error.message; }
 };
 const maintenanceTasks = new Set();
+async function verifyWorkLibrary(button, animeId, generation) {
+  if (button.disabled) return;
+  const originalText = button.textContent;
+  const active = () => generation === detailGeneration && $("detailDialog").open;
+  button.parentElement.querySelector(".audit-work-status")?.remove();
+  button.disabled = true;
+  button.textContent = t("verifyRunning");
+  try {
+    await api(`/api/anime/${animeId}/library/audit`, { method: "POST" });
+    while (active()) {
+      const state = (await api("/api/maintenance/status")).library;
+      if (!active()) return;
+      if (state.state === "failed") throw new Error(localizedError(state.error || t("maintenanceFailed")));
+      if (state.state === "complete") { await showDetail(animeId); return; }
+      if (state.state !== "running") throw new Error(t("maintenanceFailed"));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  } catch (error) {
+    if (active()) {
+      const message = document.createElement("small");
+      message.className = "audit-work-status error";
+      message.setAttribute("role", "status");
+      message.textContent = error.message;
+      button.insertAdjacentElement("afterend", message);
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
 function interpolate(template, values) {
   return template.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 }
@@ -6707,17 +7218,25 @@ async function runMaintenance(kind, source = "settings") {
     await api(task.endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     for (;;) {
       const status = (await api("/api/maintenance/status"))[kind];
+      if (!["running", "complete", "failed"].includes(status.state)) throw new Error(t("maintenanceFailed"));
       if (status.state === "failed") throw new Error(kind === "placeholders" && /read-only|unavailable|writable|connect/i.test(status.error || "") ? t("placeholdersConnectionRequired") : status.error || t("maintenanceFailed"));
-      const values = Object.fromEntries(Object.entries(status).map(([key, value]) => [key, typeof value === "number" ? fmt(value) : value]));
+      const values = { files: 0, ...Object.fromEntries(Object.entries(status).map(([key, value]) => [key, typeof value === "number" ? fmt(value) : value])) };
+      if (kind === "library" && status.state === "running" && status.phase === "discovering") {
+        statusNode.dataset.i18n = "mediaScanProgress";
+        statusNode.dataset.i18nValues = JSON.stringify(values);
+        statusNode.textContent = interpolate(t("mediaScanProgress"), values);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
+      }
       if (kind !== "metadata") {
         statusNode.dataset.i18n = status.state === "running" && !status.total ? "maintenanceRunning" : kind === "library" ? "auditProgress" : status.state === "running" ? "placeholdersProgress" : "placeholdersResult";
         statusNode.dataset.i18nValues = JSON.stringify(values);
       } else delete statusNode.dataset.i18n;
       if (status.state === "running" && !status.total && kind !== "metadata") statusNode.textContent = t("maintenanceRunning");
       else if (kind === "metadata") statusNode.textContent = `${t("repairMetadata")} · ${fmt(status.repaired)}/${fmt(status.processed)}`;
-      else statusNode.textContent = interpolate(t(kind === "library" ? "auditProgress" : status.state === "running" ? "placeholdersProgress" : "placeholdersResult"), Object.fromEntries(Object.entries(status).map(([key, value]) => [key, typeof value === "number" ? fmt(value) : value])));
+      else statusNode.textContent = interpolate(t(kind === "library" ? "auditProgress" : status.state === "running" ? "placeholdersProgress" : "placeholdersResult"), values);
       if (status.state !== "running") {
-        statusNode.dataset.i18nSuffix = status.skipped || status.failed ? "maintenanceSkippedHint" : "maintenanceFinished";
+        statusNode.dataset.i18nSuffix = status.skipped || status.failed || status.unavailable ? "maintenanceSkippedHint" : "maintenanceFinished";
         statusNode.textContent += ` · ${t(statusNode.dataset.i18nSuffix)}`;
         break;
       }
@@ -7051,6 +7570,38 @@ function systemHealthLabels() {
     details: { ready: t("healthReady"), sleeping: t("librarySleeping"), unknown: t("healthUnknown"), degraded: t("healthDegraded"), unavailable: t("healthUnavailable"), not_configured: t("healthNotConfigured"), disabled: t("healthDisabled"), manual: t("healthManual"), warming: t("healthWarming"), warm: t("healthWarm"), failed: t("healthFailed") },
   };
 }
+const connectionPathKeys = {
+  libraryPath: "library", torrentPoolPath: "torrentPool", aniRssMediaPath: "aniRssMedia", externalReadOnlyPath: "external1",
+};
+let connectionStorage = null, connectionHealthGeneration = 0, connectionHealthLoading = false;
+function renderConnectionPaths(storage = connectionStorage) {
+  connectionStorage = storage;
+  for (const [id, key] of Object.entries(connectionPathKeys)) {
+    const field = $(id), target = $(`${id}Status`);
+    if (!field || !target) continue;
+    const path = field.value.trim(), item = storage?.[key];
+    const configPath = Object.keys(deploymentControls).find((name) => deploymentControls[name] === id);
+    const saved = capabilities.configurationOverrides?.[configPath] ?? configPath.split(".").reduce((value, part) => value?.[part], config) ?? "";
+    const disabled = id === "externalReadOnlyPath" && !$("externalReadOnlyEnabled").checked;
+    const enabledChanged = id === "externalReadOnlyPath" && $("externalReadOnlyEnabled").checked !== Boolean(config.externalLibraries?.[0]?.enabled);
+    let state, text;
+    if (path !== String(saved).trim() || enabledChanged) { state = "pending"; text = t("pathSaveToCheck"); }
+    else if (disabled) { state = "disabled"; text = t("healthDisabled"); }
+    else if (!path) { state = "not_configured"; text = t("healthNotConfigured"); }
+    else if (!item || item.path !== path) { state = "unknown"; text = t(connectionHealthLoading ? "healthLoading" : "pathNotChecked"); }
+    else {
+      state = item.state;
+      text = t(({ available: "pathReadable", sleeping: "librarySleeping", not_configured: "healthNotConfigured",
+        share_not_found: "pathMissing", permission_denied: "pathPermissionDenied", authentication_failed: "pathCredentialsInvalid" })[state] || "pathUnavailable");
+    }
+    target.dataset.state = state;
+    target.textContent = text;
+  }
+}
+for (const id of [...Object.keys(connectionPathKeys), "externalReadOnlyEnabled"]) {
+  $(id).addEventListener(id === "externalReadOnlyEnabled" ? "change" : "input", () => renderConnectionPaths());
+}
+$("settingsDialog").addEventListener("close", () => { connectionHealthGeneration++; connectionHealthLoading = false; });
 function systemHealthExtra(item) {
   const info = item?.info || {}, parts = [];
   if (item?.id === "network") {
@@ -7080,6 +7631,7 @@ function systemHealthExtra(item) {
   return parts.join(" · ");
 }
 function renderSystemHealth(payload) {
+  renderConnectionPaths(payload?.storage || null);
   if (!$("systemHealthItems")) return;
   const { names, details } = systemHealthLabels();
   const warning = payload?.status === "warning";
@@ -7101,11 +7653,20 @@ function renderSystemHealthDiagnostics(payload) {
 }
 async function loadSystemHealth() {
   if (!$("systemHealthItems")) return;
+  const generation = ++connectionHealthGeneration;
+  connectionHealthLoading = true;
+  renderConnectionPaths();
   $("systemHealthSummary").className = "system-health-summary muted";
   $("systemHealthSummary").textContent = t("healthLoading");
   try {
-    renderSystemHealth(await api("/api/system/health"));
+    const payload = await api("/api/system/health");
+    if (generation !== connectionHealthGeneration) return;
+    connectionHealthLoading = false;
+    renderSystemHealth(payload);
   } catch (error) {
+    if (generation !== connectionHealthGeneration) return;
+    connectionHealthLoading = false;
+    renderConnectionPaths(null);
     $("systemHealthSummary").className = "system-health-summary warning";
     $("systemHealthSummary").textContent = `${t("healthOverallWarning")} · ${error.message}`;
     $("systemHealthItems").innerHTML = "";
@@ -7270,6 +7831,23 @@ function ensureEraYearOption(year) {
 let radarSeason = 1, radarTimer, radarController, radarGeneration = 0;
 let radarQuarterKey = "", radarSubscribeGeneration = 0, radarRefreshPending = false;
 let radarSort = "", radarDirection = "asc";
+function updateRadarSortControls() {
+  $("radarMobileSort").value = radarSort;
+  $("radarMobileDirection").disabled = !radarSort;
+  $("radarMobileDirection").textContent = radarDirection === "asc" ? "↑" : "↓";
+}
+$("radarMobileSort").onchange = () => {
+  radarSort = $("radarMobileSort").value;
+  radarDirection = "asc";
+  updateRadarSortControls();
+  loadRadar({ preferCache: true });
+};
+$("radarMobileDirection").onclick = () => {
+  if (!radarSort) return;
+  radarDirection = radarDirection === "asc" ? "desc" : "asc";
+  updateRadarSortControls();
+  loadRadar({ preferCache: true });
+};
 const radarPendingSubscriptions = new Set();
 const radarSubmittingSubscriptions = new Set();
 function radarIsHighlighted(item) { return item?.hasUnwatched === true; }
@@ -7412,6 +7990,7 @@ async function loadRadar({ preferCache = false } = {}) {
     });
     updateRadarSeasonCount($(`radarTab${radarSeason}`), season, data.total);
     $("radarStatus").textContent = data.viewingUnavailable ? t("viewingUnavailable") : available ? "" : t("recentEpisodeRequiresAniRss");
+    updateRadarSortControls();
     renderRadarTable(data.items.length ? `<table class="data-table radar-table"><thead><tr>
       ${radarHeader("title", "radarTitleColumn")}${radarHeader("premiere", "radarStart", "radar-start")}${radarHeader("progress", "radarProgress")}<th class="radar-watched">${esc(t("radarWatched"))}</th>${radarHeader("subscription", "radarSubscription")}${radarHeader("updated", "radarUpdated")}
       </tr></thead><tbody>${data.items.map((item) => {
@@ -7422,18 +8001,19 @@ async function loadRadar({ preferCache = false } = {}) {
         const subscription = pending ? esc(t("radarSubscriptionPending")) : item.ani_rss_subscriptions?.length ?
           item.ani_rss_subscriptions.map((value) => aniSubscriptionMenu(value, item.id, !available, item.bgm_id)).join("") : state === "active" ?
           `<details class="subscription-menu"><summary>${t("radarSubscribed")} ▾</summary><div class="subscription-menu-actions">${visibilityButton(item.bgm_id, item.id)}</div></details>` : state === "paused" ? `<details class="subscription-menu"><summary>${t("radarPaused")} ▾</summary><div class="subscription-menu-actions">${visibilityButton(item.bgm_id, item.id)}</div></details>` :
-          `<details class="subscription-menu"><summary>${t("radarSubscribe")} ▾</summary><div class="subscription-menu-actions"><button type="button" class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("enableSubscription")}</button>${visibilityButton(item.bgm_id, item.id)}</div></details>`;
+          `<details class="subscription-menu"><summary>${t((item.follows || []).some((row) => row.state === "available") ? "followAvailable" : (item.follows || []).some((row) => row.state !== "cancelled" && row.state !== "subscribed") ? "followPending" : "radarSubscribe")} ▾</summary><div class="subscription-menu-actions"><button type="button" class="text-button" data-subscribe="${item.id}" data-icon="subscribe" ${!available || config.components?.downloadClient?.submissionEnabled === false ? "disabled" : ""}>${t("enableSubscription")}</button>${followButton(item)}${followButton(item, "archive")}${visibilityButton(item.bgm_id, item.id)}</div></details>`;
         return `<tr data-radar-id="${item.id}" class="${radarIsHighlighted(item) ? "radar-highlight" : ""}" ${radarIsHighlighted(item) ? `title="${esc(t("radarUnwatched"))}"` : ""}><td class="radar-title-cell ${imagesEnabled ? "with-radar-cover" : ""}">${imagesEnabled ? `<img class="radar-cover" data-cover="${item.id}" alt="" decoding="async" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='600'%3E%3Crect width='400' height='600' fill='%23e6e4de'/%3E%3C/svg%3E">` : ""}<button class="text-button radar-work" data-detail="${item.id}">${esc(preferred(item))}</button></td>
           <td class="radar-start" data-label="${esc(t("radarStart"))}">${esc(radarStartDate(item))}${language === "en" ? ` (${esc(label("media", item.media_code))})` : `（${esc(label("media", item.media_code))}）`}${radarReleaseDate(item)}</td>
           <td class="radar-progress" data-label="${esc(t("radarProgress"))}">${item.episode_progress?.current ?? "?"} / ${item.episode_progress?.total ?? "?"}</td>
           <td class="radar-watched" data-label="${esc(t("radarWatched"))}">${viewingButton(item.id, item.viewing, item.bgm_id, true)}</td>
-          <td data-label="${esc(t("radarSubscription"))}">${subscription}</td><td data-label="${esc(t("radarUpdated"))}">${stamp && Number.isFinite(stamp.getTime()) ? esc(stamp.toLocaleString(language)) : ""}</td></tr>`;
+          <td class="radar-subscription" data-label="${esc(t("radarSubscription"))}">${subscription}</td><td class="radar-updated" data-label="${esc(t("radarUpdated"))}">${stamp && Number.isFinite(stamp.getTime()) ? esc(stamp.toLocaleString(language)) : ""}</td></tr>`;
       }).join("")}</tbody></table>` : `<p class="empty">${t("radarEmpty")}</p>`);
     $("radarResults").querySelectorAll("[data-radar-sort]").forEach((button) => {
       button.onclick = () => {
         const column = button.dataset.radarSort;
         radarDirection = radarSort === column && radarDirection === "asc" ? "desc" : "asc";
         radarSort = column;
+        updateRadarSortControls();
         loadRadar({ preferCache: true });
       };
     });
@@ -7630,19 +8210,9 @@ function applyEraDateRange(value) {
   const year = exactYear(value);
   if (year !== null) {
     ensureEraYearOption(year);
-    const selectedSeason = $("season").value;
-    if (selectedSeason) {
-      const range = seasonDateRange(year, selectedSeason);
-      $("start_from").value = range.from;
-      $("start_to").value = range.to;
-      updateSeasonControl();
-      return;
-    }
-    const from = monthParts($("start_from").value), to = monthParts($("start_to").value);
-    if (from) $("start_from").value = `${year}-${from.month}`;
-    else $("start_from").value = `${year}-01`;
-    if (to) $("start_to").value = `${year}-${to.month}`;
-    else $("start_to").value = `${year}-12`;
+    $("season").value = "";
+    $("start_from").value = `${year}-01`;
+    $("start_to").value = `${year}-12`;
     updateSeasonControl();
     return;
   }
@@ -7719,9 +8289,12 @@ function setView(v) {
 }
 function applyRoleUi() {
   const admin = authSession?.role === "admin";
-  $("settingsButton").hidden = !admin;
+  $("settingsButton").hidden = !admin && !authSession?.authEnabled;
+  $("settingsButton").disabled = !config.torrentPolicy;
   $("authButton").hidden = !authSession?.authEnabled;
   if (authSession?.authEnabled) $("authButton").textContent = `${authSession.username} · ${t("logout")}`;
+  $("accountSettingsRow").hidden = !authSession?.authEnabled;
+  $("accountSettingsName").textContent = authSession?.username || "";
   document.querySelectorAll("[data-admin-only]").forEach((element) => (element.hidden = !admin));
 }
 function showLogin() {
@@ -7809,6 +8382,8 @@ function updateShaText(value) {
 function updateUpgradeText(value) {
   const status = String(value?.status || "");
   if (!status) return t("upgradeIdle");
+  if (value.restoredVersion) return t("updateRolledBack");
+  if (value.historical) return t("upgradeHistorical");
   return t({ downloading: "upgradeDownloading", restarting: "upgradeRestarting", installed: "upgradeInstalled", failed: "upgradeFailedState", available: "upgradeStatusAvailable", latest: "upgradeStatusLatest", unavailable: "upgradeStatusUnavailable", installing: "upgradeStatusInstalling" }[status] || "upgradeIdle");
 }
 function updateDateText(value) {
@@ -7846,12 +8421,22 @@ function updateButtons() {
   };
 }
 async function loadApplicationUpdate(force = false) {
+  if (applicationUpdateBusy) return;
   const controls = updateButtons();
   if (!controls.checks.length || authSession?.role !== "admin") return;
   controls.checks.forEach((button) => button.disabled = true);
   controls.statuses.forEach((target) => { target.classList.remove("error"); target.textContent = t("updateChecking"); });
   try {
+    const local = await api('/api/update/status?local=1', { timeoutMs: 5000 });
+    if (applicationUpdateBusy) return;
+    renderUpdateDetails(local);
+    if ($('uploadApplicationUpdate')) $('uploadApplicationUpdate').disabled = local.installationPending || !['portable', 'docker'].includes(local.installMode);
+    if (local.installationPending || !force) {
+      controls.statuses.forEach(target => target.textContent = t(local.installationPending ? 'updatePending' : 'updateLocalReady'));
+      return local;
+    }
     const payload = await api(`/api/update/status${force ? "?force=1" : ""}`, { timeoutMs: 30000 });
+    if (applicationUpdateBusy) return;
     controls.applies.forEach((button) => {
       const reinstall = !payload.updateAvailable && payload.canForceUpdate;
       button.hidden = !((payload.updateAvailable && payload.canUpdate) || reinstall);
@@ -7867,14 +8452,67 @@ async function loadApplicationUpdate(force = false) {
     renderUpdateDetails(payload);
     return payload;
   } catch (error) {
+    if (applicationUpdateBusy) return;
     controls.applies.forEach((button) => button.hidden = true);
     controls.statuses.forEach((target) => { target.classList.add("error"); target.textContent = updateMessage("updateCheckFailed", { message: error.message }); });
     throw error;
   } finally {
-    controls.checks.forEach((button) => button.disabled = false);
+    controls.checks.forEach((button) => button.disabled = applicationUpdateBusy);
+  }
+}
+async function checkUpdateRollback(health, expected) {
+  if (!health.ok || health.version === expected) return;
+  const local = await api('/api/update/status?local=1', { timeoutMs: 2500 });
+  const result = local.upgradeResult || {};
+  if (result.status === 'failed' && result.version === expected && result.restoredVersion === health.version) {
+    const error = new Error(t('updateRolledBack'));
+    error.code = 'update_rolled_back';
+    throw error;
+  }
+}
+async function applyOfflineUpdate(file) {
+  if (!file) return;
+  const control = $('uploadApplicationUpdate'), target = $('updateDetailStatus');
+  if (control.disabled) return;
+  if (!file.name.endsWith('.anm-update.zip') || !file.size || file.size > 1024 * 1024 * 1024) {
+    target.textContent = t('offlinePackageHint'); return;
+  }
+  if (!confirm(t('offlineUpdateConfirm'))) return;
+  applicationUpdateBusy = true;
+  control.disabled = true;
+  $('checkApplicationUpdateDetail').disabled = true;
+  $('applyApplicationUpdateDetail').disabled = true;
+  target.classList.remove('error'); target.textContent = t('updatePreparing');
+  try {
+    const payload = await api('/api/update/offline', { method: 'POST', body: file,
+      headers: { 'Content-Type': 'application/octet-stream' }, timeoutMs: 180000 });
+    target.textContent = t('updateRestarting');
+    const deadline = Date.now() + 150000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      try {
+        const health = await api('/api/health/live', { timeoutMs: 2500 });
+        if (health.ok && health.version === payload.version) { window.location.reload(); return; }
+        await checkUpdateRollback(health, payload.version);
+      } catch (error) { if (error.code === 'update_rolled_back') throw error; }
+    }
+    throw new Error(t('updateRestartTimeout'));
+  } catch (error) {
+    const messages = { offline_package_invalid: 'offlinePackageHint', offline_package_not_newer: 'offlineNotNewer',
+      offline_package_platform_mismatch: 'offlinePlatform', offline_package_checksum_failed: 'offlineChecksum',
+      offline_package_incomplete: 'offlineIncomplete', 'update already in progress': 'updatePending' };
+    target.classList.add('error'); target.textContent = messages[error.message] ? t(messages[error.message]) : error.message;
+  } finally {
+    applicationUpdateBusy = false;
+    control.disabled = false;
+    $('checkApplicationUpdateDetail').disabled = false;
+    $('applyApplicationUpdateDetail').disabled = false;
+    $('offlineUpdateFile').value = '';
   }
 }
 async function applyApplicationUpdate() {
+  if (applicationUpdateBusy) return;
+  applicationUpdateBusy = true;
   const controls = updateButtons();
   controls.applies.forEach((button) => button.disabled = true);
   controls.checks.forEach((button) => button.disabled = true);
@@ -7892,10 +8530,12 @@ async function applyApplicationUpdate() {
       try {
         const health = await api("/api/health/live", { timeoutMs: 2500 });
         if (health.ok && (!expected || health.version === expected) && (!reinstall || (previousBoot && health.bootId !== previousBoot))) { window.location.reload(); return; }
-      } catch (_) {}
+        await checkUpdateRollback(health, expected);
+      } catch (error) { if (error.code === 'update_rolled_back') throw error; }
     }
     throw new Error(t("updateRestartTimeout"));
   } catch (error) {
+    applicationUpdateBusy = false;
     controls.statuses.forEach((target) => { target.classList.add("error"); target.textContent = updateMessage("updateFailed", { message: error.message }); });
     controls.applies.forEach((button) => button.disabled = false);
     controls.checks.forEach((button) => button.disabled = false);
@@ -7924,6 +8564,7 @@ async function initialize() {
     capabilities = cap;
     options = o;
     groupCatalog = groups;
+    applyRoleUi();
     const preferences = { ...c.ui, ...storedUi() };
     language = storedUi().language || storedLanguage() || detectSystemLanguage(c.ui?.availableLanguages);
     view = preferences.catalogView || view;
@@ -8123,6 +8764,8 @@ $("applyImagePreloadLimits").onclick = async () => {
 };
 $("checkApplicationUpdateDetail").onclick = () => loadApplicationUpdate(true).catch(() => {});
 $("applyApplicationUpdateDetail").onclick = () => applyApplicationUpdate();
+$('uploadApplicationUpdate').onclick = () => $('offlineUpdateFile').click();
+$('offlineUpdateFile').onchange = event => applyOfflineUpdate(event.target.files?.[0]);
 $("updateArchive").onclick = () =>
   startArchiveUpdate().catch(
     (e) => ($("archiveStatus").textContent = e.message),

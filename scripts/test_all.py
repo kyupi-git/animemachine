@@ -72,6 +72,7 @@ def main() -> int:
             raise RuntimeError("Node.js is required for the JavaScript syntax check")
         for script in sorted((SRC / "animemachine" / "web" / "static").glob("*.js")):
             run([node, "--check", str(script)])
+        run([node, str(ROOT / "docs/manual/.vitepress/check.mjs")])
 
         env["ANM_CONFIG_PATH"] = str(SRC / "animemachine" / "resources" / "config.example.json")
         run([sys.executable, "-m", "animemachine.cli", "validate-config"], env=env)

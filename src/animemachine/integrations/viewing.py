@@ -47,6 +47,12 @@ class Store:
                 PRIMARY KEY(user_id,bgm_id,episode))""")
             if "completed" not in {row[1] for row in db.execute("PRAGMA table_info(viewing_episode)")}:
                 db.execute("ALTER TABLE viewing_episode ADD COLUMN completed INTEGER NOT NULL DEFAULT 0")
+            if db.execute('PRAGMA user_version').fetchone()[0] < 1:
+                db.execute('''INSERT OR IGNORE INTO viewing_episode(user_id,bgm_id,episode,position_ms,duration_ms,media_key)
+                    SELECT user_id,bgm_id,episode,position_ms,duration_ms,media_key FROM viewing_anchor WHERE episode IS NOT NULL''')
+                db.execute('''UPDATE viewing_episode SET completed=1 WHERE duration_ms>0
+                    AND position_ms*100>=duration_ms*90''')
+                db.execute('PRAGMA user_version=1')
 
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
@@ -104,7 +110,25 @@ class Store:
                         (number, row["user_id"], row["bgm_id"], row["episode"])).rowcount
         return changed
 
-    def correct(self, user_id: int, bgm_id: int, episode: Any, revision: int, position_ms: int = 0) -> dict[str, Any]:
+    def unwatched(self, user_id: int, frontiers: dict[int, float]) -> set[int]:
+        """An episode anchor is a resume point, not proof of completion."""
+        pending = set()
+        with contextlib.closing(self._connect()) as db:
+            for bgm_id, episode in frontiers.items():
+                anchor = self._read(db, user_id, bgm_id)
+                record = db.execute('SELECT completed FROM viewing_episode WHERE user_id=? AND bgm_id=? AND episode=?',
+                                    (user_id, bgm_id, episode)).fetchone()
+                if anchor['episode'] is None or not record or not record[0]:
+                    pending.add(bgm_id)
+        return pending
+
+    def correct(self, user_id: int, bgm_id: int, episode: Any, revision: int, position_ms: int = 0,
+                *, latest_episode: float | None = None, complete_latest: bool = False,
+                restore_completed: bool | None = None) -> dict[str, Any]:
+        if complete_latest and latest_episode is None:
+            raise ValueError('latest_episode_unknown')
+        if complete_latest:
+            episode = latest_episode
         number = episode_number(episode)
         position_ms, _ = validate_position(position_ms, 0)
         if number is None:
@@ -114,6 +138,9 @@ class Store:
             prior = self._read(db, user_id, bgm_id)
             if prior["revision"] != revision:
                 raise Conflict("viewing_conflict")
+            previous_latest = db.execute('SELECT completed FROM viewing_episode WHERE user_id=? AND bgm_id=? AND episode=?',
+                                         (user_id, bgm_id, latest_episode)).fetchone()
+            previous_completed = bool(previous_latest and previous_latest[0])
             db.execute("""INSERT INTO viewing_anchor(user_id,bgm_id,episode,revision,epoch,source,updated_at)
                 VALUES(?,?,?,?,?,'manual',?) ON CONFLICT(user_id,bgm_id) DO UPDATE SET
                 episode=excluded.episode,revision=excluded.revision,epoch=excluded.epoch,
@@ -125,7 +152,21 @@ class Store:
                     VALUES(?,?,?,?) ON CONFLICT(user_id,bgm_id,episode) DO UPDATE SET
                     position_ms=excluded.position_ms,duration_ms=0,media_key='',completed=0""",
                     (user_id, bgm_id, number, position_ms))
-            return {**self._read(db, user_id, bgm_id), "previousEpisode": prior["episode"], "previousPositionMs": prior["positionMs"]}
+            else:
+                db.execute('UPDATE viewing_episode SET completed=0 WHERE user_id=? AND bgm_id=?', (user_id, bgm_id))
+            if latest_episode is not None:
+                mark_completed = complete_latest or (number is not None and number > latest_episode)
+                if restore_completed is not None:
+                    mark_completed = restore_completed
+                if mark_completed:
+                    db.execute('''INSERT INTO viewing_episode(user_id,bgm_id,episode,completed) VALUES(?,?,?,1)
+                        ON CONFLICT(user_id,bgm_id,episode) DO UPDATE SET completed=1''', (user_id, bgm_id, latest_episode))
+                elif restore_completed is False:
+                    db.execute('UPDATE viewing_episode SET completed=0 WHERE user_id=? AND bgm_id=? AND episode=?',
+                               (user_id, bgm_id, latest_episode))
+            return {**self._read(db, user_id, bgm_id), "previousEpisode": prior["episode"],
+                    "previousPositionMs": prior["positionMs"], 'previousLatestCompleted': previous_completed,
+                    'latestEpisode': latest_episode}
 
     def started(self, user_id: int, bgm_id: int, episode: float, epoch: int,
                 session_order: int, source: str, *, position_ms: int | None = None,
@@ -169,7 +210,7 @@ class Store:
 
 
 def completed(position: int, duration: int) -> bool:
-    return duration > 0 and position * 100 >= duration * 99
+    return duration > 0 and position * 100 >= duration * 90
 
 
 def validate_position(position: Any, duration: Any) -> tuple[int, int]:

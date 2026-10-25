@@ -238,6 +238,7 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
         if current_time is not None and incoming_time is not None and incoming_time < current_time:
             raise ValueError("Refusing to replace Catalog metadata with an older Archive")
         catalog_module.migrate_catalog_features(db)
+        catalog_module.entity_names.migrate(db)
         before = db.execute("SELECT COUNT(*) FROM anime_work").fetchone()[0]
         db.execute("ATTACH DATABASE ? AS incoming", (str(incoming),))
         scalar = [row[1] for row in db.execute("PRAGMA table_info(anime_work)") if row[1] not in {"id", "bgm_id"}]
@@ -259,6 +260,13 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
                 db.execute(f"DELETE FROM {table} WHERE source='bangumi-archive' AND anime_id IN (SELECT t.id FROM anime_work t JOIN incoming.anime_work s ON s.bgm_id=t.bgm_id)")
                 field_sql = ",".join(fields)
                 db.execute(f"INSERT OR IGNORE INTO {table}(anime_id,{field_sql}) SELECT t.id,{','.join('x.'+f for f in fields)} FROM incoming.{table} x JOIN incoming.anime_work s ON s.id=x.anime_id JOIN anime_work t ON t.bgm_id=s.bgm_id")
+            if db.execute("SELECT 1 FROM incoming.sqlite_master WHERE type='table' AND name='archive_entity_name'").fetchone():
+                db.execute("""DELETE FROM archive_entity_name WHERE
+                    (entity_kind='character' AND entity_id IN (SELECT character_id FROM incoming.anime_cast)) OR
+                    (entity_kind='person' AND entity_id IN (SELECT person_id FROM incoming.anime_cast
+                                                          UNION SELECT person_id FROM incoming.anime_staff))""")
+                db.execute('INSERT OR REPLACE INTO archive_entity_name SELECT * FROM incoming.archive_entity_name')
+                db.execute("DELETE FROM metadata WHERE key='entity_name_projection'")
             simple = {
                 "anime_tag": ["tag", "vote_count", "tag_rank"],
                 "anime_theme": ["theme_code"],
@@ -281,7 +289,7 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
             catalog_module.rebuild_studio_clusters(db)
             catalog_module.rebuild_theme_clusters(db)
             for key in ("archive_name", "archive_created_at", "archive_digest", "record_count", "built_at",
-                        "release_event_source_version", "catalog_scope"):
+                        "release_event_source_version", "catalog_scope", 'entity_name_projection'):
                 db.execute("INSERT INTO metadata(key,value) SELECT key,value FROM incoming.metadata WHERE key=? ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key,))
             catalog_module.relation_graph.rebuild(db, force=True)
             catalog_module.rebuild_physical_layout(db)

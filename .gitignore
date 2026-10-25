@@ -27,6 +27,8 @@
 /.local/
 /.playwright-mcp/
 /.venv/
+**/node_modules/
+/docs/manual/.vitepress/cache/
 **/*.pid.json
 **/*.py[cod]
 **/__pycache__/

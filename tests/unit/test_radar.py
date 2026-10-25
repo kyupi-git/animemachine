@@ -67,6 +67,30 @@ class RadarTests(unittest.TestCase):
                 self.assertEqual(expected, result["total"])
                 self.assertLess(classify.call_count, 100)
 
+    def test_unknown_resource_titles_reappear_after_resources_and_subscriptions_stay_visible(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE anime_work SET title_ja='アニメ二',title_zh_hans=NULL,title_en=NULL WHERE id=2")
+            db.execute("DELETE FROM anime_title WHERE anime_id=2")
+            db.execute("INSERT INTO anime_title VALUES(2,'ja','アニメ二','primary','archive')")
+            db.execute("UPDATE anime_work SET media_code='web' WHERE id=3")
+            db.execute("UPDATE anime_work SET media_code='ova' WHERE id=4")
+            db.execute("UPDATE anime_work SET media_code='other' WHERE id=5")
+        self.assertEqual([1], [row['id'] for row in self.query()['items']])
+        self.assertEqual([2], [row['id'] for row in self.query(q=['アニメ二'])['items']])
+        self.add_subscription(4)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute('UPDATE ani_rss_subscription SET current_episode=0 WHERE anime_id=4')
+        self.assertEqual({1, 4}, {row['id'] for row in self.query()['items']})
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            for identity in (2, 3, 5):
+                ani_rss.record_release_progress(db, identity, 1, '2026-07-01T00:00:00Z')
+        result = self.query()
+        self.assertEqual(5, result['total'])
+        self.assertEqual({1, 2, 3, 4, 5}, {row['id'] for row in result['items']})
+        first, rest = self.query(limit=['1']), self.query(offset=['1'])
+        self.assertEqual(5, first['total'])
+        self.assertEqual([row['id'] for row in result['items']], [row['id'] for row in first['items'] + rest['items']])
+
     def test_display_language_does_not_change_shared_resource_policy(self):
         for language in ("zh-Hans", "en", "ja"):
             with self.subTest(language=language), mock.patch.object(ani_rss, "state", return_value=self.ready) as state:
@@ -87,6 +111,8 @@ class RadarTests(unittest.TestCase):
             db.execute("UPDATE anime_work SET media_code='ova' WHERE id=5")
             db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL WHERE id IN (2,4)")
             db.execute("DELETE FROM anime_title WHERE anime_id IN (2,4) AND language<>'ja'")
+            for identity in (2, 4, 5):
+                ani_rss.record_release_progress(db, identity, 1, '2026-07-01T00:00:00Z')
         for ready in (self.ready, {"connection_state": "failed", "credentialConfigured": False}):
             for order in ("recent_episode", "date", "random"):
                 with self.subTest(ready=ready, sort=order), mock.patch.object(ani_rss, "state", return_value=ready):
@@ -166,6 +192,7 @@ class RadarTests(unittest.TestCase):
                            (date.isoformat(), date.strftime("%Y-%m"), anime_id))
             db.execute("UPDATE anime_work SET media_code='movie',title_zh_hans=NULL,title_en=NULL WHERE id=1")
             db.execute("DELETE FROM anime_title WHERE anime_id=1 AND language<>'ja'")
+            ani_rss.record_release_progress(db, 1, 1, '2026-07-01T00:00:00Z')
         for ready in (self.ready, {"connection_state": "unconfigured", "credentialConfigured": False}):
             for direction in ("asc", "desc"):
                 with self.subTest(ready=ready, direction=direction):
@@ -251,6 +278,7 @@ class RadarTests(unittest.TestCase):
             db.execute("UPDATE anime_work SET media_code='movie' WHERE id=3")
             db.execute("UPDATE anime_work SET title_zh_hans=NULL,title_en=NULL WHERE id=2")
             db.execute("DELETE FROM anime_title WHERE anime_id=2 AND language<>'ja'")
+            ani_rss.record_release_progress(db, 2, 1, '2026-07-01T00:00:00Z')
         before = [row["id"] for row in self.query()["items"]]
         self.assertGreater(before.index(2), before.index(1))
         self.assertNotIn(2, {row["id"] for row in self.query(radar=["0"])["items"]})
@@ -364,7 +392,9 @@ const setTimeout = () => 1, clearTimeout = () => {};
             db.execute("INSERT INTO anime_country VALUES(5,'JP','verified')")
             db.execute("UPDATE anime_work SET title_ja='漢字',title_zh_hans=NULL,title_en=NULL WHERE id=5")
             db.execute("DELETE FROM anime_title WHERE anime_id=5")
-        self.assertIn(5, {row["id"] for row in self.query()["items"]})
+            db.execute("INSERT INTO anime_title VALUES(5,'ja','漢字','primary','bangumi-archive')")
+        self.assertNotIn(5, {row["id"] for row in self.query()["items"]})
+        self.assertIn(5, {row['id'] for row in self.query(q=['漢字'])['items']})
 
     def test_first_episode_uses_ani_rss_report_even_when_resource_policy_disables_it(self):
         client = mock.Mock()
@@ -580,6 +610,9 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
         self.db_path.unlink()
         with contextlib.redirect_stdout(None):
             service.write_database(self.db_path, service.build_items_from_archive(archive, None, {}))
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
+            for identity in range(1, 12):
+                ani_rss.record_release_progress(db, identity, 1, '2026-07-01T00:00:00Z')
         for ready in (self.ready, {"connection_state": "failed", "credentialConfigured": False}):
             self.ready = ready
             result = self.query()
@@ -718,14 +751,14 @@ assert.equal(radarStartDate({raw_date: '2026-10'}), 'month');
                 [("bd", "2026-08-27")],
             )
 
-    def test_connection_loss_hides_stale_progress_and_falls_back(self):
+    def test_connection_loss_retains_known_frontier_without_claiming_live_state(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
             ani_rss.record_release_progress(db, 1, 10, "2026-09-01T00:00:00+00:00")
         self.ready = {"connection_state": "error", "credentialConfigured": True}
         result = self.query()
         self.assertEqual("recent_episode", result["effectiveSort"])
         self.assertTrue(all(row["subscription_state"] == "unknown" for row in result["items"]))
-        self.assertTrue(all(row["episode_progress"]["current"] is None for row in result["items"]))
+        self.assertEqual(10, next(row for row in result['items'] if row['id'] == 1)['episode_progress']['current'])
 
     def test_release_schema_upgrade_is_idempotent_and_preserves_subscription(self):
         with contextlib.closing(sqlite3.connect(self.db_path)) as db, db:
