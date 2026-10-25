@@ -16,7 +16,12 @@
 
 # Generated/local runtime data and secrets.
 /artifacts/
-**/*.db*
+**/*.db
+**/*.db-*
+**/*.db.*
+**/*.db3
+**/*.db3-*
+**/*.db3.*
 /dist/
 /build/
 *.egg-info/
@@ -32,7 +37,12 @@
 **/*.pid.json
 **/*.py[cod]
 **/__pycache__/
-**/*.sqlite*
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite.*
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.sqlite3.*
 !/tests/fixtures/anime-catalog.sqlite3
 *.zip
 /src/animemachine/resources/season-covers.zip.sha256
