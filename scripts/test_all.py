@@ -33,6 +33,9 @@ def check_dependencies() -> None:
 
 
 def main() -> int:
+    # Child transcripts are UTF-8, including paths on English Windows runners.
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser()
     parser.add_argument("--skip-dependency-check", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
