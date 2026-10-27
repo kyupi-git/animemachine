@@ -19,7 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-  "certifi==2026.10.19",
+  "certifi==2026.10.23",
   "httpx[http2]==0.28.1",
   "Pillow==13.0.0",
   "truststore==0.10.5",
