@@ -53,6 +53,23 @@ class RuntimeCatalogTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_all_selected_filters_are_equivalent_and_catchup_can_skip_torrent_ranking(self):
+        from animemachine.catalog import service
+        params = {'limit': ['all'], 'sort': ['title']}
+        ordinary = service.query_catalog(self.db_path, params, self.config)
+        all_selected = service.query_catalog(self.db_path, {
+            **params, 'availability': ['torrent', 'ani-rss', 'unavailable'],
+            'library_state': ['local', 'external', 'submitted', 'not_in_library'],
+        }, self.config)
+        self.assertEqual(ordinary, all_selected)
+        self.assertGreater(next(row for row in ordinary['items'] if row['id'] == self.anime_id)['usable_torrent_count'], 0)
+        with mock.patch.object(runtime_catalog, 'torrents_for_anime', side_effect=AssertionError('unneeded ranking')):
+            light = service.query_catalog(self.db_path, params, self.config, include_torrent_details=False)
+        for payload in (ordinary, light):
+            for row in payload['items']:
+                row.pop('usable_torrent_count')
+        self.assertEqual(ordinary, light, 'playback keeps all work, subscription and media information')
+
     def test_work_state_fingerprint_changes_without_timestamp_change(self) -> None:
         with contextlib.closing(sqlite3.connect(":memory:")) as db:
             db.execute("CREATE TABLE anime_work(work_id INTEGER,library_state TEXT,scope_state TEXT)")

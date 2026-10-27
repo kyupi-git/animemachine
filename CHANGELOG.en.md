@@ -5,6 +5,22 @@
 
 Changes affecting everyday use, with the newest release first.
 
+## 0.5.2
+
+0.5.2 adds background tasks, media corrections and settings backups, simplifies access to the deployment file, and improves resource selection and browsing.
+
+### Added and improved
+
+- Added a background task view for catalog updates, covers, resource searches and local verification, with supported retries.
+- Added manual title matching and episode corrections, with undo to automatic matching. Media files stay in place.
+- Added backup and restore for settings, accounts, release tracking and viewing records, with validation and a controlled restart.
+- Improved deployment and browsing: releases include the default Compose file; paging, filtering and catch-up playback respond faster, and relationship graphs open at the selected title.
+
+### Fixed
+
+- Fixed inconsistent release-group and variant preferences, and added the Tonight Moon release group.
+- Fixed year selection to include December of the previous year through December of the selected year.
+
 ## 0.5.1
 
 0.5.1 improves playback from existing collections and adds release tracking, offline updates, and an illustrated manual in three languages.

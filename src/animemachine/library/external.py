@@ -144,6 +144,8 @@ def normalize(value: str | None) -> str:
 
 def migrate(db: sqlite3.Connection) -> None:
     db.executescript(SCHEMA)
+    from . import corrections
+    corrections.migrate(db)
 
 
 def _title_hint(root: Path, path: Path, kind: str) -> tuple[str, int | None, str | None]:
@@ -542,6 +544,12 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                             and int(prior_file[1]) == int(info.st_mtime_ns)):
                         db.execute('INSERT INTO scan_file SELECT * FROM external_media_file WHERE source_id=? AND absolute_path=?',
                                    (source_id, absolute))
+                        override = db.execute('SELECT original_json,size,mtime_ns FROM external_media_override WHERE source_id=? AND absolute_path=?',
+                                              (source_id,absolute)).fetchone()
+                        if override and int(override[1]) == info.st_size and int(override[2]) == info.st_mtime_ns:
+                            automatic = json.loads(override[0])
+                            db.execute('UPDATE scan_file SET anime_id=?,match_state=?,episode_number=?,evidence_json=? WHERE source_id=? AND absolute_path=?',
+                                       (automatic['anime_id'],automatic['match_state'],automatic['episode_number'],automatic['evidence_json'],source_id,absolute))
                         db.execute("UPDATE scan_file SET last_seen_at=? WHERE source_id=? AND absolute_path=?",
                                    (stamp, source_id, absolute))
                         stats["files"] += 1; stats["unchanged"] += 1; stats[str(prior_file[2])] += 1
@@ -597,6 +605,8 @@ def _scan_unlocked(db_path: Path, sources: list[dict[str, Any]],
                                         'catalogGeneration': generation, 'storageState': AVAILABLE})))
                 db.execute('DELETE FROM external_media_file WHERE source_id=?', (source_id,))
                 db.execute('INSERT INTO external_media_file SELECT * FROM scan_file')
+                from . import corrections
+                corrections.apply_overrides(db, source_id=source_id, refresh_original=True)
                 db.commit()
             except _SupersededScan:
                 db.rollback()

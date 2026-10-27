@@ -42,9 +42,10 @@ for locale in '' zh-Hans en ja; do
     find "$root/docs/manual/$locale" -maxdepth 1 -type f -name '*.md' -exec cp {} "$release/docs/manual/$locale/" \;
 done
 if [ -d "$root/docs/images" ]; then
-    "$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$release/docs/images"
+    "$python_cmd" "$root/scripts/copy_document_images.py" "$root/docs/images" "$release/docs/images" --readme-dir "$release"
 fi
 cp "$root/VERSION" "$root/RELEASE_PYTHON_VERSION" "$release/"
+cp "$root/deploy/compose/compose.yaml" "$release/compose.yaml"
 "$python_cmd" "$root/scripts/build_info.py" --output "$release/BUILD-INFO.json" --build-type "$platform-portable" --platform "$platform" --python-version "$("$python_cmd" -c 'import platform; print(platform.python_version())')"
 printf '%s\n' 'Place a verified Bangumi Archive dump-*.zip here, then start AnimeMachine.' > "$release/imports/README.txt"
 chmod +x "$release/AnimeMachine.sh" "$release/$launcher" "$release/tools/maintenance/Clean-AnimeMachine.sh"

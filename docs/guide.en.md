@@ -11,6 +11,8 @@ This guide covers deployment, initial setup, everyday use, and maintenance. Sele
 
 <a id="start"></a>
 
+The default full-stack `compose.yaml` is available as a [Release download](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml) and at the root of the release package. Save it in a permanent project folder and run `docker compose up -d`. Choose a template only if you need an alternative setup.
+
 ## 1. Choose a launch method
 
 ### Windows
@@ -46,7 +48,7 @@ The launcher installs the required components. Open **<http://localhost:8787>**.
 
 Enable Docker or container management in your NAS app center, or install [Docker](https://docs.docker.com/get-started/get-docker/) on your computer. Use Docker Engine 24+ and Docker Compose **2.20.3+**.
 
-Follow the [step-by-step Compose guide](../deploy/compose/README.en.md). Use the [full stack](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
+Follow the [step-by-step Compose guide](../deploy/compose/README.en.md). Use the [full stack](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml) to start AnimeMachine, qBittorrent, Ani-RSS, and the resource collector together. If you already run some services, choose one alternative below. The numbers identify different setups; they are not installation steps.
 
 | Deployment scenario | Configuration |
 | --- | --- |
@@ -212,7 +214,7 @@ Click **Relationship graph** on a card or in details to explore prequels, sequel
 
 ### Playback and subtitles
 
-Open title details, choose a media source and starting episode, then select VLC, PotPlayer, or your system player. IINA is also available on macOS. Use **Copy playlist** to open the whole season in another player.
+Open title details, choose a media source and starting episode, then select VLC, PotPlayer, or your system player. IINA is also available on macOS. Use **Copy playlist** to open the current playlist in another player.
 
 ![Choose a starting episode and open an external player](images/playback.en.png)
 
@@ -304,7 +306,9 @@ docker compose pull
 docker compose up -d
 ```
 
-For a backup, stop AnimeMachine and copy:
+To save settings and viewing records as a ZIP, open **Settings → Users → Backup and restore**. Restoring shows a summary before confirmation and restart. See [Backup and restore](manual/en/updates.md).
+
+To move the complete catalog, cache and manual media corrections, stop AnimeMachine and copy:
 
 | Installation | Backup contents |
 | --- | --- |
@@ -321,10 +325,10 @@ In 0.5.1 and later, open **Settings → Updates → Upload offline update**, sel
 For Docker 0.5.0 or earlier, first import the offline image:
 
 ```sh
-docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
+docker load -i AnimeMachine-0.5.2-docker-linux-amd64.tar.gz
 ```
 
-In the original deployment folder, change the AnimeMachine and Torrent Collector image fields (if present) in `compose.yaml` to `animemachine:0.5.1`. Keep mounts and other service settings, then run:
+In the original deployment folder, change the AnimeMachine and Torrent Collector image fields (if present) in `compose.yaml` to `animemachine:0.5.2`. Keep mounts and other service settings, then run:
 
 ```sh
 docker compose up -d --pull never

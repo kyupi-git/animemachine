@@ -26,20 +26,20 @@
 
 普通 `release-windows.zip` 用于完整解压安装，Docker 的 `tar.gz` 是离线镜像；它们与上传入口使用的升级包用途不同。文件不匹配或校验失败时，当前可用版本继续运行。
 
-## Docker 0.5.0 升到 0.5.1
+## Docker 0.5.0 离线升级
 
 正式发布的离线镜像可在 [Releases](https://github.com/kyupi-git/animemachine/releases/latest) 下载，文件名中的 `amd64` 对应 Intel / AMD，`arm64` 对应 ARM。
 
 0.5.0 还没有上传入口，可先从本地镜像升级：
 
-1. 把 `AnimeMachine-0.5.1-docker-linux-amd64.tar.gz` 上传到 NAS。该文件用于 Intel / AMD；ARM 设备选择对应架构的镜像。
+1. 把 `AnimeMachine-0.5.2-docker-linux-amd64.tar.gz` 上传到 NAS。该文件用于 Intel / AMD；ARM 设备选择对应架构的镜像。
 2. 在终端导入镜像：
 
 ```sh
-docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
+docker load -i AnimeMachine-0.5.2-docker-linux-amd64.tar.gz
 ```
 
-3. 在项目目录的 `.env` 中设置 `ANM_IMAGE=animemachine:0.5.1`；使用默认完整组合时，同样设置 `TORRENT_COLLECTOR_IMAGE=animemachine:0.5.1`。
+3. 在项目目录的 `.env` 中设置 `ANM_IMAGE=animemachine:0.5.2`；使用默认完整组合时，同样设置 `TORRENT_COLLECTOR_IMAGE=animemachine:0.5.2`。
 4. 在该目录运行 `docker compose up -d --pull never`，刷新并核对版本。
 
 自定义 Compose 若直接写了镜像地址，则修改相应服务的 `image` 值。目录挂载、环境配置和数据目录继续使用原值。
@@ -47,6 +47,14 @@ docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
 ## 电脑上手动替换发布包
 
 停止旧程序，将新版解压到新目录，再把旧目录中的 `config.json`、`.env.local`（如有）和整个 `data` 目录复制到新目录，启动新版。媒体放在独立目录时，保持原路径可访问。
+
+## 下载与恢复备份
+
+在 **设置 → 用户 → 备份与恢复** 点击 **下载备份**，保存生成的 ZIP。备份包含设置、账号、资源跟踪和观看记录，不包含媒体文件与作品底库。
+
+恢复时点击 **恢复备份**，选择 ZIP，核对备份版本与记录数量，再点击 **恢复并重启**。重启后使用备份中的账号登录，并核对连接地址和媒体目录。部署时通过环境变量指定的设置仍以部署配置为准。
+
+备份包含账号及连接信息，请保存在自己的设备中。迁移整套作品库或保留手动媒体识别结果时，仍需备份下列完整数据目录。
 
 ## 备份需要保留什么
 

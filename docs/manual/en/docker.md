@@ -17,7 +17,7 @@ The stack creates `config`, `data`, `library`, `torrents`, and `external` folder
 
 ## Download the Compose file
 
-[Download compose.yaml](../../../deploy/compose/compose.yaml) and save it in the project folder. On the GitHub file page, choose **Download raw file**. Keep the complete file name **`compose.yaml`**. You can also download it in the terminal:
+[Download compose.yaml](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml) and save it in the project folder. The release package also includes the same file at its root. Keep the complete file name **`compose.yaml`**. You can also download it in the terminal:
 
 ```sh
 curl -fL https://raw.githubusercontent.com/kyupi-git/animemachine/main/deploy/compose/compose.yaml -o compose.yaml

@@ -44,3 +44,17 @@ This setting controls AnimeMachine's access. Other applications may still use th
 **Settings → History** lists completed organization, folder, and download operations. **Settings → Logs** shows runtime messages. Filter to warnings and errors, then search by title or keyword.
 
 ![History: find an operation and its result](../../images/manual/history.en.png)
+
+## Correct media matches
+
+If files appear under the wrong title or have incorrect episode numbers, open **Settings → General → Correct media matches**:
+
+1. Search by folder or filename. Choose **All files** to change an existing match.
+2. Find and select the correct title, select the files, and check or edit their episode numbers.
+3. Click **Save matches**, then check the playlist in title details.
+
+Only identification records change; files remain in place. To undo a correction, select the corrected files and click **Use automatic matching**.
+
+## Check background tasks
+
+Click **Background tasks** at the top of the page to check cover preparation, catalog updates, resource searches and local verification. Failed tasks show a message; supported tasks offer **Retry** without restarting the app.

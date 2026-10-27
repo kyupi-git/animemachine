@@ -56,6 +56,8 @@ def _recent_release(db: sqlite3.Connection, anime_id: int, today: dt.date) -> bo
 
 def filter_streams(db: sqlite3.Connection, anime_id: int, items: list[dict[str, Any]],
                    fingerprint: Any, config: dict[str, Any], *, today: dt.date | None = None) -> list[dict[str, Any]]:
+    if not items:
+        return []
     cursor = db.execute('SELECT * FROM anime_work WHERE id=?', (anime_id,))
     row = cursor.fetchone()
     if row is None:

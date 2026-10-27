@@ -17,6 +17,7 @@ from animemachine.catalog import service
 from animemachine.config.policy import ConfigStore
 from animemachine.integrations import ani_rss
 from animemachine.torrents import runtime
+from animemachine import backup
 
 
 class AccountFollowHttpTests(unittest.TestCase):
@@ -70,6 +71,32 @@ class AccountFollowHttpTests(unittest.TestCase):
                 self.assertIsNone(self.users.login(username,old))
                 self.assertIsNotNone(self.users.login(username,'new-account-password'))
         self.assertFalse(self.initial.exists())
+
+    def test_notice_and_maintenance_actions_enforce_account_and_admin_boundaries(self):
+        admin=self.client('admin','old-admin-password')
+        viewer=self.client('viewer','old-viewer-password')
+        self.assertFalse(admin.get('/api/auth/notice').json()['accepted'])
+        self.assertEqual(403,admin.post('/api/auth/notice',json={'accepted':True},headers={'X-CSRF-Token':''}).status_code)
+        self.assertEqual(400,admin.post('/api/auth/notice',json={'accepted':True}).status_code)
+        with contextlib.closing(sqlite3.connect(self.users.path)) as db,db:
+            db.execute('UPDATE usage_notice SET shown_at=shown_at-6 WHERE user_id=1')
+        self.assertTrue(admin.post('/api/auth/notice',json={'accepted':True}).raise_for_status().json()['accepted'])
+        self.assertFalse(viewer.get('/api/auth/notice').json()['accepted'])
+        for path in ('/api/tasks','/api/backup','/api/backup/status','/api/library/corrections'):
+            self.assertEqual(403,viewer.get(path).status_code,path)
+        for path in ('/api/tasks/retry','/api/backup/preview','/api/backup/restore','/api/library/corrections'):
+            self.assertEqual(403,viewer.post(path,json={}).status_code,path)
+        self.assertEqual(200,admin.get('/api/tasks').status_code)
+        self.assertEqual(409,admin.post('/api/tasks/retry',json={'id':[]}).status_code)
+        raw=admin.get('/api/backup').raise_for_status().content
+        self.assertEqual({'accounts','viewing','follows'},set(backup.read_package(raw)['stores']))
+        self.assertEqual(400,admin.post('/api/backup/preview',content=b'invalid').status_code)
+        preview=admin.post('/api/backup/preview',content=raw).raise_for_status().json()
+        self.assertEqual(2,preview['users'])
+        result=admin.post('/api/backup/restore',json={'token':preview['token'],'confirm':True})
+        self.assertEqual(409,result.status_code)
+        self.assertEqual('backup_restart_unavailable',result.json()['error'])
+        self.assertFalse(backup.pending(self.root))
 
     def test_release_tracking_is_account_scoped_and_stale_edits_conflict(self):
         admin = self.client('admin','old-admin-password')

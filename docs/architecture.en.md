@@ -57,11 +57,11 @@ Connect existing media as an external read-only library to keep its current layo
 
 **Subscriptions** start in Release radar or Ani-RSS: search releases, choose a group, and add a subscription. Ani-RSS downloads new episodes; AnimeMachine syncs subscription and media progress into the library.
 
-**Playback** starts with identified media: choose a source and starting episode, and AnimeMachine creates a season playlist. The player reads media through an accessible local path, share, or HTTP address.
+**Playback** starts with identified media: choose a source and starting episode, and AnimeMachine creates a playlist. The player reads media through an accessible local path, share, or HTTP address.
 
 Collection status comes from media checks. Available resources, download tasks, and subscription progress each have their own records. Title details bring them together so you can follow a release through to its files.
 
-Viewing records belong to each account and are shared by title details and Release radar. Continue watching gathers subscribed TV titles with new episodes to watch, with adjustable ranges and order. Watching at least 90% of the latest episode or confirming it manually clears its pending status. The PotPlayer extension records positions and resumes five seconds before the last stop; other players record episodes. Records can be corrected manually.
+Viewing records belong to each account and are shared by title details and Release radar. Continue watching gathers subscribed TV titles with new episodes to watch, with adjustable ranges and order. A player report of at least 90% progress through the latest episode, or manual confirmation, clears its pending status. The PotPlayer extension records positions and resumes five seconds before the last stop; other players record episodes. Records can be corrected manually.
 
 ## Background tasks
 

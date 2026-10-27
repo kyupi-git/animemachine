@@ -6,7 +6,9 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 
 [ユーザーマニュアル](docs/manual/ja/index.md) · [導入ガイド](docs/guide.ja.md#start) · [困ったときは](docs/manual/ja/troubleshooting.md)。起動後は画面上部の **マニュアル** から、画像付きの手順をオフラインでも確認できます。
 
-![カバーから作品を探し、リソースと所蔵状況を確認](docs/images/library-overview.ja.png)
+| 新作レーダーと一括続き再生 | 作品関連図（新旧作品のつながり） |
+| :---: | :---: |
+| ![新作レーダー：購読を管理し、未視聴の新着エピソードを連続再生](docs/images/demo_radar.gif) | ![作品関連図：前作・続編・番外編のつながりを確認](docs/images/demo_relationship.gif) |
 
 ## 主な機能
 
@@ -27,6 +29,14 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 
 視聴記録は作品詳細とレーダーで共有し、必要に応じて修正できます。手順は[まとめ再生とプレーヤーの使い方](docs/guide.ja.md#daily-use)を参照してください。
 
+## シリーズのつながりを確認
+
+作品カードの **作品関連図** から、前作、続編、劇場版、番外編のつながりを確認できます。開くと選択した作品の位置が表示され、図中のタイトルをクリックすると詳細を確認できます。
+
+![関連作品を全画面で表示する作品関連図](docs/images/relationship-graph.ja.png)
+
+関係の種類ごとに表示を切り替えられます。全画面表示や PNG・SVG での保存にも対応しています。操作は[シリーズ作品の関連図](docs/manual/ja/collections.md)を参照してください。
+
 ## クイックスタート
 
 お使いの機器に合わせて起動方法を選んでください。詳しい手順は[導入・利用ガイド](docs/guide.ja.md#start)にあります。
@@ -36,7 +46,9 @@ AnimeMachine は、中国語・英語・日本語の UI に対応したアニメ
 | Windows 10 / 11 | [Releases](https://github.com/kyupi-git/animemachine/releases/latest) から Windows 用 ZIP をダウンロードし、展開して `AnimeMachine.cmd` をダブルクリックします。Python は同梱されています。 |
 | Linux | Python 3.11 以降をインストールし、対応する Linux 用パッケージを展開して `./AnimeMachine-Linux.sh` を実行します。 |
 | macOS | Python 3.11 以降をインストールし、対応する macOS 用パッケージを展開して `AnimeMachine-macOS.command` を開きます。 |
-| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。構成の選択と手順は[Compose 導入ガイド](deploy/compose/README.ja.md)を参照してください。 |
+| NAS / Docker | [フル構成の compose.yaml](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml) を保存し、そのディレクトリで `docker compose up -d` を実行します。構成の選択と手順は[Compose 導入ガイド](deploy/compose/README.ja.md)を参照してください。 |
+
+既定の `compose.yaml` は Releases の添付ファイルと各配布パッケージの直下にあります。このファイル一つでフル構成を導入できます。
 
 起動後は **<http://localhost:8787>** を開きます。別の機器から使う場合は、`localhost` を AnimeMachine が動いているパソコンや NAS のアドレスに置き換えてください。初回のアカウントと自動生成されたパスワードは、起動ウィンドウまたはコンテナのログに表示されます。
 

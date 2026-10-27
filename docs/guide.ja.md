@@ -11,6 +11,8 @@
 
 <a id="start"></a>
 
+既定のフル構成の `compose.yaml` は [Releases](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml) から直接取得でき、配布パッケージ直下にもあります。固定のプロジェクトフォルダーに保存して `docker compose up -d` を実行します。別の構成が必要な場合はテンプレートを選んでください。
+
 ## 1. 起動方法を選ぶ
 
 ### Windows
@@ -46,7 +48,7 @@ macOS では **`AnimeMachine-macOS.command`** を開きます。展開したフ�
 
 NAS のアプリ管理で Docker / コンテナ管理を有効にするか、パソコンに [Docker](https://docs.docker.com/get-started/get-docker/) をインストールします。Docker Engine 24 以降、Docker Compose **2.20.3 以降**を使用してください。
 
-[Docker Compose の手順ガイド](../deploy/compose/README.ja.md)を参照してください。通常は[フル構成](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)を使います。AnimeMachine、qBittorrent、Ani-RSS、リソース収集サービスをまとめて起動できます。既存サービスがある場合は、下表から代わりの構成を一つ選んでください。01～04 は構成の番号で、作業手順ではありません。
+[Docker Compose の手順ガイド](../deploy/compose/README.ja.md)を参照してください。通常は[フル構成](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml)を使います。AnimeMachine、qBittorrent、Ani-RSS、リソース収集サービスをまとめて起動できます。既存サービスがある場合は、下表から代わりの構成を一つ選んでください。01～04 は構成の番号で、作業手順ではありません。
 
 | 利用環境 | 設定ファイル |
 | --- | --- |
@@ -212,7 +214,7 @@ qBittorrent の接続後、作品詳細で **Torrent を検索** を押すと、
 
 ### 再生と字幕
 
-作品詳細で再生元と開始する話を選び、VLC、PotPlayer、システムプレイヤーを開きます。macOS では IINA も使えます。**プレイリストをコピー**すると、シーズン全体を別のプレイヤーで開けます。
+作品詳細で再生元と開始する話を選び、VLC、PotPlayer、システムプレイヤーを開きます。macOS では IINA も使えます。**プレイリストをコピー**すると、現在のリストを別のプレイヤーで開けます。
 
 ![開始する話を選び、外部プレイヤーで再生](images/playback.ja.png)
 
@@ -304,7 +306,9 @@ docker compose pull
 docker compose up -d
 ```
 
-バックアップは AnimeMachine を停止してから、次をコピーします。
+設定と視聴記録は **設定 → ユーザー → バックアップと復元** から ZIP で保存できます。復元は内容を確認してから再起動して適用します。手順は[バックアップと復元](manual/ja/updates.md)を参照してください。
+
+作品データベース、キャッシュ、手動識別の記録をまとめて移す場合は、AnimeMachine を停止して次をコピーします。
 
 | 導入方法 | 保存するもの |
 | --- | --- |
@@ -321,10 +325,10 @@ docker compose up -d
 Docker の 0.5.0 以前から更新する場合は、先にオフラインイメージを読み込みます。
 
 ```sh
-docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
+docker load -i AnimeMachine-0.5.2-docker-linux-amd64.tar.gz
 ```
 
-元の配置フォルダーで、`compose.yaml` の AnimeMachine と Torrent Collector（使用している場合）のイメージを `animemachine:0.5.1` に変更します。マウントと他のサービスの設定は維持し、次を実行します。
+元の配置フォルダーで、`compose.yaml` の AnimeMachine と Torrent Collector（使用している場合）のイメージを `animemachine:0.5.2` に変更します。マウントと他のサービスの設定は維持し、次を実行します。
 
 ```sh
 docker compose up -d --pull never

@@ -25,6 +25,7 @@
           <button id="viewToggle" data-icon="table" class="tool" type="button" data-i18n="table" aria-label="表格" title="表格" data-i18n-aria-label="table" data-i18n-title="table">表格</button>
           <a id="manualLink" class="tool manual-link" href="/help/zh-Hans/" target="_blank" rel="noopener" data-icon="help" data-i18n="manual">手册</a>
           <button id="settingsButton" data-icon="settings" class="tool" data-i18n="settings" hidden>设置</button>
+          <button id="tasksButton" data-icon="refresh" class="tool" data-i18n="backgroundTasks" hidden>任务</button>
           <button id="authButton" data-icon="exit" class="tool" data-i18n="logout" hidden>退出</button>
         </div>
       </div>
@@ -385,6 +386,21 @@
         <button type="submit" class="primary" data-i18n="login">登录</button>
       </form>
     </dialog>
+    <dialog id="usageNoticeDialog" class="usage-notice-dialog" aria-labelledby="usageNoticeTitle">
+      <h2 id="usageNoticeTitle" tabindex="-1" data-i18n="usageNoticeTitle">使用须知</h2>
+      <div class="usage-notice-copy">
+        <p data-i18n="usageNoticePurpose">AnimeMachine 是开源项目，定位为动画收藏库，提供资源候选与任务管理。</p>
+        <p data-i18n="usageNoticeComponents">订阅和下载交由 Ani-RSS、qBittorrent 等独立组件执行。</p>
+        <p data-i18n="usageNoticeScope">资源检索不收录 NSFW 内容，相关内容已自动过滤。</p>
+        <p data-i18n="usageNoticeRights">请遵守适用法律法规，并确认有权获取所选内容。</p>
+      </div>
+      <p id="usageNoticeStatus" class="error" role="status"></p>
+      <footer class="usage-notice-actions">
+        <button id="usageNoticeDecline" type="button" class="tool" data-i18n="usageNoticeDecline">我不同意</button>
+        <button id="usageNoticeAccept" type="button" class="primary" disabled data-i18n="usageNoticeAccept">我同意</button>
+      </footer>
+    </dialog>
+    <section id="usageNoticeExit" class="usage-notice-exit" hidden><p data-i18n="usageNoticeExit">已退出，请关闭此标签页。</p></section>
     <dialog id="passwordDialog" aria-labelledby="passwordTitle">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
       <form id="passwordForm">
@@ -397,6 +413,41 @@
         <p id="passwordStatus" class="muted" role="status" aria-live="polite"></p>
         <footer class="follow-actions"><button id="passwordSave" type="submit" class="primary" data-icon="user" data-i18n="changePassword">修改密码</button></footer>
       </form>
+    </dialog>
+    <dialog id="tasksDialog" class="maintenance-dialog" aria-labelledby="tasksTitle">
+      <button type="button" class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <h2 id="tasksTitle" data-icon="refresh" data-i18n="backgroundTasks">后台任务</h2>
+      <p id="tasksStatus" class="muted" role="status"></p>
+      <div id="tasksList" class="background-task-list"></div>
+    </dialog>
+    <dialog id="backupDialog" aria-labelledby="backupTitle">
+      <button type="button" class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <h2 id="backupTitle" data-icon="upload" data-i18n="backupRestore">恢复备份</h2>
+      <div id="backupPreview" class="backup-preview"></div>
+      <p data-i18n="backupRestoreHint">恢复将替换当前设置、账号及观看记录，并重启 AnimeMachine。媒体文件保持原样；恢复后请使用备份中的账号登录，并核对连接与目录。</p>
+      <p id="backupRestoreStatus" class="muted" role="status" aria-live="polite"></p>
+      <footer class="form-actions"><button id="backupRestoreConfirm" type="button" class="primary" data-icon="check" data-i18n="backupRestoreConfirm" disabled>恢复并重启</button></footer>
+    </dialog>
+    <dialog id="mediaCorrectionsDialog" class="maintenance-dialog" aria-labelledby="mediaCorrectionsTitle">
+      <button type="button" class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
+      <h2 id="mediaCorrectionsTitle" data-icon="folder" data-i18n="mediaCorrections">纠正媒体识别</h2>
+      <p class="muted" data-i18n="mediaCorrectionsHint">将已扫描的文件关联到作品，并调整集数。仅修改识别记录，不移动或改写媒体。</p>
+      <div class="correction-toolbar">
+        <input id="mediaCorrectionQuery" type="search" data-i18n-placeholder="mediaFolderSearch" placeholder="搜索目录或文件名">
+        <select id="mediaCorrectionScope" aria-label="Media filter" data-i18n-aria-label="mediaFilter"><option value="" data-i18n="mediaUnmatched">待识别与已纠正</option><option value="all" data-i18n="mediaAllFiles">全部文件</option></select>
+      </div>
+      <div class="correction-toolbar">
+        <input id="mediaCorrectionWorkQuery" type="search" data-i18n-placeholder="mediaWorkSearch" placeholder="搜索要关联的作品">
+        <select id="mediaCorrectionWork" data-i18n-aria-label="mediaWorkChoice"><option value="" data-i18n="mediaWorkChoice">选择作品</option></select>
+      </div>
+      <p id="mediaCorrectionStatus" class="muted" role="status" aria-live="polite"></p>
+      <div id="mediaCorrectionFiles" class="media-correction-files"></div>
+      <button id="mediaCorrectionMore" type="button" data-i18n="mediaLoadMore" hidden>载入更多</button>
+      <footer class="form-actions correction-actions">
+        <span id="mediaCorrectionSelection" class="muted"></span>
+        <button id="mediaCorrectionUndo" type="button" data-icon="refresh" data-i18n="mediaCorrectionUndo" disabled>恢复自动识别</button>
+        <button id="mediaCorrectionSave" type="button" class="primary" data-icon="check" data-i18n="mediaCorrectionSave" disabled>保存识别结果</button>
+      </footer>
     </dialog>
     <dialog id="settingsDialog">
       <button class="close" aria-label="Close" data-i18n-aria-label="closeDialog">×</button>
@@ -507,6 +558,7 @@
               <button id="createPlaceholders" data-icon="folder" type="button" class="maintenance-action"><b data-i18n="createPlaceholders">建立订阅目录</b><small data-i18n="createPlaceholdersHint">为已订阅作品建立占位目录，沿用本地库已有目录。</small></button>
               <button id="auditLibrary" data-icon="check" type="button" class="maintenance-action"><b data-i18n="auditLibrary">核验全部本地资源</b><small data-i18n="auditLibraryHint">分批核验文件，并在后台更新收藏完整度。</small></button>
               <button id="previewLibraryLayout" data-icon="folder" type="button" class="maintenance-action"><b data-i18n="layoutPreview">目录调整预览</b><small data-i18n="layoutPreviewHint">核对作品命名、日语版标题与附属短篇归属。</small></button>
+              <button id="openMediaCorrections" data-icon="folder" type="button" class="maintenance-action"><b data-i18n="mediaCorrections">纠正媒体识别</b><small data-i18n="mediaCorrectionsShort">关联未识别的文件，调整作品与集数。</small></button>
             </div>
             <div id="libraryMaintenanceStatus" class="maintenance-status muted" role="status" aria-live="polite"></div>
           </fieldset>
@@ -731,23 +783,33 @@
         </section>
         <section class="tab-panel users-panel" data-panel="users" id="settingsPanel-users" role="tabpanel" aria-labelledby="settingsTab-users" tabindex="0" data-admin-only>
           <div id="accountSettingsRow" class="account-settings-row"><span class="account-settings-identity"><small class="muted" data-i18n="currentUser">当前用户</small><strong id="accountSettingsName"></strong></span><button id="changePassword" type="button" class="tool dark-tool" data-icon="user" data-i18n="changePassword">修改密码</button></div>
-          <p class="muted" data-i18n="usersHint">普通用户可浏览和提交下载，但不能修改设置。</p>
-          <div class="user-management-card">
-            <div class="user-section-heading">
-              <strong data-i18n="createUser">创建用户</strong>
-              <span class="muted" data-i18n="userCreateHint">用户名为 3–64 个字母、数字、点、下划线或连字符；密码至少 10 位。</span>
-            </div>
-            <div class="user-create-row">
-              <label><span data-i18n="username">用户名</span><input id="newUsername" form="userCreateForm" minlength="3" maxlength="64" pattern="[A-Za-z0-9._\-]+" required data-i18n-placeholder="username" autocomplete="off" /></label>
-              <label><span data-i18n="password">密码</span><input id="newUserPassword" form="userCreateForm" type="password" minlength="10" required data-i18n-placeholder="password" autocomplete="new-password" /></label>
-              <label><span data-i18n="userRole">角色</span><select id="newUserRole" form="userCreateForm"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select></label>
-              <button id="createUser" data-icon="user" type="button" class="primary user-create-button" data-i18n="createUser">创建用户</button>
-            </div>
-            <p id="userManagementStatus" class="muted user-management-status" aria-live="polite"></p>
-          </div>
           <div class="user-management-card user-list-card">
             <div class="user-section-heading"><strong data-i18n="existingUsers">现有用户</strong></div>
+            <p class="explain" data-i18n="usersHint">普通用户可浏览和提交下载，但不能修改设置。</p>
             <div id="userList" class="user-list"></div>
+            <details class="user-create-panel">
+              <summary data-icon="user" data-i18n="createUser">创建用户</summary>
+              <p class="explain" data-i18n="userCreateHint">用户名为 3–64 个字母、数字、点、下划线或连字符；密码至少 10 位。</p>
+              <div class="user-create-row">
+                <label><span data-i18n="username">用户名</span><input id="newUsername" form="userCreateForm" minlength="3" maxlength="64" pattern="[A-Za-z0-9._\-]+" required data-i18n-placeholder="username" autocomplete="off" /></label>
+                <label><span data-i18n="password">密码</span><input id="newUserPassword" form="userCreateForm" type="password" minlength="10" required data-i18n-placeholder="password" autocomplete="new-password" /></label>
+                <label><span data-i18n="userRole">角色</span><select id="newUserRole" form="userCreateForm"><option value="user" data-i18n="normalUser">普通用户</option><option value="admin" data-i18n="administrator">管理员</option></select></label>
+                <button id="createUser" data-icon="user" type="button" class="primary user-create-button" data-i18n="createUser">创建用户</button>
+              </div>
+              <p id="userManagementStatus" class="muted user-management-status" aria-live="polite"></p>
+            </details>
+          </div>
+          <div class="user-management-card backup-card">
+            <div class="user-section-heading">
+              <strong data-i18n="backupTitle">备份与恢复</strong>
+              <div class="backup-actions">
+                <button id="exportBackup" type="button" class="tool dark-tool" data-icon="download" data-i18n="backupExport">下载备份</button>
+                <button id="importBackup" type="button" class="tool dark-tool" data-icon="upload" data-i18n="backupRestore">恢复备份</button>
+                <input id="backupFile" type="file" accept=".zip,application/zip" hidden>
+              </div>
+            </div>
+            <p class="explain" data-i18n="backupHint">备份设置、账号、资源跟踪及观看记录，不包含媒体和作品底库。备份中含账号与连接信息，请妥善保管。</p>
+            <p id="backupStatus" class="muted" role="status" aria-live="polite"></p>
           </div>
         </section>
         <section class="tab-panel" data-panel="logs" id="settingsPanel-logs" role="tabpanel" aria-labelledby="settingsTab-logs" tabindex="0">
@@ -793,10 +855,10 @@
         </section>
         <section class="tab-panel about-product" data-panel="about" id="settingsPanel-about" role="tabpanel" aria-labelledby="settingsTab-about" tabindex="0">
           <div class="about-copy">
-            <p data-i18n="aboutLead">AnimeMachine 帮助你浏览动画、订阅新作，并自动整理本地收藏库。</p>
-            <p data-i18n="aboutDetail">在作品详情中查看资源、核验收藏和播放媒体；通过下载计划确认需要新增或替换的文件。</p>
+            <p data-i18n="aboutLead">AnimeMachine 是开源动画收藏库，集作品浏览、收藏整理与播放于一体。</p>
+            <p data-i18n="aboutDetail">查看作品资料和资源候选，选择版本，管理订阅与任务；识别已有媒体，按作品和系列整理收藏，并通过一键继续观看衔接观看记录。</p>
             <p data-i18n="aboutRelations">作品关系图展示前作、续作、番外和衍生作品，便于按系列查找和收藏。</p>
-            <p data-i18n="aboutComponents">可按需连接 Ani-RSS、qBittorrent 和外部媒体库，使用订阅、下载和远程播放功能。</p>
+            <p data-i18n="aboutComponents">可按需接入 Ani-RSS、qBittorrent 和已有媒体目录，统一查看资源、任务与收藏状态。</p>
             <p><a href="https://github.com/kyupi-git/animemachine" target="_blank" rel="noreferrer">github.com/kyupi-git/animemachine</a></p>
             <ul class="about-sources">
               <li><a href="https://github.com/bangumi/Archive" target="_blank" rel="noreferrer">Bangumi Archive</a><span data-i18n="aboutArchiveSource">提供本地动画元数据底包与作品关系基础。</span></li>

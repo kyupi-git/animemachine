@@ -525,6 +525,25 @@ class AniRssTest(unittest.TestCase):
             self.assertEqual((1, "2026-10-01T10:03:00+00:00"), db.execute(
                 "SELECT current_episode,last_episode_update_at FROM ani_rss_release_state").fetchone())
 
+    def test_policy_refresh_preserves_resources_changed_during_calculation(self):
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db,db:
+            ani_rss.migrate(db)
+            db.execute("""INSERT INTO ani_rss_resource(resource_id,anime_id,provider,resource_kind,title,
+                item_count,eligible,rank_key,payload_json,discovered_at,expires_at)
+                VALUES('policy-race',1,'test','collection','Original',1,1,'old','{}','now','later')""")
+        def replace_resource(*_args):
+            with contextlib.closing(sqlite3.connect(self.db_path,timeout=.1)) as writer,writer:
+                writer.execute("UPDATE ani_rss_resource SET title='Changed during calculation'")
+            return False,0
+        with mock.patch.object(ani_rss,'_policy_eligibility_and_rank',side_effect=replace_resource):
+            ani_rss.refresh_resource_policy(self.db_path,self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((1,'old'),db.execute('SELECT eligible,rank_key FROM ani_rss_resource').fetchone())
+        with mock.patch.object(ani_rss,'_policy_eligibility_and_rank',return_value=(False,0)):
+            ani_rss.refresh_resource_policy(self.db_path,self.config)
+        with contextlib.closing(sqlite3.connect(self.db_path)) as db:
+            self.assertEqual((0,'00000000'),db.execute('SELECT eligible,rank_key FROM ani_rss_resource').fetchone())
+
     def test_cached_language_policy_recalculates_from_release_titles_without_remote_calls(self):
         ani_rss.sync(self.db_path, self.config)
         policy = self.config['torrentPolicy']
@@ -548,7 +567,14 @@ class AniRssTest(unittest.TestCase):
             ani_rss.resources(self.db_path, 1, self.config)
             with contextlib.closing(sqlite3.connect(self.db_path)) as db:
                 self.assertEqual(before, db.execute('SELECT name,sql FROM sqlite_master ORDER BY name').fetchall())
-            ani_rss.refresh_resource_policy(self.db_path, self.config)
+            decide = ani_rss._policy_eligibility_and_rank
+            def check_writer_available(*args):
+                with contextlib.closing(sqlite3.connect(self.db_path, timeout=.1)) as writer:
+                    writer.execute('BEGIN IMMEDIATE')
+                    writer.rollback()
+                return decide(*args)
+            with mock.patch.object(ani_rss,'_policy_eligibility_and_rank',side_effect=check_writer_available):
+                ani_rss.refresh_resource_policy(self.db_path, self.config)
             with contextlib.closing(sqlite3.connect(self.db_path)) as db:
                 self.assertEqual(1, db.execute('SELECT eligible FROM ani_rss_resource').fetchone()[0])
             policy['serialSubtitle']['enabledByLanguage']['zh'] = []

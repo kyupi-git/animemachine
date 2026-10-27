@@ -6,6 +6,7 @@ from functools import lru_cache
 import hashlib
 import json
 import re
+import unicodedata
 
 from .metainfo import classify
 
@@ -80,8 +81,15 @@ class Variant:
         return patterns
 
 
+def canonical_platform(value: str) -> str:
+    token = re.sub(r"[\s._+-]+", "", unicodedata.normalize("NFKC", value)).casefold()
+    return {'bahamut': 'baha', 'crunchyroll': 'cr', 'netflix': 'nf', 'amazon': 'amzn',
+            'disney': 'dsnp'}.get(token, token)
+
+
 @lru_cache(maxsize=4096)
 def release_variant(title: str) -> Variant:
+    title = unicodedata.normalize("NFKC", title)
     parsed = classify('', title, [], {})
     platforms = [match.group().upper() for match in re.finditer(PLATFORM, title, re.I)]
     canonical = {'BAHA':'Baha', 'BAHAMUT':'Baha', 'CRUNCHYROLL':'CR', 'NETFLIX':'NF',

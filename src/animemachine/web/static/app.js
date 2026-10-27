@@ -35,6 +35,7 @@ let config = {},
   total = 0,
   searchExpanded = false,
   page = 0,
+  displayedCatalogPage = 0,
   language = storedLanguage() || detectSystemLanguage(),
   view = "cards",
   pageSize = "12",
@@ -57,20 +58,59 @@ let config = {},
 const performanceReported = new Set();
 const catalogPages = new Map();
 let catalogPageRevision = 0, catalogPrefetchTimer;
-function invalidateCatalogPages() { catalogPages.clear(); catalogPageRevision++; }
+const catalogPageKey = (query) => `${authSession?.username || ""}:${query.toString()}`;
+function cancelCatalogPrefetch(exceptKey = "") {
+  for (const [key, entry] of catalogPages) {
+    if (key !== exceptKey && !entry.settled && entry.prefetch && !entry.waiters.size) {
+      entry.controller.abort();
+      catalogPages.delete(key);
+    }
+  }
+}
+function invalidateCatalogPages() {
+  cancelCatalogPrefetch();
+  catalogPages.clear();
+  catalogPageRevision++;
+}
 async function catalogPage(query, { signal, preferCache = false } = {}) {
-  const key = `${authSession?.username || ""}:${query.toString()}`, cached = catalogPages.get(key);
-  if (preferCache && cached && cached.expires > Date.now() && !cached.signal?.aborted) return cached.promise;
-  const revision = catalogPageRevision;
-  const entry = { expires: Date.now() + 30000, signal };
-  entry.promise = api(`/api/anime?${query}`, { signal, timeoutMs: 15000 });
-  catalogPages.set(key, entry);
-  while (catalogPages.size > 12) catalogPages.delete(catalogPages.keys().next().value);
-  entry.promise.then(() => {
-    entry.signal = undefined;
-    if (revision !== catalogPageRevision && catalogPages.get(key) === entry) catalogPages.delete(key);
-  }, () => { if (catalogPages.get(key) === entry) catalogPages.delete(key); });
-  return entry.promise;
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const key = catalogPageKey(query);
+  if (signal) cancelCatalogPrefetch(key);
+  let entry = catalogPages.get(key);
+  if (!entry || entry.controller.signal.aborted || (entry.settled && (!preferCache || entry.expires <= Date.now()))) {
+    const revision = catalogPageRevision;
+    entry = { controller: new AbortController(), waiters: new Set(), prefetch: !signal, settled: false, expires: 0 };
+    entry.promise = api(`/api/anime?${query}`, { signal: entry.controller.signal, timeoutMs: 15000 });
+    catalogPages.set(key, entry);
+    while (catalogPages.size > 12) {
+      const oldest = catalogPages.keys().next().value, evicted = catalogPages.get(oldest);
+      if (!evicted.settled && !evicted.waiters.size) evicted.controller.abort();
+      catalogPages.delete(oldest);
+    }
+    entry.promise.then(() => {
+      entry.settled = true;
+      entry.expires = Date.now() + 30000;
+      if (revision !== catalogPageRevision && catalogPages.get(key) === entry) catalogPages.delete(key);
+    }, () => {
+      entry.settled = true;
+      if (catalogPages.get(key) === entry) catalogPages.delete(key);
+    });
+  }
+  if (!signal) return entry.promise;
+  // A visible request adopts a prefetched page, including its cancellation.
+  entry.prefetch = false;
+  return new Promise((resolve, reject) => {
+    const waiter = {};
+    entry.waiters.add(waiter);
+    const cleanup = () => { signal.removeEventListener("abort", abort); entry.waiters.delete(waiter); };
+    const abort = () => {
+      cleanup();
+      if (!entry.settled && !entry.waiters.size) entry.controller.abort();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    entry.promise.then((value) => { cleanup(); resolve(value); }, (error) => { cleanup(); reject(error); });
+  });
 }
 const renderedContents = new WeakMap();
 let authSession = null,
@@ -193,10 +233,54 @@ const i18n = {
     upgradeStatusInstalling: "正在自动安装",
     updateSourceDirect: "直连",
     updateSourceProxy: "代理",
-    aboutLead: "AnimeMachine 帮助你浏览动画、订阅新作，并自动整理本地收藏库。",
-    aboutDetail: "在作品详情中查看资源、核验收藏和播放媒体；通过下载计划确认需要新增或替换的文件。",
+    aboutLead: "AnimeMachine 是开源动画收藏库，集作品浏览、收藏整理与播放于一体。",
+    aboutDetail: "查看作品资料和资源候选，选择版本，管理订阅与任务；识别已有媒体，按作品和系列整理收藏，并通过一键继续观看衔接观看记录。",
     aboutRelations: "作品关系图展示前作、续作、番外和衍生作品，便于按系列查找和收藏。",
-    aboutComponents: "可按需连接 Ani-RSS、qBittorrent 和外部媒体库，使用订阅、下载和远程播放功能。",
+    aboutComponents: "可按需接入 Ani-RSS、qBittorrent 和已有媒体目录，统一查看资源、任务与收藏状态。",
+    backgroundTasks: "后台任务",
+    tasksEmpty: "当前没有后台任务。",
+    taskRunning: "进行中",
+    taskComplete: "已完成",
+    taskFailed: "未完成",
+    taskInterrupted: "已中断",
+    taskPaused: "已暂停",
+    taskRetry: "重试",
+    taskRetryHint: "可重试未完成的任务，已完成的部分会按现有规则保留。",
+    mediaCorrections: "纠正媒体识别",
+    mediaCorrectionsHint: "将已扫描的文件关联到作品，并调整集数。仅修改识别记录，不移动或改写媒体。",
+    mediaCorrectionsShort: "关联未识别的文件，调整作品与集数。",
+    mediaFolderSearch: "搜索目录或文件名",
+    mediaWorkSearch: "搜索要关联的作品",
+    mediaWorkChoice: "选择作品",
+    mediaFilter: "媒体范围",
+    mediaUnmatched: "待识别与已纠正",
+    mediaUnidentified: "尚未关联作品",
+    mediaAllFiles: "全部文件",
+    mediaLoadMore: "载入更多",
+    mediaCorrectionUndo: "恢复自动识别",
+    mediaCorrectionSave: "保存识别结果",
+    mediaEpisode: "集数",
+    mediaMain: "正片",
+    mediaBonus: "番外 / 特典",
+    mediaSelected: "已选择 {count} 个文件",
+    mediaCorrectionDone: "识别结果已保存。",
+    mediaCorrectionEmpty: "没有符合条件的文件。可切换为“全部文件”，或先核验本地资源。",
+    mediaCorrectionStale: "文件或识别记录已变化，请刷新后重新选择。",
+    mediaWorkRequired: "请先选择文件及其对应作品。",
+    usageNoticeTitle: "使用须知",
+    backupTitle: "备份与恢复", backupExport: "下载备份", backupRestore: "恢复备份", backupRestoreConfirm: "恢复并重启",
+    backupHint: "备份设置、账号、资源跟踪及观看记录，不包含媒体和作品底库。备份中含账号与连接信息，请妥善保管。",
+    backupRestoreHint: "恢复将替换当前设置、账号及观看记录，并重启 AnimeMachine。媒体文件保持原样；恢复后请使用备份中的账号登录，并核对连接与目录。",
+    backupPreparing: "正在准备备份…", backupChecking: "正在核验备份…", backupInvalid: "无法读取此备份，请选择完整的 AnimeMachine 备份 ZIP。",
+    backupRestarting: "正在重启并恢复，请稍等…", backupRestartWait: "恢复请求已保存。请稍后重新打开 AnimeMachine。",
+    backupAccounts: "账号", backupViewingRecords: "观看记录", backupVersion: "备份版本", backupSaved: "备份已生成。",
+    usageNoticePurpose: "AnimeMachine 是开源项目，定位为动画收藏库，提供资源候选与任务管理。",
+    usageNoticeComponents: "订阅和下载交由 Ani-RSS、qBittorrent 等独立组件执行。",
+    usageNoticeScope: "资源检索不收录 NSFW 内容，相关内容已自动过滤。",
+    usageNoticeRights: "请遵守适用法律法规，并确认有权获取所选内容。",
+    usageNoticeAccept: "我同意",
+    usageNoticeDecline: "我不同意",
+    usageNoticeExit: "已退出，请关闭此标签页。",
     aboutArchiveSource: "提供本地动画元数据底包与作品关系基础。",
     aboutBangumiSource: "用于补全底包中缺失或明显异常的公开元数据。",
     aboutAniRssSource: "提供可选的新番订阅、状态同步与远程播放能力；AnimeMachine 通过其 HTTP API 连接。",
@@ -361,6 +445,7 @@ const i18n = {
     forceDownload: "强行下载",
     forcePolicyNotice: "本次使用未勾选的资源，仅对当前选择生效。",
     excludedResourceGroup: "资源组不符",
+    excludedResourceVariant: "资源版本未勾选",
     excludedResolution: "分辨率不符",
     excludedSubtitle: "字幕不符",
     excludedScope: "作品范围不符",
@@ -881,10 +966,54 @@ const i18n = {
     upgradeStatusInstalling: "Installing automatically",
     updateSourceDirect: "Direct",
     updateSourceProxy: "Proxy",
-    aboutLead: "AnimeMachine helps you browse anime, follow new releases and organize your local library automatically.",
-    aboutDetail: "View releases, verify your collection and play media from a title’s details. Review download plans before adding or replacing files.",
+    aboutLead: "AnimeMachine is an open-source anime library for browsing, organizing and playing your collection.",
+    aboutDetail: "Explore titles and release candidates, choose editions and manage subscriptions and tasks. Identify existing media, organize titles into series and continue watching from your viewing records.",
     aboutRelations: "The relationship graph connects prequels, sequels, side stories and spin-offs so you can explore and collect a series.",
-    aboutComponents: "Connect Ani-RSS, qBittorrent or an external media library as needed for subscriptions, downloads and remote playback.",
+    aboutComponents: "Connect Ani-RSS, qBittorrent and existing media folders to view releases, tasks and your collection in one place.",
+    backgroundTasks: "Background tasks",
+    tasksEmpty: "No background tasks.",
+    taskRunning: "Running",
+    taskComplete: "Completed",
+    taskFailed: "Failed",
+    taskInterrupted: "Interrupted",
+    taskPaused: "Paused",
+    taskRetry: "Retry",
+    taskRetryHint: "Retry unfinished tasks. Completed work is retained according to each task’s rules.",
+    mediaCorrections: "Correct media matches",
+    mediaCorrectionsHint: "Link scanned files to a title and adjust episode numbers. Only identification records change; media files stay in place.",
+    mediaCorrectionsShort: "Match unidentified files and correct titles or episodes.",
+    mediaFolderSearch: "Search folders or filenames",
+    mediaWorkSearch: "Search for the matching title",
+    mediaWorkChoice: "Choose a title",
+    mediaFilter: "Media filter",
+    mediaUnmatched: "Unmatched and corrected",
+    mediaUnidentified: "No title matched",
+    mediaAllFiles: "All files",
+    mediaLoadMore: "Load more",
+    mediaCorrectionUndo: "Use automatic matching",
+    mediaCorrectionSave: "Save matches",
+    mediaEpisode: "Episode",
+    mediaMain: "Main feature",
+    mediaBonus: "Extra / bonus",
+    mediaSelected: "{count} files selected",
+    mediaCorrectionDone: "Matches saved.",
+    mediaCorrectionEmpty: "No matching files. Choose All files or verify your local library first.",
+    mediaCorrectionStale: "Files or matches have changed. Refresh and select them again.",
+    mediaWorkRequired: "Select files and their matching title first.",
+    usageNoticeTitle: "Before you continue",
+    backupTitle: "Backup and restore", backupExport: "Download backup", backupRestore: "Restore backup", backupRestoreConfirm: "Restore and restart",
+    backupHint: "Back up settings, accounts, release tracking and viewing records. Media and catalog data are excluded. The backup contains account and connection information; keep it secure.",
+    backupRestoreHint: "Restoring replaces current settings, accounts and viewing records, then restarts AnimeMachine. Media files stay in place. Sign in with an account from the backup and review connections and folders.",
+    backupPreparing: "Preparing backup…", backupChecking: "Checking backup…", backupInvalid: "This backup could not be read. Select a complete AnimeMachine backup ZIP.",
+    backupRestarting: "Restarting and restoring. Please wait…", backupRestartWait: "The restore request is saved. Reopen AnimeMachine shortly.",
+    backupAccounts: "Accounts", backupViewingRecords: "Viewing records", backupVersion: "Backup version", backupSaved: "Backup created.",
+    usageNoticePurpose: "AnimeMachine is an open-source anime library that provides release candidates and task management.",
+    usageNoticeComponents: "Subscriptions and downloads are handled by independent components such as Ani-RSS and qBittorrent.",
+    usageNoticeScope: "NSFW content is excluded from resource searches and automatically filtered.",
+    usageNoticeRights: "Please comply with applicable laws and regulations and confirm that you have the right to obtain the selected content.",
+    usageNoticeAccept: "I agree",
+    usageNoticeDecline: "I disagree",
+    usageNoticeExit: "You have exited. Please close this tab.",
     aboutArchiveSource: "supplies the local catalog base and relationship evidence.",
     aboutBangumiSource: "fills public metadata that is missing or clearly inconsistent in the archive.",
     aboutAniRssSource: "provides optional seasonal subscriptions, state synchronization and remote playback through its HTTP API.",
@@ -1053,6 +1182,7 @@ const i18n = {
     forceDownload: "Download anyway",
     forcePolicyNotice: "This selection uses resources excluded by your preferences. Your settings stay unchanged.",
     excludedResourceGroup: "Release group mismatch",
+    excludedResourceVariant: "Release variant not selected",
     excludedResolution: "Resolution mismatch",
     excludedSubtitle: "Subtitle mismatch",
     excludedScope: "Work scope mismatch",
@@ -1573,10 +1703,54 @@ const i18n = {
     upgradeStatusInstalling: "自動インストール中",
     updateSourceDirect: "直結",
     updateSourceProxy: "プロキシ",
-    aboutLead: "AnimeMachine は、アニメの閲覧、新作の購読、ローカルライブラリの自動整理を支援します。",
-    aboutDetail: "作品の詳細でリリースの確認、所蔵の検証、動画の再生ができます。追加・置換するファイルはダウンロード計画で確認します。",
+    aboutLead: "AnimeMachine は、作品の閲覧、コレクションの整理、再生をまとめたオープンソースのアニメライブラリです。",
+    aboutDetail: "作品情報とリリース候補を確認し、版を選んで購読やタスクを管理できます。既存の動画を識別してシリーズごとに整理し、視聴記録から続きをまとめて再生できます。",
     aboutRelations: "作品関連図で前作、続編、番外編、スピンオフを確認し、シリーズごとに作品を探して集められます。",
-    aboutComponents: "必要に応じて Ani-RSS、qBittorrent、外部メディアライブラリを接続し、購読、ダウンロード、リモート再生を利用できます。",
+    aboutComponents: "Ani-RSS、qBittorrent、既存の動画フォルダーを接続し、リリース、タスク、所蔵状況をまとめて確認できます。",
+    backgroundTasks: "バックグラウンド処理",
+    tasksEmpty: "現在実行中の処理はありません。",
+    taskRunning: "実行中",
+    taskComplete: "完了",
+    taskFailed: "失敗",
+    taskInterrupted: "中断",
+    taskPaused: "一時停止",
+    taskRetry: "再試行",
+    taskRetryHint: "未完了の処理を再試行できます。完了済みの部分は各処理の規則に従って保持されます。",
+    mediaCorrections: "動画の識別を修正",
+    mediaCorrectionsHint: "スキャン済みのファイルを作品に紐付け、話数を修正します。識別記録のみを変更し、動画ファイルは移動・変更しません。",
+    mediaCorrectionsShort: "未識別のファイルを紐付け、作品や話数を修正します。",
+    mediaFolderSearch: "フォルダー・ファイル名を検索",
+    mediaWorkSearch: "紐付ける作品を検索",
+    mediaWorkChoice: "作品を選択",
+    mediaFilter: "動画の範囲",
+    mediaUnmatched: "未識別・修正済み",
+    mediaUnidentified: "作品未設定",
+    mediaAllFiles: "すべてのファイル",
+    mediaLoadMore: "さらに読み込む",
+    mediaCorrectionUndo: "自動識別に戻す",
+    mediaCorrectionSave: "識別結果を保存",
+    mediaEpisode: "話数",
+    mediaMain: "本編",
+    mediaBonus: "番外編・特典",
+    mediaSelected: "{count} ファイル選択中",
+    mediaCorrectionDone: "識別結果を保存しました。",
+    mediaCorrectionEmpty: "該当するファイルはありません。「すべてのファイル」を選ぶか、先にライブラリを検証してください。",
+    mediaCorrectionStale: "ファイルまたは識別記録が変更されています。更新して選び直してください。",
+    mediaWorkRequired: "ファイルと紐付ける作品を選択してください。",
+    usageNoticeTitle: "ご利用にあたって",
+    backupTitle: "バックアップと復元", backupExport: "バックアップを保存", backupRestore: "バックアップを復元", backupRestoreConfirm: "復元して再起動",
+    backupHint: "設定、アカウント、リリース追跡、視聴記録を保存します。動画と作品データベースは含まれません。アカウントや接続情報を含むため、大切に保管してください。",
+    backupRestoreHint: "現在の設定、アカウント、視聴記録を置き換え、AnimeMachine を再起動します。動画ファイルは変更しません。復元後はバックアップ内のアカウントでログインし、接続とフォルダーを確認してください。",
+    backupPreparing: "バックアップを準備中…", backupChecking: "バックアップを確認中…", backupInvalid: "バックアップを読み込めません。完全な AnimeMachine バックアップ ZIP を選択してください。",
+    backupRestarting: "再起動して復元しています。しばらくお待ちください…", backupRestartWait: "復元を受け付けました。しばらくしてから AnimeMachine を開き直してください。",
+    backupAccounts: "アカウント", backupViewingRecords: "視聴記録", backupVersion: "バックアップのバージョン", backupSaved: "バックアップを作成しました。",
+    usageNoticePurpose: "AnimeMachine は、リリース候補の提示とタスク管理を行うオープンソースのアニメライブラリです。",
+    usageNoticeComponents: "購読とダウンロードは、Ani-RSS、qBittorrent などの独立したコンポーネントが実行します。",
+    usageNoticeScope: "NSFW コンテンツは検索対象に含まれず、自動的に除外されます。",
+    usageNoticeRights: "適用される法令を遵守し、選択したコンテンツを取得する権利があることをご確認ください。",
+    usageNoticeAccept: "同意する",
+    usageNoticeDecline: "同意しない",
+    usageNoticeExit: "終了しました。このタブを閉じてください。",
     aboutArchiveSource: "ローカルカタログのベースと作品関係の根拠を提供します。",
     aboutBangumiSource: "アーカイブで欠落または明らかに不整合な公開メタデータを補完します。",
     aboutAniRssSource: "HTTP API を通じて、任意の新番購読、状態同期、リモート再生機能を提供します。",
@@ -1745,6 +1919,7 @@ const i18n = {
     forceDownload: "このリソースでダウンロード",
     forcePolicyNotice: "今回の選択では設定対象外のリソースを使用します。設定は変更されません。",
     excludedResourceGroup: "リリースグループ不一致",
+    excludedResourceVariant: "この版は未選択です",
     excludedResolution: "解像度不一致",
     excludedSubtitle: "字幕不一致",
     excludedScope: "作品範囲不一致",
@@ -2399,6 +2574,10 @@ const priorityValueLabel = (value) => ({
   unknown: ["其它 / 未识别", "Other / unrecognized", "その他 / 未識別"],
 }[value]?.[li()] || value);
 function localizedError(message, status = 0) {
+  if (/^backup_(?:preview_expired|restore_pending|restart_unavailable)$/.test(String(message))) return ["备份预览已失效或恢复正在进行。请重新打开页面，核对状态后再试。", "The preview expired or a restore is in progress. Reopen the page and check its status before retrying.", "プレビューが期限切れか、復元処理中です。ページを開き直し、状態を確認してから再試行してください。"][li()];
+  if (/^backup_/.test(String(message))) return t("backupInvalid");
+  if (/^media_(?:inventory_changed|correction_conflict|file_changed)$/.test(String(message))) return t("mediaCorrectionStale");
+  if (/^media_/.test(String(message))) return ["请重新选择已扫描的文件和对应作品，并核对集数。", "Select the scanned files and matching title again, then check the episode numbers.", "スキャン済みファイルと対応する作品を選び直し、話数を確認してください。"][li()];
   if (message === "catalog_storage_unavailable") return ["作品资料暂时无法读取，请检查运行设备的磁盘空间后重试。", "The catalog could not be read. Check the server's free disk space, then try again.", "作品情報を読み取れません。稼働端末のディスク空き容量を確認してから再試行してください。"][li()];
   if (message === "catalog_metadata_preparing") return t("catalogLocalPreparing");
   if (String(message || "").includes("local_library_sleeping")) return t("librarySleeping");
@@ -2418,8 +2597,8 @@ function localizedError(message, status = 0) {
     [/^invalid_catchup_selection$|^catchup_selection_outdated$/, "catchupSelectionOutdated"],
     [/^invalid_service_endpoint$/, "errorServiceEndpoint"],
     [/^service_redirect$/, "errorServiceRedirect"],
-    [/^connection_failed$|Failed to fetch|NetworkError|Load failed/, "errorConnection"],
-    [/^request_timeout$/, "errorTimeout"],
+    [/^connection_failed$|Failed to fetch|NetworkError|Load failed|^ConnectError$|^ConnectionError$/, "errorConnection"],
+    [/^request_timeout$|^(?:Read|Connect|Write|Pool)Timeout$/, "errorTimeout"],
     [/^invalid_response$/, "errorResponse"],
     [/invalid Bangumi Archive filename/, "errorArchiveName"],
     [/not the current Archive/, "errorArchiveCurrent"],
@@ -2804,8 +2983,11 @@ async function search({ background = false } = {}) {
     catalogRefreshPending = true;
     return;
   }
+  const query = params();
+  if (searchController?.query === query.toString()) return;
   searchController?.abort();
   const controller = new AbortController();
+  controller.query = query.toString();
   searchController = controller;
   if (!background) results.setAttribute("aria-busy", "true");
   if (!background) { $("prevPage").disabled = $("nextPage").disabled = true; $("catalogLoading").hidden = false; }
@@ -2814,11 +2996,12 @@ async function search({ background = false } = {}) {
     renderedResultsMarkup = "";
   }
   try {
-    const query = params(), revision = catalogPageRevision;
+    const revision = catalogPageRevision;
     const d = await catalogPage(query, { signal: controller.signal, preferCache: !background });
     if (searchController !== controller) return;
     items = d.items;
     total = d.total;
+    displayedCatalogPage = page;
     searchExpanded = Boolean(d.searchExpanded);
     render();
     clearTimeout(catalogPrefetchTimer);
@@ -2826,13 +3009,14 @@ async function search({ background = false } = {}) {
       catalogPrefetchTimer = setTimeout(() => {
         if (topModalDialog() || catalogPageRevision !== revision) return;
         const next = new URLSearchParams(query); next.set("offset", String((page + 1) * Number(pageSize)));
-        const nextKey = next.toString(), existing = catalogPages.get(nextKey);
+        const nextKey = catalogPageKey(next), existing = catalogPages.get(nextKey);
         if (existing && existing.expires > Date.now()) return;
         catalogPage(next, { preferCache: true }).catch(() => {});
       }, 250);
     }
   } catch (e) {
-    if (e.name === "AbortError") return;
+    if (e.name === "AbortError" || searchController !== controller) return;
+    page = items.length ? displayedCatalogPage : 0;
     if (topModalDialog()) { catalogRefreshPending = true; return; }
     results.querySelector(".query-error")?.remove();
     results.insertAdjacentHTML("afterbegin", `<div class="query-error error" role="status">${t("queryFailed")}: ${esc(e.message)}</div>`);
@@ -3363,6 +3547,7 @@ const suffix = (c) =>
     const reason = String(item?.eligibilityReason || "");
     if (reason === "source_class_disabled") return t("excludedSourceClass");
     if (reason === "resource_group_disabled") return t("excludedResourceGroup");
+    if (reason === "resource_variant_disabled") return t("excludedResourceVariant");
     if (reason === "serial_language_mismatch") return t("excludedSerialProfile");
     if (reason === "resolution_disabled") return t("excludedResolution");
     if (reason === "subtitle_disabled") return t("excludedSubtitle");
@@ -5303,6 +5488,11 @@ async function showRelationGraph(id) {
   showModalDialog(relationDialog);
   try {
     renderRelationGraph(await api(`/api/anime/${id}/relations/graph?language=${encodeURIComponent(language)}`));
+    const viewport = $("relationGraph").querySelector(".relation-scroll"), root = $("relationGraph").querySelector(".relation-node.root");
+    if (viewport && root) requestAnimationFrame(() => {
+      viewport.scrollLeft = Math.max(0, root.offsetLeft - (viewport.clientWidth - root.offsetWidth) / 2);
+      viewport.scrollTop = Math.max(0, root.offsetTop - (viewport.clientHeight - root.offsetHeight) / 2);
+    });
   } catch (error) {
     $("relationGraph").innerHTML =
       `<p class="error">${t("queryFailed")}: ${esc(error.message)}</p>`;
@@ -6829,6 +7019,7 @@ function retainPersistentOverrides(nextConfig) {
 function openSettings() {
   if (authSession?.role !== "admin") { openPasswordSettings(); return; }
   renderPolicy();
+  loadBackupStatus();
   loadOperationalSettings();
   $("submissionAllowed").checked = config.components.downloadClient.submissionEnabled ?? capabilities.submissionEnabled ?? true;
   $("submissionAllowed").disabled = false;
@@ -8187,7 +8378,7 @@ function seasonDateRange(year, season) {
   if (season === "spring") return { from: `${y}-03`, to: `${y}-05` };
   if (season === "summer") return { from: `${y}-06`, to: `${y}-08` };
   if (season === "autumn") return { from: `${y}-09`, to: `${y}-11` };
-  return { from: `${y}-01`, to: `${y}-12` };
+  return { from: `${y - 1}-12`, to: `${y}-12` };
 }
 function eraDateRange(value) {
   const year = exactYear(value);
@@ -8211,7 +8402,7 @@ function applyEraDateRange(value) {
   if (year !== null) {
     ensureEraYearOption(year);
     $("season").value = "";
-    $("start_from").value = `${year}-01`;
+    $("start_from").value = `${year - 1}-12`;
     $("start_to").value = `${year}-12`;
     updateSeasonControl();
     return;
@@ -8239,6 +8430,10 @@ function syncEraSeasonFromDates() {
     fromParts = monthParts(from), toParts = monthParts(to);
   let matchedEra = "", matchedSeason = "";
   if (fromParts && toParts) {
+    if (fromParts.month === "12" && toParts.month === "12" && toParts.year === fromParts.year + 1) {
+      ensureEraYearOption(toParts.year);
+      matchedEra = String(toParts.year);
+    }
     const candidateYears = [...new Set([fromParts.year, toParts.year, fromParts.year + 1])];
     for (const year of candidateYears) {
       for (const season of ["winter", "spring", "summer", "autumn"]) {
@@ -8289,6 +8484,7 @@ function setView(v) {
 }
 function applyRoleUi() {
   const admin = authSession?.role === "admin";
+  $("tasksButton").hidden = !admin;
   $("settingsButton").hidden = !admin && !authSession?.authEnabled;
   $("settingsButton").disabled = !config.torrentPolicy;
   $("authButton").hidden = !authSession?.authEnabled;
@@ -8541,6 +8737,237 @@ async function applyApplicationUpdate() {
     controls.checks.forEach((button) => button.disabled = false);
   }
 }
+let backupPreview = null, backupBusy = false;
+async function loadBackupStatus() {
+  try {
+    const result = await api("/api/backup/status");
+    if (backupBusy) return;
+    $("backupStatus").textContent = result.state === "complete"
+      ? ["上次备份已恢复。", "The last backup was restored.", "前回のバックアップを復元しました。"][li()]
+      : result.state === "failed"
+        ? ["上次恢复未完成，已保留原设置与记录。请重新选择完整备份。", "The last restore did not finish. Previous settings and records were retained. Select a complete backup to try again.", "前回の復元は完了していません。以前の設定と記録は保持されています。完全なバックアップを選び直してください。"][li()]
+        : result.state === "restarting" ? t("backupRestarting") : "";
+  } catch (error) { if (!backupBusy) $("backupStatus").textContent = error.message; }
+}
+$("exportBackup").onclick = async () => {
+  const button = $("exportBackup");
+  if (button.disabled) return;
+  button.disabled = true; $("backupStatus").textContent = t("backupPreparing");
+  try {
+    const response = await fetch("/api/backup", { credentials:"same-origin", cache:"no-store" });
+    if (!response.ok) throw new Error(localizedError((await response.json()).error, response.status));
+    downloadRelationBlob(await response.blob(), `AnimeMachine-backup-${new Date().toISOString().slice(0,10)}.zip`);
+    $("backupStatus").textContent = t("backupSaved");
+  } catch (error) { $("backupStatus").textContent = error.message; }
+  finally { button.disabled = false; }
+};
+$("importBackup").onclick = () => { $("backupFile").value = ""; $("backupFile").click(); };
+$("backupFile").onchange = async () => {
+  const file = $("backupFile").files[0];
+  if (!file || backupBusy) return;
+  backupPreview = null; $("backupRestoreConfirm").disabled = true; $("backupPreview").textContent = "";
+  $("backupRestoreStatus").textContent = t("backupChecking"); showModalDialog($("backupDialog"));
+  if (file.size > 32 * 1024 * 1024) { $("backupRestoreStatus").textContent = t("backupInvalid"); return; }
+  backupBusy = true;
+  try {
+    const result = await api("/api/backup/preview", { method:"POST", headers:{"Content-Type":"application/zip"}, body:file, timeoutMs:60000 });
+    if (!$("backupDialog").open) return;
+    backupPreview = result;
+    $("backupPreview").innerHTML = `<dl class="backup-summary"><div><dt>${esc(t("backupVersion"))}</dt><dd>${esc(result.version)}</dd></div><div><dt>${esc(t("backupAccounts"))}</dt><dd>${result.users}</dd></div><div><dt>${esc(t("backupViewingRecords"))}</dt><dd>${result.viewingRecords}</dd></div></dl>`;
+    $("backupRestoreStatus").textContent = ""; $("backupRestoreConfirm").disabled = false;
+  } catch (error) { $("backupRestoreStatus").textContent = error.status === 400 ? t("backupInvalid") : error.message; }
+  finally { backupBusy = false; }
+};
+$("backupRestoreConfirm").onclick = async () => {
+  if (!backupPreview || backupBusy) return;
+  backupBusy = true; $("backupRestoreConfirm").disabled = true;
+  try {
+    const previous = await api("/api/health/live", { timeoutMs:5000 });
+    await api("/api/backup/restore", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ token:backupPreview.token, confirm:true }) });
+    $("backupRestoreStatus").textContent = t("backupRestarting");
+    for (let attempt = 0; attempt < 24; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve,5000));
+      try { const health = await api("/api/health/live", { timeoutMs:3000 });
+        if (health.ok && health.bootId && health.bootId !== previous.bootId) { window.location.reload(); return; }
+      } catch (_) { /* A controlled restart temporarily closes the listener. */ }
+    }
+    $("backupRestoreStatus").textContent = t("backupRestartWait");
+  } catch (error) { $("backupRestoreStatus").textContent = error.message; $("backupRestoreConfirm").disabled = false; }
+  finally { backupBusy = false; }
+};
+
+let tasksTimer = null, tasksGeneration = 0;
+const taskNames = { images: "imagePreload", metadata: "repairMetadata", library: "auditLibrary", placeholders: "createPlaceholders",
+  archive: "updateArchive", preload: "imagePreload", season: "radarSearch", layout: "layoutPreview", torrentSearch: "searchPoolNow", aniRssSearch: "aniRssResources", classification: "catalogData" };
+async function loadTasks() {
+  const generation = ++tasksGeneration;
+  clearTimeout(tasksTimer);
+  try {
+    const payload = await api("/api/tasks");
+    if (generation !== tasksGeneration || !$("tasksDialog").open) return;
+    const list = $("tasksList"), active = new Set(payload.items.map((row) => row.id));
+    [...list.children].forEach((node) => { if (!active.has(node.dataset.task)) node.remove(); });
+    for (const [index, task] of payload.items.entries()) {
+      let node = [...list.children].find((row) => row.dataset.task === task.id);
+      if (!node) {
+        node = document.createElement("article"); node.className = "background-task"; node.dataset.task = task.id;
+        node.innerHTML = '<div class="background-task-heading"><strong></strong><span class="muted"></span></div><progress max="1"></progress><p class="muted"></p><button type="button" class="text-button" data-icon="refresh"></button>';
+      }
+      node.querySelector("strong").textContent = t(taskNames[task.kind] || "backgroundTasks") + (task.title ? ` · ${preferred(task.title)}` : "");
+      node.querySelector("span").textContent = t(({ running:"taskRunning", complete:"taskComplete", failed:"taskFailed", interrupted:"taskInterrupted", paused:"taskPaused" })[task.state] || "taskRunning");
+      const progress = node.querySelector("progress"); progress.hidden = !task.total;
+      progress.max = Math.max(1, Number(task.total)); progress.value = Math.min(Number(task.done), progress.max);
+      const taskError = task.error ? localizedError(task.error) : "";
+      node.querySelector("p").textContent = task.error ? (taskError !== task.error ? taskError : ["处理未完成，请查看设置中的日志并重试。", "This task did not finish. Check Logs in Settings, then retry.", "処理が完了していません。設定のログを確認してから再試行してください。"][li()]) : task.total ? `${task.done} / ${task.total}` : "";
+      const retry = node.querySelector("button"); retry.hidden = !task.retryable; retry.textContent = t("taskRetry");
+      retry.onclick = async () => {
+        retry.disabled = true;
+        try { await api("/api/tasks/retry", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id:task.id}) }); await loadTasks(); }
+        catch (error) { $("tasksStatus").textContent = error.message; }
+        finally { retry.disabled = false; }
+      };
+      if (list.children[index] !== node) list.insertBefore(node, list.children[index] || null);
+    }
+    $("tasksStatus").textContent = payload.items.length ? t("taskRetryHint") : t("tasksEmpty");
+  } catch (error) {
+    if (generation === tasksGeneration && $("tasksDialog").open) $("tasksStatus").textContent = error.message;
+  } finally {
+    if (generation === tasksGeneration && $("tasksDialog").open) tasksTimer = setTimeout(loadTasks, 5000);
+  }
+}
+$("tasksButton").onclick = () => { showModalDialog($("tasksDialog")); loadTasks(); };
+$("tasksDialog").addEventListener("close", () => { tasksGeneration++; clearTimeout(tasksTimer); });
+
+let correctionRows = [], correctionGeneration = 0, correctionQueryTimer = null, correctionWorkGeneration = 0, correctionWorkTimer = null, correctionBusy = false, correctionLoading = false;
+function updateCorrectionSelection() {
+  const selected = [...$("mediaCorrectionFiles").querySelectorAll("input[data-media-pick]:checked")];
+  $("mediaCorrectionSelection").textContent = t("mediaSelected").replace("{count}", selected.length);
+  $("mediaCorrectionSave").disabled = correctionBusy || correctionLoading || !selected.length || !$("mediaCorrectionWork").value;
+  $("mediaCorrectionUndo").disabled = correctionBusy || correctionLoading || !selected.length || selected.some((box) => !correctionRows[Number(box.dataset.mediaPick)].revision);
+}
+async function loadCorrectionFiles(more = false) {
+  const generation = ++correctionGeneration;
+  const previous = new Map();
+  if (more) $("mediaCorrectionFiles").querySelectorAll("[data-media-pick]").forEach((box) => {
+    const index = Number(box.dataset.mediaPick), row = correctionRows[index];
+    previous.set(`${row.source_id}\n${row.absolute_path}`, { checked:box.checked, episode:$("mediaCorrectionFiles").querySelector(`[data-media-episode="${index}"]`).value });
+  });
+  correctionLoading = true; $("mediaCorrectionMore").disabled = true; updateCorrectionSelection();
+  $("mediaCorrectionStatus").textContent = t("loadingWorks");
+  const query = new URLSearchParams({ q:$("mediaCorrectionQuery").value, all:$("mediaCorrectionScope").value === "all" ? "1" : "0", offset:String(more ? correctionRows.length : 0) });
+  try {
+    const response = await api(`/api/library/corrections?${query}`);
+    if (generation !== correctionGeneration || !$("mediaCorrectionsDialog").open) return;
+    correctionRows = more ? correctionRows.concat(response.items) : response.items;
+    const groups = new Map();
+    correctionRows.forEach((row,index) => { const key = `${row.source_id}\n${row.directory}`; if (!groups.has(key)) groups.set(key,[]); groups.get(key).push({row,index}); });
+    $("mediaCorrectionFiles").innerHTML = [...groups.values()].map((files) => `<details class="media-correction-folder" ${groups.size === 1 ? "open" : ""}><summary title="${esc(files[0].row.directory)}">${esc(files[0].row.directory)} <span class="muted">(${files.length})</span></summary><div class="media-correction-table">${files.map(({row,index}) => `<div class="media-correction-file"><label class="check" title="${esc(row.absolute_path)}"><input type="checkbox" data-media-pick="${index}"><span>${esc(row.filename)}<small class="muted">${esc(row.bgm_id ? preferred(row) : t("mediaUnidentified"))}</small></span></label><input data-media-episode="${index}" type="number" min="0" max="100000" step="any" value="${row.episode_number == null ? "" : esc(row.episode_number)}" aria-label="${esc(t("mediaEpisode"))}" placeholder="—"></div>`).join("")}</div></details>`).join("");
+    $("mediaCorrectionStatus").textContent = correctionRows.length ? "" : t("mediaCorrectionEmpty");
+    $("mediaCorrectionMore").hidden = !response.hasMore;
+    if (more) $("mediaCorrectionFiles").querySelectorAll("[data-media-pick]").forEach((box) => {
+      const index = Number(box.dataset.mediaPick), row = correctionRows[index], saved = previous.get(`${row.source_id}\n${row.absolute_path}`);
+      if (saved) { box.checked = saved.checked; $("mediaCorrectionFiles").querySelector(`[data-media-episode="${index}"]`).value = saved.episode; if (saved.checked) box.closest("details").open = true; }
+    });
+    $("mediaCorrectionFiles").onchange = updateCorrectionSelection;
+    updateCorrectionSelection();
+  } catch (error) { if (generation === correctionGeneration) $("mediaCorrectionStatus").textContent = error.message; }
+  finally { if (generation === correctionGeneration) { correctionLoading = false; $("mediaCorrectionMore").disabled = false; updateCorrectionSelection(); } }
+}
+async function searchCorrectionWork() {
+  const generation = ++correctionWorkGeneration, text = $("mediaCorrectionWorkQuery").value.trim();
+  $("mediaCorrectionWork").innerHTML = `<option value="">${esc(t("mediaWorkChoice"))}</option>`;
+  updateCorrectionSelection();
+  if (!text) return;
+  try {
+    const data = await api(`/api/anime?${new URLSearchParams({ q:text, limit:"30", language })}`);
+    if (generation !== correctionWorkGeneration || !$("mediaCorrectionsDialog").open) return;
+    for (const work of data.items) {
+      const option = document.createElement("option"); option.value = String(work.bgm_id);
+      option.textContent = `${preferred(work)} · ${localMonth(work.start_month)} · ${label("media",work.media_code)}`;
+      $("mediaCorrectionWork").append(option);
+    }
+  } catch (error) { if (generation === correctionWorkGeneration) $("mediaCorrectionStatus").textContent = error.message; }
+}
+async function saveMediaCorrection(undo = false) {
+  if (correctionBusy || correctionLoading) return;
+  const picks = [...$("mediaCorrectionFiles").querySelectorAll("input[data-media-pick]:checked")];
+  if (!picks.length || (!undo && !$("mediaCorrectionWork").value)) return;
+  const files = [];
+  for (const box of picks) {
+    const index = Number(box.dataset.mediaPick), row = correctionRows[index], input = $("mediaCorrectionFiles").querySelector(`[data-media-episode="${index}"]`);
+    if (!input.checkValidity()) { input.reportValidity(); return; }
+    files.push({ sourceId:row.source_id, path:row.absolute_path, size:row.size, modified:row.mtime_ns, revision:row.revision || 0,
+      episode:input.value === "" ? null : Number(input.value) });
+  }
+  correctionBusy = true; updateCorrectionSelection();
+  try {
+    await api("/api/library/corrections", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ files, undo, bgmId:Number($("mediaCorrectionWork").value) }) });
+    await loadCorrectionFiles(); $("mediaCorrectionStatus").textContent = t("mediaCorrectionDone");
+    catalogRefreshPending = true; radarRefreshPending = true;
+  } catch (error) { $("mediaCorrectionStatus").textContent = error.status === 409 ? t("mediaCorrectionStale") : error.message; }
+  finally { correctionBusy = false; updateCorrectionSelection(); }
+}
+$("openMediaCorrections").onclick = () => { showModalDialog($("mediaCorrectionsDialog")); loadCorrectionFiles(); };
+$("mediaCorrectionQuery").oninput = () => { correctionGeneration++; correctionLoading = true; updateCorrectionSelection(); clearTimeout(correctionQueryTimer); correctionQueryTimer = setTimeout(() => loadCorrectionFiles(),260); };
+$("mediaCorrectionScope").onchange = () => loadCorrectionFiles();
+$("mediaCorrectionWorkQuery").oninput = () => {
+  correctionWorkGeneration++; $("mediaCorrectionWork").value = ""; updateCorrectionSelection();
+  clearTimeout(correctionWorkTimer); correctionWorkTimer = setTimeout(searchCorrectionWork,260);
+};
+$("mediaCorrectionWork").onchange = updateCorrectionSelection;
+$("mediaCorrectionMore").onclick = () => loadCorrectionFiles(true);
+$("mediaCorrectionSave").onclick = () => saveMediaCorrection(false);
+$("mediaCorrectionUndo").onclick = () => saveMediaCorrection(true);
+$("mediaCorrectionsDialog").addEventListener("close", () => { correctionGeneration++; correctionWorkGeneration++; clearTimeout(correctionQueryTimer); clearTimeout(correctionWorkTimer); });
+
+async function ensureUsageNotice() {
+  const state = await api("/api/auth/notice");
+  if (state.accepted) return true;
+  const dialog = $("usageNoticeDialog"), accept = $("usageNoticeAccept"), decline = $("usageNoticeDecline");
+  $("usageNoticeStatus").textContent = "";
+  accept.disabled = true;
+  let remaining = Math.max(5, Number(state.waitSeconds) || 0) * 1000, last = performance.now(), pending = false;
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      const now = performance.now();
+      if (document.visibilityState === "visible") remaining = Math.max(0, remaining - (now - last));
+      last = now;
+      const text = t("usageNoticeAccept") + (remaining > 0 ? ` (${Math.ceil(remaining / 1000)})` : "");
+      if (accept.textContent !== text) accept.textContent = text;
+      accept.disabled = remaining > 0 || pending;
+      if (remaining === 0) clearInterval(timer);
+    }, 200);
+    dialog.oncancel = (event) => event.preventDefault();
+    accept.textContent = `${t("usageNoticeAccept")} (${Math.ceil(remaining / 1000)})`;
+    accept.onclick = async () => {
+      if (remaining > 0 || accept.disabled) return;
+      pending = true;
+      accept.disabled = true;
+      decline.disabled = true;
+      try {
+        await api("/api/auth/notice", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accepted: true }) });
+        clearInterval(timer);
+        dialog.close();
+        resolve(true);
+      } catch (error) {
+        $("usageNoticeStatus").textContent = error.message;
+        accept.disabled = false;
+      } finally { pending = false; decline.disabled = false; }
+    };
+    decline.onclick = () => {
+      clearInterval(timer);
+      // Render the exit state before attempting the browser-controlled close.
+      document.body.classList.add("usage-declined");
+      $("usageNoticeExit").hidden = false;
+      dialog.close();
+      resolve(false);
+      window.close();
+    };
+    showModalDialog(dialog);
+    $("usageNoticeTitle").focus({ preventScroll:true });
+  });
+}
+
 async function initialize() {
   try {
     if (!(await establishSession())) return;
@@ -8590,6 +9017,7 @@ async function initialize() {
     updateSortControls();
     setView(view);
     applyLanguage();
+    if (!(await ensureUsageNotice())) return;
     $("buildInfo").textContent = archiveSummary(stats);
     renderScanProgress(stats, startup);
     await search();

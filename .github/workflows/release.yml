@@ -118,6 +118,8 @@ jobs:
           (cd dist && sha256sum "$(basename "$wheel")" > "$(basename "$wheel").sha256")
           version=$(cat VERSION)
           python scripts/offline_update_bundle.py "$wheel" "dist/AnimeMachine-$version-docker.anm-update.zip" --version "$version" --kind docker
+          cp deploy/compose/compose.yaml dist/compose.yaml
+          (cd dist && sha256sum compose.yaml > compose.yaml.sha256)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-app
@@ -125,6 +127,8 @@ jobs:
             dist/animemachine-*-py3-none-any.whl
             dist/animemachine-*-py3-none-any.whl.sha256
             dist/AnimeMachine-*-docker.anm-update.zip
+            dist/compose.yaml
+            dist/compose.yaml.sha256
           if-no-files-found: error
 
   container:

@@ -866,6 +866,9 @@ def download_native(item: dict[str, Any], source: str) -> tuple[bytes, str]:
 
 
 def process_native_item(item: dict[str, Any], source: str, *, force: bool = False) -> int:
+    from .content_policy import excluded_text, marked
+    if marked(item.get('nsfw')) or excluded_text(str(item.get('title') or '')):
+        return 0
     if not _collection_allowed():
         return 0
     store = _require_state()

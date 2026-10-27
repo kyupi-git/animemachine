@@ -152,7 +152,8 @@ class CatalogMatcher:
                 type_column = next((name for name in ("media_type", "media_code", "type", "subject_type", "platform", "category") if name in work_columns), None)
                 select_type = f",{type_column}" if type_column else ""
                 works: dict[int, tuple[int | None, str | None]] = {}
-                for row in db.execute(f"SELECT id,episode_count{select_type} FROM anime_work"):
+                allowed = " WHERE is_nsfw=0" if 'is_nsfw' in work_columns else ''
+                for row in db.execute(f"SELECT id,episode_count{select_type} FROM anime_work{allowed}"):
                     expected = int(row["episode_count"] or 0) if "episode_count" in row.keys() else None
                     subject_type = str(row[type_column]) if type_column and row[type_column] is not None else None
                     works[int(row["id"])] = (expected, subject_type)

@@ -10,6 +10,23 @@ from animemachine.torrents import metainfo as INDEXER
 
 
 class TorrentPolicyTests(unittest.TestCase):
+    def test_new_group_default_order_migration_and_explicit_opt_out(self):
+        from animemachine.config.loader import _validate, load_resource_group_catalog
+        example=Path(__file__).resolve().parents[2]/'src/animemachine/resources/config.example.json'
+        base=json.loads(example.read_text(encoding='utf-8'))
+        subtitle=base['torrentPolicy']['serialSubtitle']
+        subtitle['enabledByLanguage']={'zh':['haruhana','ani']}
+        validated=_validate(base)
+        self.assertEqual(['tonight-moon','haruhana','ani'],validated['torrentPolicy']['serialSubtitle']['enabledByLanguage']['zh'])
+        validated['torrentPolicy']['serialSubtitle']['enabledByLanguage']['zh'].remove('tonight-moon')
+        self.assertEqual(['haruhana','ani'],_validate(validated)['torrentPolicy']['serialSubtitle']['enabledByLanguage']['zh'])
+        base=json.loads(example.read_text(encoding='utf-8'))
+        base['torrentPolicy']['serialSubtitle']['enabledByLanguage']={'zh':[]}
+        self.assertEqual([],_validate(base)['torrentPolicy']['serialSubtitle']['enabledByLanguage']['zh'])
+        groups=load_resource_group_catalog()['serialProfiles']['zh']
+        ids=[row[0] for row in groups]
+        self.assertEqual(ids.index('tonight-moon')+1,ids.index('haruhana'))
+
     def test_default_chinese_kirara_variant_and_saved_choices_are_preserved(self):
         from animemachine.config.loader import _validate
         example = Path(__file__).resolve().parents[2] / 'src/animemachine/resources/config.example.json'
@@ -102,6 +119,42 @@ class TorrentPolicyTests(unittest.TestCase):
             self.assertFalse(serial_group_matches(title, "拨雪寻春", "zh"), title)
         self.assertFalse(serial_group_matches("[Unknown] Work [CHS]", "Unknown", "zh"))
         self.assertEqual("erai-raws", serial_group_matches("[Erai-raws] Work [English]", "Erai-raws", "en")[0]["id"])
+
+    def test_chinese_groups_are_independent_and_platform_aliases_match(self) -> None:
+        from animemachine.config.loader import group_variant_enabled
+        from animemachine.integrations.ani_rss import _policy_eligibility_reason
+        policy = {
+            'contentClasses': {'WebRip': True}, 'resolutions': {'1080p': True},
+            'sourceFamilies': {'serial': ['WebRip']}, 'serialSubtitle': {
+                'language': 'zh', 'enabledByLanguage': {'zh': ['tonight-moon']}},
+            'groupVariants': {'serial': {'zh': {'tonight-moon': ['Bahamut']}}},
+            'allowUnlisted': {'resourceGroup': False},
+        }
+        title = '【今晚月色真美】[青之箱 第二季][01][WEBrip][1080P][简日双语][Baha]'
+        config = {'torrentPolicy': policy}
+        self.assertEqual(('eligible', 'serial'), _policy_eligibility_reason(title, '今晚月色真美', 'WebRip', 1080, config))
+        self.assertFalse(serial_group_matches(title, '今晚月色真美', 'en'))
+        self.assertFalse(torrent_policy_eligible(policy, 'WebRip', '拨雪寻春', '1080p', '', '[拨雪寻春] Show [CHS]'))
+        self.assertTrue(group_variant_enabled(policy, 'serial', 'tonight-moon', title, 'zh'))
+        self.assertEqual(('resource_variant_disabled', 'serial'), _policy_eligibility_reason(title.replace('Baha', 'CR'), '今晚月色真美', 'WebRip', 1080, config))
+        self.assertTrue(serial_group_matches('[Ｋｉｒａｒａ－Ｆａｎｔａｓｉａ] Show [Baha]', 'Kirara', 'zh'))
+
+    def test_other_group_switch_never_bypasses_known_publisher_preferences(self):
+        from animemachine.config.loader import serial_release_decision
+        policy={'allowUnlisted':{'resourceGroup':True},'serialSubtitle':{'enabledByLanguage':{'zh':['haruhana']}},
+                'groupVariants':{'serial':{'zh':{'haruhana':['Baha']}}}}
+        for title,group,expected in (
+            ('[拨雪寻春] Show [CHS][Baha]','拨雪寻春','eligible'),
+            ('[拨雪寻春] Show [ENG][Baha]','拨雪寻春','serial_language_mismatch'),
+            ('[拨雪寻春] Show [ENG][CR]','拨雪寻春','serial_language_mismatch'),
+            ('[拨雪寻春] Show [CHS][CR]','拨雪寻春','resource_variant_disabled'),
+            ('[今晚月色真美] Show [ENG]','今晚月色真美','resource_group_disabled'),
+            ('[Unlisted] Show [ENG]','Unlisted','eligible'),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(expected,serial_release_decision(policy,'zh',title,group)[0])
+        matches=serial_group_matches('[Unknown] Show [1080p]','Unknown','ja')
+        self.assertEqual([],matches)
 
     def test_single_volume_and_episode_are_incremental_candidates(self) -> None:
         volume = INDEXER.classify("[ANi] Show Vol.01 BDRip", "[ANi] Show Vol.01 BDRip",

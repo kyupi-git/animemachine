@@ -11,6 +11,8 @@
 
 <a id="start"></a>
 
+默认完整组合的 `compose.yaml` 可直接从 [Releases 下载](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml)，也位于发布包根目录。把它放在固定项目目录，运行 `docker compose up -d` 即可。其它配置作为替代方案，按需选择。
+
 ## 1. 选择启动方式
 
 ### Windows
@@ -46,7 +48,7 @@ macOS 打开 **`AnimeMachine-macOS.command`**。也可以在解压目录的终�
 
 先在 NAS 的应用中心启用 Docker / 容器管理，或在电脑上安装 [Docker](https://docs.docker.com/get-started/get-docker/)。使用 Docker Engine 24+、Docker Compose **2.20.3+**。
 
-初次使用可先阅读[图文分步的 Docker Compose 指南](../deploy/compose/README.md)。默认使用[完整组合](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，一次启动 AnimeMachine、qBittorrent、Ani-RSS 和资源采集器。已有服务时，从下表选择一个替代方案；01–04 是不同组合，选择其中一个即可。
+初次使用可先阅读[图文分步的 Docker Compose 指南](../deploy/compose/README.md)。默认使用[完整组合](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml)，一次启动 AnimeMachine、qBittorrent、Ani-RSS 和资源采集器。已有服务时，从下表选择一个替代方案；01–04 是不同组合，选择其中一个即可。
 
 | 适用场景 | 配置文件 |
 | --- | --- |
@@ -212,7 +214,7 @@ Windows 的 Edge、Chrome 每次打开播放器都要求确认时，可点击 **
 
 ### 播放与字幕
 
-打开作品详情，选择播放来源和起始集，再点击 VLC、PotPlayer 或系统播放器。macOS 还可以使用 IINA。**复制播放列表**可以把整季地址交给其他播放器。
+打开作品详情，选择播放来源和起始集，再点击 VLC、PotPlayer 或系统播放器。macOS 还可以使用 IINA。**复制播放列表**可以将当前列表交给其它播放器。
 
 ![播放：选择起始集并打开播放器](images/playback.png)
 
@@ -304,7 +306,9 @@ docker compose pull
 docker compose up -d
 ```
 
-备份时，先停止 AnimeMachine，再复制下列内容：
+常用设置与观看记录可在 **设置 → 用户 → 备份与恢复** 中下载为 ZIP，恢复前会显示内容摘要并确认重启。具体步骤见[备份与恢复](manual/zh-Hans/updates.md)。
+
+迁移完整作品库、缓存及手动媒体识别结果时，停止 AnimeMachine，再复制下列内容：
 
 | 部署方式 | 备份内容 |
 | --- | --- |
@@ -321,10 +325,10 @@ docker compose up -d
 从 0.5.0 或更早的 Docker 版本升级时，先导入离线镜像：
 
 ```sh
-docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
+docker load -i AnimeMachine-0.5.2-docker-linux-amd64.tar.gz
 ```
 
-在原部署目录，将 `compose.yaml` 中 AnimeMachine 和 Torrent Collector（如有）的镜像改为 `animemachine:0.5.1`，保留所有挂载与其它服务设置，再运行：
+在原部署目录，将 `compose.yaml` 中 AnimeMachine 和 Torrent Collector（如有）的镜像改为 `animemachine:0.5.2`，保留所有挂载与其它服务设置，再运行：
 
 ```sh
 docker compose up -d --pull never

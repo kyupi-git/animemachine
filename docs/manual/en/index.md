@@ -22,7 +22,7 @@ The desktop package runs AnimeMachine; connect download services when needed. Th
 3. Once an episode is available, [open it in your player](playback.md).
 4. Then try [Continue watching](continue-watching.md) or [connect an existing collection](collections.md).
 
-The main example is the Witch title shown in the screenshots, searchable by its Japanese name **世界最強の魔女、始めました**. Available episodes and releases change over time; choose from the current results.
+The screenshots illustrate the steps. Available episodes and releases change over time; choose from the current results.
 
 ## Follow along
 

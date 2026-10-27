@@ -33,6 +33,24 @@ class LibrarySleepTests(unittest.TestCase):
         self.config['library']['sleep'] = {'enabled': True, 'start': '23:00', 'end': '08:00'}
         status.clear_cache()
 
+    def test_live_quiet_hours_recheck_only_copies_required_settings_and_preserves_overrides(self):
+        path = self.root / 'config.json'
+        path.write_text(json.dumps(self.config), encoding='utf-8')
+        from animemachine.config.runtime import apply_runtime_overrides
+        with mock.patch.dict(os.environ, {'ANM_CONFIG_PATH': str(path), 'ANM_LIBRARY_DIR': str(self.external)}), \
+                mock.patch('animemachine.config.runtime.apply_runtime_overrides', wraps=apply_runtime_overrides) as apply:
+            current = sleep.current_config()
+            self.assertEqual(str(self.external), current['deployment']['libraryUncRoot'])
+            self.assertEqual(self.config['library']['sleep'], current['library']['sleep'])
+            self.assertEqual({'deployment', 'library'}, set(apply.call_args.args[0]))
+            current['library']['sleep']['enabled'] = False
+            self.assertTrue(sleep.current_config()['library']['sleep']['enabled'], 'callers cannot change cached settings')
+            self.config['library']['sleep']['start'] = '22:00'
+            path.write_text(json.dumps(self.config) + '\n', encoding='utf-8')
+            self.assertEqual('22:00', sleep.current_config()['library']['sleep']['start'])
+            os.environ['ANM_LIBRARY_DIR'] = str(self.library)
+            self.assertEqual(str(self.library), sleep.current_config()['deployment']['libraryUncRoot'])
+
     def test_daily_intervals_have_exclusive_end_and_support_midnight(self):
         for clock, expected in [('22:59', False), ('23:00', True), ('23:59', True), ('00:00', True), ('07:59', True), ('08:00', False)]:
             with self.subTest(clock=clock):

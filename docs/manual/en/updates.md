@@ -26,20 +26,20 @@ From 0.5.1, the same page accepts an offline update package:
 
 The ordinary `release-windows.zip` is a complete installation; the Docker `tar.gz` is an offline image. These differ from upload packages. A mismatched or invalid upload leaves the current working version in place.
 
-## Upgrade Docker 0.5.0 to 0.5.1
+## Upgrade a Docker 0.5.0 installation offline
 
 Download the offline image from [Releases](https://github.com/kyupi-git/animemachine/releases/latest). Choose `amd64` for Intel/AMD or `arm64` for ARM.
 
 Version 0.5.0 has no upload control. Start with a local image upgrade:
 
-1. Upload `AnimeMachine-0.5.1-docker-linux-amd64.tar.gz` to the NAS. This image is for Intel/AMD; ARM devices need their matching architecture.
+1. Upload `AnimeMachine-0.5.2-docker-linux-amd64.tar.gz` to the NAS. This image is for Intel/AMD; ARM devices need their matching architecture.
 2. Import it in a terminal:
 
 ```sh
-docker load -i AnimeMachine-0.5.1-docker-linux-amd64.tar.gz
+docker load -i AnimeMachine-0.5.2-docker-linux-amd64.tar.gz
 ```
 
-3. Set `ANM_IMAGE=animemachine:0.5.1` in the project's `.env`. For the default full stack, also set `TORRENT_COLLECTOR_IMAGE=animemachine:0.5.1`.
+3. Set `ANM_IMAGE=animemachine:0.5.2` in the project's `.env`. For the default full stack, also set `TORRENT_COLLECTOR_IMAGE=animemachine:0.5.2`.
 4. Run `docker compose up -d --pull never` there, refresh, and check the version.
 
 If your custom Compose file hard-codes image names, change the corresponding services' `image` values. Keep mounts, environment settings, and data folders.
@@ -47,6 +47,14 @@ If your custom Compose file hard-codes image names, change the corresponding ser
 ## Replace a desktop release manually
 
 Stop the old app and extract the new package into a new folder. Copy `config.json`, `.env.local` if present, and the entire `data` folder from the old installation, then start the new one. Keep separately stored media accessible at its existing path.
+
+## Download and restore a backup
+
+Open **Settings → Users → Backup and restore**, click **Download backup**, and save the ZIP. It includes settings, accounts, release tracking and viewing records. Media files and catalog data are excluded.
+
+To restore, click **Restore backup**, select the ZIP, check its version and record counts, then choose **Restore and restart**. After restart, sign in with an account from the backup and check connections and media folders. Settings supplied by deployment environment variables continue to take precedence.
+
+The backup contains account and connection information; keep it on your own device. To move the full catalog or preserve manual media corrections, also back up the complete data folders below.
 
 ## Back up the persistent files
 

@@ -21,7 +21,7 @@ Compose 常用变量如下。路径变量指定**宿主机目录**，容器内�
 
 | 变量 | 默认值 / 用途 |
 | --- | --- |
-| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.1` |
+| `ANM_IMAGE` | `ghcr.io/kyupi-git/animemachine:0.5.2` |
 | `ANM_LIBRARY_DIR` | `./library`，收藏库 |
 | `ANM_TORRENT_POOL_DIR` | `./torrents`，Torrent 池 |
 | `ANM_EXTERNAL_LIBRARY_DIR` | `./external/read-only`，已有媒体 |

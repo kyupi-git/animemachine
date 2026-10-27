@@ -6,7 +6,9 @@ AnimeMachine is an anime library manager with Chinese, English, and Japanese int
 
 [User manual](docs/manual/en/index.md) · [Quick setup](docs/guide.en.md#start) · [Troubleshooting](docs/manual/en/troubleshooting.md). After starting the app, choose **Manual** at the top of the page to read the illustrated steps offline.
 
-![Browse covers and see resource availability and collection status](docs/images/library-overview.en.png)
+| Release radar and catch-up playback | Relationship graph (past and current titles) |
+| :---: | :---: |
+| ![Release radar: manage subscriptions and play pending episodes](docs/images/demo_radar.gif) | ![Relationship graph: explore prequels, sequels and side stories](docs/images/demo_relationship.gif) |
 
 ## Features
 
@@ -27,6 +29,14 @@ Click **Continue watching** in Release radar to select subscribed TV titles with
 
 Title details and the radar share your viewing records, which you can correct at any time. See [Continue watching and playback](docs/guide.en.md#daily-use) for the steps.
 
+## Explore a series
+
+Click **Relationship graph** on a title card to see how its prequels, sequels, movies and side stories connect. The graph opens at the selected title; click any title in the graph to view its details.
+
+![Full-screen graph of related titles](docs/images/relationship-graph.en.png)
+
+Toggle relationship types, switch to full screen, or export a PNG or SVG. See [Series relationships](docs/manual/en/collections.md) for the steps.
+
 ## Quick start
 
 Select a launch method for your device. Detailed steps are in the [setup and usage guide](docs/guide.en.md#start).
@@ -36,7 +46,9 @@ Select a launch method for your device. Detailed steps are in the [setup and usa
 | Windows 10 / 11 | Download the Windows ZIP from [Releases](https://github.com/kyupi-git/animemachine/releases/latest), extract it, and double-click `AnimeMachine.cmd`. Python is included. |
 | Linux | Install Python 3.11 or later, download and extract the matching Linux release, then run `./AnimeMachine-Linux.sh`. |
 | macOS | Install Python 3.11 or later, download and extract the matching macOS release, then open `AnimeMachine-macOS.command`. |
-| NAS / Docker | Download the [full-stack compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml) and run `docker compose up -d` in its directory. For a beginner-friendly walkthrough and alternatives, see the [Compose setup guide](deploy/compose/README.en.md). |
+| NAS / Docker | Download the [full-stack compose.yaml](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml) and run `docker compose up -d` in its directory. For the steps and alternative setups, see the [Compose setup guide](deploy/compose/README.en.md). |
+
+The default `compose.yaml` is attached to Releases and included at the root of each release package. Download this single file to deploy the full stack.
 
 After launch, open **<http://localhost:8787>**. From another device, replace `localhost` with the address of the computer or NAS running AnimeMachine. Your initial account and randomly generated password appear in the launch window or container logs.
 

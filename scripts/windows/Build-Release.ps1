@@ -94,10 +94,12 @@ try {
     }
     $images = Join-Path $root 'docs\images'
     if (Test-Path -LiteralPath $images -PathType Container) {
-        & $python (Join-Path $root 'scripts\copy_document_images.py') $images (Join-Path $release 'docs\images')
+        & $python (Join-Path $root 'scripts\copy_document_images.py') $images (Join-Path $release 'docs\images') --readme-dir $release
         if ($LASTEXITCODE) { throw 'Unable to copy documentation images.' }
     }
     Copy-Item -LiteralPath (Join-Path $root 'VERSION') -Destination $release
+    Copy-Item -LiteralPath (Join-Path $root 'deploy/compose/compose.yaml') -Destination (Join-Path $release 'compose.yaml')
+    Copy-Item -LiteralPath (Join-Path $root 'deploy/compose/compose.yaml') -Destination (Join-Path $OutputDirectory 'compose.yaml')
     Copy-Item -LiteralPath (Join-Path $root 'RELEASE_PYTHON_VERSION') -Destination $release
     & $python (Join-Path $root 'scripts\build_info.py') --output (Join-Path $release 'BUILD-INFO.json') --build-type windows-portable --platform windows --python-version (& $python -c 'import platform; print(platform.python_version())')
     if ($LASTEXITCODE) { throw 'Unable to generate BUILD-INFO.json.' }

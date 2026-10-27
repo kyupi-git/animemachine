@@ -25,12 +25,17 @@ def _read_config(path: str, mtime: int, size: int) -> dict[str, Any]:
 
 
 def current_config() -> dict[str, Any]:
+    """Read current quiet hours without copying unrelated resource preferences."""
     path = Path(os.getenv("ANM_CONFIG_PATH", str(DEFAULT_CONFIG)))
     if not path.exists():
         return {}
     info = path.stat()
     from ..config.runtime import apply_runtime_overrides
-    return apply_runtime_overrides(_read_config(str(path.absolute()), info.st_mtime_ns, info.st_size))
+    source = _read_config(str(path.absolute()), info.st_mtime_ns, info.st_size)
+    return apply_runtime_overrides({
+        "deployment": {"libraryUncRoot": source.get("deployment", {}).get("libraryUncRoot", "")},
+        "library": {"sleep": source.get("library", {}).get("sleep", {})},
+    })
 
 
 def sleeping(config: dict[str, Any] | None = None, *, now: dt.datetime | None = None) -> bool:

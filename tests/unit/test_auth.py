@@ -1,11 +1,38 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from animemachine.api import auth
 
 
 class AuthTests(unittest.TestCase):
+    def test_parallel_notice_load_and_clock_rollback_remain_usable(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as raw:
+            store=auth.Store(Path(raw)/'auth.sqlite3',enabled=False)
+            with mock.patch.object(auth.time,'time',return_value=100):
+                with ThreadPoolExecutor(max_workers=4) as pool:
+                    self.assertTrue(all(not row['accepted'] for row in pool.map(lambda _:store.notice(0),range(8))))
+            with mock.patch.object(auth.time,'time',return_value=50):
+                with self.assertRaisesRegex(ValueError,'notice_wait_required'):
+                    store.notice(0,accept=True)
+            with mock.patch.object(auth.time,'time',return_value=55):
+                self.assertTrue(store.notice(0,accept=True)['accepted'])
+
+    def test_notice_requires_delay_is_account_scoped_and_survives_restart(self):
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / 'auth.sqlite3'
+            store = auth.Store(path, enabled=False)
+            with mock.patch.object(auth.time, 'time', return_value=100):
+                self.assertEqual({'accepted': False, 'waitSeconds': 5}, store.notice(0))
+                with self.assertRaisesRegex(ValueError, 'notice_wait_required'):
+                    store.notice(0, accept=True)
+            with mock.patch.object(auth.time, 'time', return_value=105):
+                self.assertTrue(store.notice(0, accept=True)['accepted'])
+                self.assertFalse(store.notice(1)['accepted'])
+            self.assertTrue(auth.Store(path, enabled=False).notice(0)['accepted'])
+
     def test_admin_and_regular_users_can_change_only_their_own_password(self):
         with tempfile.TemporaryDirectory() as raw:
             store = auth.Store(Path(raw) / 'auth.sqlite3', enabled=True,

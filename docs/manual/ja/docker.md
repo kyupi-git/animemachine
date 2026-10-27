@@ -17,7 +17,7 @@ cd ~/animemachine
 
 ## Compose ファイルを取得する
 
-[compose.yaml をダウンロード](../../../deploy/compose/compose.yaml)し、先ほどのフォルダーへ保存します。GitHub のファイル画面では **Download raw file** を選びます。ファイル名は **`compose.yaml`** のままにします。ターミナルからも取得できます。
+[compose.yaml をダウンロード](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml)し、先ほどのフォルダーへ保存します。配布パッケージ直下の同名ファイルも使用できます。ファイル名は **`compose.yaml`** のままにします。ターミナルからも取得できます。
 
 ```sh
 curl -fL https://raw.githubusercontent.com/kyupi-git/animemachine/main/deploy/compose/compose.yaml -o compose.yaml

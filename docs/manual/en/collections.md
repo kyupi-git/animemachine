@@ -57,3 +57,9 @@ On Windows, enter `C:\Anime` or `\\NAS\Anime` directly. Network shares must be a
 ## Files are missing from the page
 
 During the initial scan, Playback shows inventory preparation. If files remain missing afterward, check the folder, mount, and readable status in **Settings → Connections**, then review title and episode naming. Quiet hours and temporary disconnections retain the existing inventory; access resumes when the folder is available.
+
+## Explore series relationships
+
+Click **Relationship graph** on a title card to explore prequels, sequels, movies and side stories. The graph opens at the selected title. Click another title to open its details; toggle relationship types, enter full screen or export an image as needed.
+
+![Title relationship graph](../../images/relationship-graph.en.png)

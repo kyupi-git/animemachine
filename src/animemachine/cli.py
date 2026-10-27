@@ -32,6 +32,17 @@ from .config import credentials as credential_store
 from .storage import AVAILABLE, StorageUnavailableError, status_for_path
 from .storage import preflight as storage_preflight
 from . import __version__
+from . import backup
+
+
+def _restart_portable() -> subprocess.Popen | None:
+    credential_store.prepare_restart()
+    arguments = [sys.executable,*sys.orig_argv[1:]]
+    if os.name == 'nt':
+        # CreateProcess quotes argv; the CRT exec family can split executable paths.
+        return subprocess.Popen(arguments)
+    os.execv(sys.executable,arguments)
+    return None
 
 
 STATE = Path(os.getenv("ANM_STATE_DIR", "/Data/state"))
@@ -754,6 +765,17 @@ def main() -> int:
         instance_lock = InstanceLock(STATE)
         instance_lock.acquire()
         try:
+            restore = backup.Manager(STATE, ConfigStore(CONFIG,catalog.EXAMPLE_CONFIG),
+                Path(os.getenv('ANM_AUTH_DB', str(STATE/'auth/auth.sqlite3'))),
+                auth_enabled=os.getenv('ANM_AUTH_ENABLED','false').casefold()=='true')
+            try:
+                if restore.apply_pending():
+                    print('[backup] Settings and viewing records restored.',flush=True)
+                    credential_store.load_into_environment(STATE)
+            except (ValueError,OSError,sqlite3.Error):
+                if backup.pending(STATE):
+                    raise
+                print('[backup] Restore failed; previous settings were retained.',flush=True)
             initialize_managed_services()
             shell_created = ensure_catalog_shell()
             stop = threading.Event()
@@ -785,6 +807,8 @@ def main() -> int:
             instance_lock.release()
         if restart_requested and os.getenv("ANM_DOCKER_UPDATE_RUNTIME", "").strip() in {"1", "2"}:
             return 75
+        if restart_requested and backup.pending(STATE):
+            _restart_portable()
         return 0
     else:
         start_background_workers = None

@@ -1,6 +1,6 @@
 # 4. Subscribe and download
 
-Use the featured Witch title to choose a release and download an episode. Ani-RSS subscriptions follow later episodes automatically; Torrent downloads submit the release you select now.
+Choose a release, then subscribe or submit a download task. Ani-RSS subscriptions follow later episodes automatically; Torrent downloads submit the release you select now.
 
 ## Find the title
 

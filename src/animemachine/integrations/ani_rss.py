@@ -1434,16 +1434,8 @@ def _policy_eligibility_reason(title: str, group: str, source_class: str,
         return ("eligible" if enabled else "resource_group_disabled"), family
     if family == "serial":
         language = serial_profile_language(config)
-        matches = serial_group_matches(title, group, language)
-        enabled = (any(serial_rule_enabled(policy, language, match["id"])
-                       and group_variant_enabled(policy, family, match["id"], title, language) for match in matches)
-                   if matches else bool(allow.get("resourceGroup", False)))
-        if enabled:
-            return "eligible", family
-        group_matches = serial_group_matches(title, group, language, require_subtitles=False)
-        if not matches and any(serial_rule_enabled(policy, language, match["id"]) for match in group_matches):
-            return "serial_language_mismatch", family
-        return "resource_group_disabled", family
+        from ..config.loader import serial_release_decision
+        return serial_release_decision(policy,language,title,group)[0],family
     if not resource_group_enabled(policy.get("resourceGroups"), group, allow.get("resourceGroup", False)):
         return "resource_group_disabled", family
     if not option_enabled(policy.get("subtitles"), "unknown", allow.get("subtitle", True)):
@@ -1496,11 +1488,13 @@ def _resource_policy_title(row: Any) -> str:
 def refresh_resource_policy(db_path: Path, config: dict[str, Any]) -> None:
     """Re-evaluate cached releases once per policy/rule revision, without remote I/O."""
     revision = hashlib.sha256(json.dumps({
-        "version": 2, "policy": config.get("torrentPolicy", {}),
+        "version": 4, "policy": config.get("torrentPolicy", {}),
         "language": serial_profile_language(config), "rules": load_resource_group_catalog(),
     }, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     key = "ani_rss_resource_policy_revision"
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
+        db.row_factory = sqlite3.Row
+        db.execute('BEGIN')
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='ani_rss_resource'").fetchone():
             return
         if not db.execute("SELECT 1 FROM ani_rss_resource LIMIT 1").fetchone():
@@ -1509,25 +1503,28 @@ def refresh_resource_policy(db_path: Path, config: dict[str, Any]) -> None:
         prior = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone() if has_metadata else None
         if prior and prior[0] == revision:
             return
+        source_rows = db.execute('SELECT * FROM ani_rss_resource ORDER BY resource_id').fetchall()
+    ranked: dict[int, list[tuple[Any, ...]]] = {}
+    for row in source_rows:
+        decisions = [_policy_eligibility_and_rank(
+            _resource_policy_title(part), str(part["resource_group"] or ""),
+            str(part["source_class"] or "unknown"), part["resolution"], config)
+            for part in _resource_variants(row)]
+        eligible = any(decision[0] for decision in decisions)
+        rank = min((decision[1] for decision in decisions if decision[0]),
+                   default=min(decision[1] for decision in decisions))
+        ranked.setdefault(int(row["anime_id"]), []).append((
+            0 if row["resource_kind"] == "collection" else 1, rank,
+            -(row["resolution"] or 0), -row["item_count"], row["title"], row["resource_id"], eligible))
     with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as db, db:
         db.row_factory = sqlite3.Row
         db.execute("BEGIN IMMEDIATE")
         db.execute("CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-        prior = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
-        if prior and prior[0] == revision:
+        current = db.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        if (current and current[0] == revision) or current != prior:
             return
-        ranked: dict[int, list[tuple[Any, ...]]] = {}
-        for row in db.execute("SELECT * FROM ani_rss_resource").fetchall():
-            decisions = [_policy_eligibility_and_rank(
-                _resource_policy_title(part), str(part["resource_group"] or ""),
-                str(part["source_class"] or "unknown"), part["resolution"], config)
-                for part in _resource_variants(row)]
-            eligible = any(decision[0] for decision in decisions)
-            rank = min((decision[1] for decision in decisions if decision[0]),
-                       default=min(decision[1] for decision in decisions))
-            ranked.setdefault(int(row["anime_id"]), []).append((
-                0 if row["resource_kind"] == "collection" else 1, rank,
-                -(row["resolution"] or 0), -row["item_count"], row["title"], row["resource_id"], eligible))
+        if db.execute('SELECT * FROM ani_rss_resource ORDER BY resource_id').fetchall() != source_rows:
+            return
         for rows in ranked.values():
             for index, item in enumerate(sorted(rows)):
                 db.execute("UPDATE ani_rss_resource SET eligible=?,rank_key=? WHERE resource_id=? AND (eligible<>? OR rank_key<>?)",
@@ -1747,6 +1744,8 @@ def _search_keywords(names: list[str]) -> list[str]:
 
 
 def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, Any]:
+    from ..torrents.content_policy import require_allowed
+    require_allowed(db_path, anime_id)
     settings = _settings(config)
     key = _secret()
     if not key:
@@ -1921,15 +1920,18 @@ def search(db_path: Path, anime_id: int, config: dict[str, Any]) -> dict[str, An
 
 
 def resources(db_path: Path, anime_id: int, config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    from ..torrents.content_policy import blocked, excluded_text
     if config is not None and not state_available(state(db_path, config)):
         return []
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as db:
         db.row_factory = sqlite3.Row
         if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ani_rss_resource'").fetchone():
             return []
+        if blocked(db, anime_id):
+            return []
         rows = db.execute("SELECT * FROM ani_rss_resource WHERE anime_id=? AND expires_at>=? ORDER BY rank_key,resource_id",
                           (anime_id, utcnow())).fetchall()
-        rows = [part for row in rows for part in _resource_variants(row)]
+        rows = [part for row in rows for part in _resource_variants(row) if not excluded_text(_resource_policy_title(part))]
         decisions = {}
         if config is not None:
             # GET/detail rendering stays read-only, including during Archive
@@ -2060,6 +2062,10 @@ def subscribe(db_path: Path, resource_id: str, config: dict[str, Any], *,
         raise ValueError("policyOverride must be boolean")
     row, payload = _load_resource(db_path, resource_id, config, policy_override=policy_override)
     anime_id = int(row["anime_id"]); kind = str(row["resource_kind"])
+    from ..torrents.content_policy import require_allowed, excluded_text
+    require_allowed(db_path, anime_id)
+    if excluded_text(_resource_policy_title(row)):
+        raise ValueError('content_excluded')
     # Keep action identity stable across the upgrade to work-scoped cache IDs.
     # In particular, already submitted collections must not be submitted twice.
     source_url = payload.get("torrentUrl") if kind == "collection" else payload.get("rss")

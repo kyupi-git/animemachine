@@ -6,7 +6,9 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 
 [用户手册](docs/manual/zh-Hans/index.md) · [快速部署](docs/guide.md#start) · [常见问题](docs/manual/zh-Hans/troubleshooting.md)。启动后点击页面顶部的 **手册**，可离线查阅图文步骤。
 
-![作品列表：按封面浏览，查看资源和收藏状态](docs/images/library-overview.png)
+| 新作雷达与一键继续观看 | 作品关系图（关联的新老作品） |
+| :---: | :---: |
+| ![新作雷达：管理订阅并连续播放待看的新集](docs/images/demo_radar.gif) | ![作品关系图：查看前作、续作与番外](docs/images/demo_relationship.gif) |
 
 ## 主要功能
 
@@ -27,20 +29,28 @@ AnimeMachine 是一款支持中、英、日三语界面的动画库管理工具�
 
 播放记录在作品详情和雷达之间共用，也可以手动修改。操作步骤见[一键继续观看与播放](docs/guide.md#daily-use)。
 
+## 查看系列作品关系
+
+点击作品卡片上的 **作品关系图**，查看前作、续作、剧场版和番外之间的联系。打开后会定位到当前作品，点击图中标题可查看详情。
+
+![作品关系图：全屏查看关联作品](docs/images/relationship-graph.png)
+
+关系类型可点击切换显示，也可以全屏查看或导出 PNG、SVG。具体操作见[作品关系图](docs/manual/zh-Hans/collections.md#查看作品关系)。
+
 ## 快速开始
 
 根据设备选择启动方式，具体步骤见[部署与使用指南](docs/guide.md#start)。
 
-**视频教程：** [部署教程](https://youtu.be/7meID_Dzayg) · [使用教程](https://youtu.be/ZKJUFCOF1VA)
-
-两部视频预定于北京时间 **2026-10-26 19:30** 公开。
+**视频教程：** [使用教程](https://youtu.be/ZKJUFCOF1VA) · [部署教程](https://youtu.be/7meID_Dzayg)
 
 | 使用场景 | 启动方式 |
 | --- | --- |
 | Windows 10 / 11 | 从 [Releases](https://github.com/kyupi-git/animemachine/releases/latest) 下载 Windows ZIP，解压后双击 `AnimeMachine.cmd`。发布包包含 Python 运行环境。 |
 | Linux | 安装 Python 3.11 或更新版本，下载对应的 Linux 发布包，解压后运行 `./AnimeMachine-Linux.sh`。 |
 | macOS | 安装 Python 3.11 或更新版本，下载对应的 macOS 发布包，解压后打开 `AnimeMachine-macOS.command`。 |
-| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/blob/main/deploy/compose/compose.yaml)，在文件所在目录执行 `docker compose up -d`。部署方案与步骤见[Docker Compose 指南](deploy/compose/README.md)。 |
+| NAS / Docker | 下载[完整组合的 compose.yaml](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml)，在文件所在目录执行 `docker compose up -d`。部署方案与步骤见[Docker Compose 指南](deploy/compose/README.md)。 |
+
+默认 `compose.yaml` 同时附在 Releases 和发布包根目录。下载这一个文件即可开始部署，无需下载源码或从多个模板中选择。
 
 启动后打开 **<http://localhost:8787>**。从其他设备访问时，将 `localhost` 替换为运行 AnimeMachine 的电脑或 NAS 地址。初始账户和随机密码显示在启动窗口或容器日志中。
 

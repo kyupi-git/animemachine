@@ -749,7 +749,13 @@ def acquisition_fingerprint(item: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, Any]) -> list[dict[str, Any]]:
-    anime_id = physical_anime_id(db, anime_id)
+    from . import content_policy
+    if content_policy.blocked(db, anime_id):
+        return []
+    owner_id = physical_anime_id(db, anime_id)
+    if owner_id != anime_id and content_policy.blocked(db, owner_id):
+        return []
+    anime_id = owner_id
     country_codes = [row[0] for row in db.execute(
         "SELECT country_code FROM anime_country WHERE anime_id=?", (anime_id,)
     )] if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_country'").fetchone() else []
@@ -776,18 +782,17 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
         WHERE tw.anime_id=? ORDER BY COALESCE(tw.priority_rank,999999),t.info_hash""", (anime_id,))
     result = []
     for row in rows:
+        if content_policy.excluded_text(str(row["info_name"] or "")):
+            continue
         enabled = option_enabled(classes, row["source_class"], allow_unlisted.get("sourceClass", True))
         family = source_family(config["torrentPolicy"], row["source_class"])
         manifest_text = row["manifest_text"] or ""
-        serial_matches = serial_group_matches(
-            f"{row['torrent_path']} {row['info_name']} {manifest_text}",
-            row["effective_group"], serial_language) if family == "serial" else []
+        serial_matches = []
         if family == "serial":
-            group_enabled = any(serial_rule_enabled(config["torrentPolicy"], serial_language, match["id"])
-                                and group_variant_enabled(config["torrentPolicy"], family, match["id"], row["info_name"], serial_language)
-                                for match in serial_matches)
-            if not serial_matches:
-                group_enabled = bool(allow_unlisted.get("resourceGroup", False))
+            from ..config.loader import serial_release_decision
+            serial_reason,serial_matches = serial_release_decision(config['torrentPolicy'],serial_language,
+                f"{row['torrent_path']} {row['info_name']} {manifest_text}",row['effective_group'],variant_text=row['info_name'])
+            group_enabled = serial_reason=='eligible'
         else:
             group_enabled = (archive_group_enabled(config["torrentPolicy"], row["effective_group"])
                              and group_variant_enabled(config["torrentPolicy"], family,
@@ -807,15 +812,10 @@ def torrents_for_anime(db: sqlite3.Connection, anime_id: int, config: dict[str, 
             reason = "region_disabled"
         elif not enabled:
             reason = "source_class_disabled"
-        elif not group_enabled:
-            reason = "resource_group_disabled"
-            if family == "serial" and not serial_matches and any(
-                    serial_rule_enabled(config["torrentPolicy"], serial_language, match["id"])
-                    for match in serial_group_matches(f"{row['torrent_path']} {row['info_name']} {manifest_text}",
-                        row["effective_group"], serial_language, require_subtitles=False)):
-                reason = "serial_language_mismatch"
         elif not resolution_enabled:
             reason = "resolution_disabled"
+        elif not group_enabled:
+            reason = serial_reason if family=='serial' else "resource_group_disabled"
         elif not subtitle_enabled:
             reason = "subtitle_disabled"
         elif not scope_ok:

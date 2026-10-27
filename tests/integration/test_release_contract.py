@@ -12,6 +12,31 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_portable_readmes_use_localized_stills_without_shipping_promotion_gifs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source, release = root / "images", root / "release"
+            source.mkdir()
+            release.mkdir()
+            original = "![radar](docs/images/demo_radar.gif) | ![graph](docs/images/demo_relationship.gif)\n"
+            for suffix in ("", ".en", ".ja"):
+                (release / f"README{suffix}.md").write_text(original, encoding="utf-8")
+                for stem in ("release-radar", "relationship-graph"):
+                    (source / f"{stem}{suffix}.png").write_bytes(b"localized preview")
+            for name in ("demo_radar.gif", "demo_relationship.gif"):
+                (source / name).write_bytes(b"promotion animation")
+            subprocess.run([sys.executable, str(ROOT / "scripts/copy_document_images.py"),
+                            str(source), str(release / "docs/images"), "--readme-dir", str(release)], check=True)
+            for suffix in ("", ".en", ".ja"):
+                text = (release / f"README{suffix}.md").read_text(encoding="utf-8")
+                self.assertNotIn(".gif", text)
+                for stem in ("release-radar", "relationship-graph"):
+                    target = f"docs/images/{stem}{suffix}.png"
+                    self.assertIn(target, text)
+                    self.assertTrue((release / target).is_file())
+            self.assertFalse(list((release / "docs/images").glob("*.gif")))
+            self.assertEqual(2, len(list(source.glob("*.gif"))), "source demonstrations are preserved")
+
     def test_document_images_exclude_os_metadata_and_archives_reject_it(self):
         with tempfile.TemporaryDirectory() as directory:
             source = pathlib.Path(directory) / "source"

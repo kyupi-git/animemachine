@@ -233,6 +233,7 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
         current = dict(db.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at')"))
         with contextlib.closing(sqlite3.connect(incoming.resolve().as_uri() + "?mode=ro", uri=True)) as source:
             candidate = dict(source.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_created_at')"))
+            incoming_columns = {row[1] for row in source.execute('PRAGMA table_info(anime_work)')}
         current_time = archive_release_time(current.get('archive_name'), current.get('archive_created_at'))
         incoming_time = archive_release_time(candidate.get('archive_name'), candidate.get('archive_created_at'))
         if current_time is not None and incoming_time is not None and incoming_time < current_time:
@@ -241,7 +242,7 @@ def merge_metadata(target: Path, incoming: Path, catalog_module: Any) -> dict[st
         catalog_module.entity_names.migrate(db)
         before = db.execute("SELECT COUNT(*) FROM anime_work").fetchone()[0]
         db.execute("ATTACH DATABASE ? AS incoming", (str(incoming),))
-        scalar = [row[1] for row in db.execute("PRAGMA table_info(anime_work)") if row[1] not in {"id", "bgm_id"}]
+        scalar = [row[1] for row in db.execute("PRAGMA table_info(anime_work)") if row[1] not in {"id", "bgm_id"} and row[1] in incoming_columns]
         with db:
             columns = ["bgm_id", *scalar]
             joined = ",".join(columns)

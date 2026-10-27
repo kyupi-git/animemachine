@@ -13,6 +13,7 @@ import httpx
 
 from ..config.loader import archive_group_id, serial_group_matches, serial_profile_language, source_family
 from ..torrents import runtime
+from ..torrents.variants import canonical_platform
 from . import ani_rss
 
 
@@ -146,8 +147,8 @@ def selected_resource(resource: dict[str, Any], groups: dict[str, Any], config: 
     identities = {group.casefold(), archive_group_id(policy, group).casefold()}
     if family == "serial":
         identities.update(row["id"].casefold() for row in serial_group_matches(text, group, serial_profile_language(config)))
-    platform = str(resource.get("releaseVariant", {}).get("platform") or "unknown").casefold()
-    return any(key.casefold() in identities and (values is None or platform in {v.casefold() for v in values})
+    platform = canonical_platform(str(resource.get("releaseVariant", {}).get("platform") or "unknown"))
+    return any(key.casefold() in identities and (values is None or platform in {canonical_platform(v) for v in values})
                for key, values in groups.items())
 
 

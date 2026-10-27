@@ -49,6 +49,7 @@ from animemachine.integrations.season_search import SeasonSearch
 from .image_fetcher import ImageFetcher
 from ..library import audit as library_audit, external as external_library, history as library_history, layout as library_layout, placeholders as library_placeholders
 from ..library import preview as library_preview
+from ..library import corrections as media_corrections
 from ..network import (connectivity as network_connectivity, diagnostics as network_diagnostics,
                        downloads as network_downloads, registry as network_registry,
                        sources as network_sources, tls as tls_support,
@@ -60,7 +61,9 @@ from ..storage.sleep import StorageSleepingError, require_awake, sleeping_path, 
 from ..storage import preflight as storage_preflight
 from ..storage import path_policy
 from ..api import auth
+from ..api import tasks as background_tasks
 from .. import __version__, application_update
+from .. import backup
 from .episodes import (_episode_progress, _episode_start_number)
 from .names import search_name
 
@@ -1642,7 +1645,8 @@ def build_items_from_archive(archive_path: Path, manifest: list[dict[str, Any]] 
             "source_type": source_label, "source_code": source_code(source_label),
             "original_language": original_language,
             "country_code": manifest_item.get("country_code"), "studio": " / ".join(studios) or None,
-            "summary": subject.get("summary"), "source_url": f"https://bgm.tv/subject/{bgm_id}"
+            "summary": subject.get("summary"), "source_url": f"https://bgm.tv/subject/{bgm_id}",
+            "is_nsfw": int(subject.get("nsfw") is True or subject.get("nsfw") == 1)
         }
         output.append(BuildItem(
             manifest_item, work, dedup_titles, filtered_tags, staff, cast, relations,
@@ -1663,7 +1667,8 @@ CREATE TABLE anime_work(
   start_month TEXT NOT NULL, directory_date TEXT NOT NULL, raw_date TEXT,
   episode_count INTEGER, episode_start_number INTEGER, source_type TEXT, source_code TEXT, original_language TEXT NOT NULL DEFAULT 'ja', country_code TEXT, studio TEXT,
   summary TEXT, source_url TEXT NOT NULL, fetched_at TEXT NOT NULL,
-  physical_role TEXT NOT NULL DEFAULT 'work', physical_owner_anime_id INTEGER, directory_title TEXT
+  physical_role TEXT NOT NULL DEFAULT 'work', physical_owner_anime_id INTEGER, directory_title TEXT,
+  is_nsfw INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE anime_title(
   anime_id INTEGER NOT NULL REFERENCES anime_work(id) ON DELETE CASCADE,
@@ -1772,6 +1777,7 @@ def write_database(path: Path, rows: list[BuildItem], archive_meta: dict[str, An
                     ("archive_created_at", str(archive_meta.get("created_at") or "")),
                     ("archive_digest", str(archive_meta.get("digest") or ""))
                 ])
+                metadata_rows.append(('resource_content_archive',f"{archive_meta.get('digest') or archive_meta.get('name') or ''}:{len(rows)}"))
             if instance_seed:
                 metadata_rows.append(("instance_random_seed", instance_seed))
             if archive_meta and archive_meta.get('name') and all('_archive_entity_names' in row.manifest for row in rows):
@@ -1979,17 +1985,25 @@ def localized_display_title(db: sqlite3.Connection, anime_id: int, language: str
 def migrate_catalog_features(db: sqlite3.Connection) -> None:
     """Add product UI indexes without rebuilding the immutable archive rows."""
     columns = {row[1] for row in db.execute("PRAGMA table_info(anime_work)")}
+    if "is_nsfw" not in columns:
+        with db:
+            db.execute("ALTER TABLE anime_work ADD COLUMN is_nsfw INTEGER NOT NULL DEFAULT 0")
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='anime_tag'").fetchone():
+                db.execute("UPDATE anime_work SET is_nsfw=1 WHERE id IN (SELECT anime_id FROM anime_tag "
+                           "WHERE lower(tag) IN ('nsfw','r18','r-18','r18+','r-18+','hentai','里番','裏番','成人动画','成人動畫','18禁'))")
+        columns.add("is_nsfw")
     version = db.execute("SELECT value FROM metadata WHERE key='feature_schema_version'").fetchone()
     # A naming-policy upgrade does not require re-deriving themes, studios,
     # countries and the full relation graph for every existing work.
     required = {"media_code", "physical_role", "episode_start_number", "original_language", "summary"}
     policy = db.execute("SELECT value FROM metadata WHERE key='english_display_title_policy'").fetchone()
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if (version and version[0] == "16" and required <= columns
+    if (version and version[0] in {"16", "17"} and required <= columns
             and policy and policy[0] == "quality-v4"
             and {"anime_relation_edge", "anime_release_event"} <= tables):
         with db:
-            rebuild_physical_layout(db)
+            if version[0] == "16":
+                rebuild_physical_layout(db)
             db.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES('feature_schema_version','17')")
         return
     with db:
@@ -2207,7 +2221,7 @@ def ensure_catalog_features(db_path: Path) -> None:
         relation_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_relation_edge'").fetchone()
         release_table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='anime_release_event'").fetchone()
         return ("media_code" in columns and "physical_role" in columns and "episode_start_number" in columns
-                and "directory_title" in columns and bool(version and version[0] == "17")
+                and "directory_title" in columns and "is_nsfw" in columns and bool(version and version[0] == "17")
                 and bool(title_policy and title_policy[0] == "quality-v4")
                 and bool(relation_table) and bool(release_table))
 
@@ -2242,7 +2256,8 @@ def localized_watches(db_path: Path, language: str) -> list[dict[str, Any]]:
 
 
 def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str, Any] | None = None,
-                  *, hidden_bgm_ids: Iterable[int] = (), followed_bgm_ids: Iterable[int] = ()) -> dict[str, Any]:
+                  *, hidden_bgm_ids: Iterable[int] = (), followed_bgm_ids: Iterable[int] = (),
+                  include_torrent_details: bool = True) -> dict[str, Any]:
     ensure_catalog_features(db_path)
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)) as feature_db:
         has_ani_rss_media_table = bool(feature_db.execute(
@@ -2399,7 +2414,9 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         where.append("(w.start_month NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' OR CAST(substr(w.start_month,1,4) AS INTEGER)>=?)")
         values.append(current_year + 1)
     elif era.isdigit():
-        where.append("substr(w.start_month,1,4)=?"); values.append(era)
+        year = int(era)
+        where.append("w.start_month BETWEEN ? AND ?")
+        values.extend([f"{year - 1:04d}-12", f"{year:04d}-12"])
     elif re.fullmatch(r"\d{4}s", era):
         base = int(era[:4]); where.append("CAST(substr(w.start_month,1,4) AS INTEGER) BETWEEN ? AND ?"); values.extend([base, base + 9])
     exists_filters = {
@@ -2471,6 +2488,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         f"(({region_sql}) AND (EXISTS(SELECT 1 FROM ani_rss_resource ar WHERE ar.anime_id=w.id AND ar.eligible=1 AND julianday(ar.expires_at)>=julianday('now')) OR EXISTS(SELECT 1 FROM ani_rss_subscription ans WHERE ans.anime_id=w.id AND ans.deleted_at IS NULL)))"
         if ani_connection_ready else "0"
     )
+    if {'torrent', 'ani-rss', 'unavailable'} <= availability:
+        availability = set()
     if availability == {"__none__"}:
         where.append("0")
     elif availability:
@@ -2497,6 +2516,8 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
         "not_in_library_catalog": "not_in_library",
     }
     library_states = {legacy_library_map.get(item, item) for item in raw_library_states}
+    if {'local', 'external', 'submitted', 'not_in_library'} <= library_states:
+        library_states = set()
     if library_states == {"__none__"}:
         where.append("0")
     elif library_states:
@@ -2726,7 +2747,11 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             ani_rss_managed = {int(row[0]) for row in db.execute(
                 f"SELECT DISTINCT anime_id FROM ani_rss_subscription WHERE deleted_at IS NULL AND anime_id IN ({logical_marks})", ids)}
             for anime_id in ids:
-                usable_counts[anime_id] = sum(1 for item in runtime_catalog.torrents_for_anime(db, anime_id, config) if item["eligible"])
+                owner = physical_ids[anime_id]
+                if owner not in usable_counts:
+                    usable_counts[owner] = (sum(1 for item in runtime_catalog.torrents_for_anime(db, owner, config) if item["eligible"])
+                                            if include_torrent_details and torrent_counts.get(owner, 0) else 0)
+                usable_counts[anime_id] = usable_counts[owner]
         for row in rows:
             anime_id = row["id"]
             row["radar_release_date"] = None
@@ -2812,6 +2837,7 @@ def query_catalog(db_path: Path, params: dict[str, list[str]], config: dict[str,
             row["ani_rss_managed"] = (
                 region_enabled and ani_connection_ready and anime_id in ani_rss_managed)
             ani_search_available = (region_enabled and ani_connection_ready
+                                    and not row.get('is_nsfw')
                                     and ani_state.get("effective_mode") in {"prefer", "fallback"})
             row["ani_rss_search_available"] = ani_search_available
             row["ani_rss_auto_available"] = (ani_search_available
@@ -4518,12 +4544,14 @@ class CatalogWarmup:
 
 
 _ADMIN_GET_PATHS = frozenset({
+    "/api/library/corrections", "/api/tasks", "/api/backup", "/api/backup/status",
     "/api/library/layout-preview",
     "/api/logs", "/api/history", "/api/archive/update", "/api/maintenance/status", "/api/auth/users",
     "/api/diagnostics/network", "/api/diagnostics/playback", "/api/images/preload", "/api/system/health",
     "/api/update/status",
 })
 _ADMIN_POST_PATHS = frozenset({
+    "/api/library/corrections", "/api/tasks/retry", "/api/backup/preview", "/api/backup/restore",
     '/api/update/offline',
     "/api/library/layout-preview",
     "/api/archive/update", "/api/archive/import", "/api/images/refresh", "/api/metadata/repair",
@@ -4582,7 +4610,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
     media_tokens = playback.MediaTokenRegistry()
     viewing_store = viewing.Store(auth_store.path.parent / "viewing.sqlite3")
     follow_store = follows.Store(auth_store.path.parent / "follows.sqlite3")
+    backup_manager = backup.Manager(STATE_DIR, config_store, auth_store.path, auth_enabled=auth_store.enabled)
     viewing_store.normalize_catalog_episodes(db_path)
+    with contextlib.closing(sqlite3.connect(db_path, timeout=15)) as correction_db:
+        media_corrections.migrate(correction_db)
     playlist_tokens = playback.PlaylistTokenRegistry()
     web_boot_id = secrets.token_hex(12)
     playback_diagnostics = playback.PlaybackDiagnostics()
@@ -5186,6 +5217,35 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             raise
         return True
 
+    def start_content_classification() -> bool:
+        from ..torrents.content_policy import backfill_archive
+        with contextlib.closing(sqlite3.connect(db_path,timeout=15)) as db:
+            metadata = dict(db.execute("SELECT key,value FROM metadata WHERE key IN ('archive_name','archive_digest','record_count','resource_content_archive')"))
+        name = metadata.get('archive_name') or ''
+        stamp = f"{metadata.get('archive_digest') or name}:{metadata.get('record_count','0')}"
+        if not name or Path(name).name!=name or metadata.get('resource_content_archive')==stamp:
+            return False
+        archive = next((root/name for root in (archive_updater.archive_dir, STATE_DIR/'metadata/archive') if (root/name).is_file()),None)
+        if archive is None:
+            return False
+        with maintenance_lock:
+            if maintenance.get('classification',{}).get('state')=='running':
+                return False
+            maintenance['classification']={'state':'running','done':0,'total':0}
+        def progress(value: dict[str,int]) -> None:
+            with maintenance_lock:
+                maintenance['classification'].update(value)
+        def worker() -> None:
+            try:
+                backfill_archive(db_path,archive,throttle=background_cooperate,progress=progress)
+                with maintenance_lock:
+                    maintenance['classification']['state']='complete'
+            except (ValueError,OSError,RuntimeError,sqlite3.Error,zipfile.BadZipFile) as exc:
+                with maintenance_lock:
+                    maintenance['classification'].update(state='failed',error=type(exc).__name__)
+        threading.Thread(target=worker,daemon=True,name='anm-content-classification').start()
+        return True
+
     def recover_interrupted_maintenance() -> dict[str, bool]:
         pending = read_recovery()
         result = {"archiveUpdate": archive_updater.recover_interrupted(), "libraryAudit": False, "metadataRepair": False, "placeholders": False}
@@ -5208,6 +5268,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             environment["ANM_QBT_API_KEY"] = Path(secret_file).read_text(encoding="utf-8").strip()
         try:
             payload = json.loads(plan_path.read_text(encoding="utf-8"))
+            from ..torrents.content_policy import require_plan_allowed
+            require_plan_allowed(db_path,payload)
             if payload.get("jobs"):
                 command = [sys.executable, "-m", "animemachine.torrents.submit", str(plan_path), "--apply", "--audit-output", str(audit_path)]
                 if os.getenv("ANM_QBT_ALLOW_AUTH_BYPASS", "false").casefold() == "true":
@@ -5771,6 +5833,10 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                                         "role": session.role, "csrfToken": session.csrf,
                                         "authEnabled": auth_store.enabled})
                 return
+            if parsed.path == "/api/auth/notice":
+                if self.authorize():
+                    self.json_response(auth_store.notice(self.auth_session.user_id))
+                return
             if parsed.path.startswith("/api/") and not self.authorize():
                 return
             if requires_admin("GET", parsed.path) and self.auth_session.role != "admin":
@@ -5790,6 +5856,18 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if parsed.path == "/api/system/health":
                 self.json_response(system_health_status())
+                return
+            if parsed.path == "/api/backup/status":
+                self.json_response(backup_manager.status())
+                return
+            if parsed.path == "/api/backup":
+                try:
+                    body = backup_manager.export()
+                    filename = f'AnimeMachine-{__version__}-backup-{dt.date.today().isoformat()}.zip'
+                    self.binary_response(body, 'application/zip', cache_seconds=0,
+                        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+                except (ValueError,OSError,sqlite3.Error) as exc:
+                    self.json_response({'error':str(exc)}, HTTPStatus.CONFLICT)
                 return
             if parsed.path == "/api/update/status":
                 try:
@@ -5940,6 +6018,30 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if parsed.path == "/api/maintenance/status":
                 with maintenance_lock:
                     self.json_response(json.loads(json.dumps(maintenance)))
+                return
+            if parsed.path == "/api/tasks":
+                with maintenance_lock:
+                    jobs = json.loads(json.dumps(maintenance))
+                    layout = dict(layout_preview_state)
+                payload = background_tasks.snapshot(jobs, archive_updater.status(), catalog_warmup.snapshot(), season_search.status(), layout)
+                work_ids = {int(row['id'].split(':')[1]) for row in payload['items'] if ':' in row['id']}
+                if work_ids:
+                    with contextlib.closing(sqlite3.connect(db_path,timeout=15)) as db:
+                        columns = ('id','title_ja','title_zh_hans','title_en')
+                        titles = {int(row[0]):dict(zip(columns,row)) for row in db.execute(
+                            f'SELECT {",".join(columns)} FROM anime_work WHERE id IN ({",".join("?" for _ in work_ids)})',tuple(work_ids))}
+                    for row in payload['items']:
+                        if ':' in row['id']:
+                            row['title'] = titles.get(int(row['id'].split(':')[1]))
+                self.json_response(payload)
+                return
+            if parsed.path == "/api/library/corrections":
+                try:
+                    params = urllib.parse.parse_qs(parsed.query)
+                    self.json_response(media_corrections.folders(db_path, query=(params.get('q') or [''])[0],
+                        all_files=(params.get('all') or [''])[0] == '1', offset=int((params.get('offset') or ['0'])[0])))
+                except (ValueError, sqlite3.Error) as exc:
+                    self.json_response({'error': str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             torrent_search_match = re.fullmatch(r"/api/anime/(\d+)/torrents/search", parsed.path)
             if torrent_search_match:
@@ -6299,6 +6401,15 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if not self.authorize(csrf=True):
                 return
+            if parsed.path == "/api/auth/notice":
+                try:
+                    request = self.read_json()
+                    if request.get("accepted") is not True:
+                        raise ValueError("notice_acceptance_required")
+                    self.json_response(auth_store.notice(self.auth_session.user_id, accept=True))
+                except ValueError as exc:
+                    self.json_response({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             if parsed.path == "/api/auth/password":
                 client = f"password:{self.auth_session.user_id}:{self.client_address[0]}"
                 now = time.monotonic()
@@ -6350,6 +6461,63 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             if requires_admin("POST", parsed.path) and self.auth_session.role != "admin":
                 self.json_response({"error": "administrator_required"}, HTTPStatus.FORBIDDEN)
                 return
+            if parsed.path == "/api/library/corrections":
+                try:
+                    result = media_corrections.update(db_path, self.read_json())
+                    self.json_response(result)
+                except (ValueError, sqlite3.Error) as exc:
+                    self.json_response({'error': str(exc)}, HTTPStatus.CONFLICT)
+                return
+            if parsed.path == "/api/backup/preview":
+                previous_timeout = self.connection.gettimeout()
+                try:
+                    if self.headers.get('Transfer-Encoding'):
+                        raise ValueError('backup_package_invalid')
+                    self.connection.settimeout(60)
+                    self.json_response(backup_manager.preview(self.rfile,int(self.headers.get('Content-Length','0'))))
+                except (ValueError,TypeError,KeyError,OSError,sqlite3.Error) as exc:
+                    self.json_response({'error':str(exc)}, HTTPStatus.BAD_REQUEST)
+                finally:
+                    self.connection.settimeout(previous_timeout)
+                return
+            if parsed.path == "/api/backup/restore":
+                try:
+                    request = self.read_json()
+                    if request.get('confirm') is not True:
+                        raise ValueError('backup_confirmation_required')
+                    if restart_callback is None:
+                        raise ValueError('backup_restart_unavailable')
+                    backup_manager.schedule(request.get('token'))
+                    self.json_response({'accepted':True,'restarting':True}, HTTPStatus.ACCEPTED)
+                    threading.Timer(.5,restart_callback).start()
+                except (ValueError,TypeError,KeyError,OSError) as exc:
+                    self.json_response({'error':str(exc)}, HTTPStatus.CONFLICT)
+                return
+            if parsed.path == "/api/tasks/retry":
+                try:
+                    key = self.read_json().get('id')
+                    operations = {'images': lambda: start_image_refresh([]), 'metadata': start_metadata_repair,
+                                  'library': start_library_audit, 'placeholders': start_placeholders,
+                                  'archive': archive_updater.start, 'classification': start_content_classification}
+                    if key == 'preload':
+                        catalog_warmup.control(paused=False)
+                        catalog_warmup.kick()
+                        result = True
+                    elif key == 'season':
+                        job = season_search.status()
+                        result = season_search.start(job['from'],job['to'],config_store.read()['ui']['language'],
+                                                     synchronize=bool(job.get('synchronize')))
+                    elif isinstance(key,str) and re.fullmatch(r'(torrentSearch|aniRssSearch):[0-9]+',key):
+                        kind,identity = key.split(':',1)
+                        result = (start_torrent_search if kind=='torrentSearch' else start_ani_rss_search)(int(identity))
+                    elif key in operations:
+                        result = operations[key]()
+                    else:
+                        raise ValueError('invalid_background_task')
+                    self.json_response({'started':bool(result)}, HTTPStatus.ACCEPTED)
+                except (ValueError,KeyError,TypeError,RuntimeError,sqlite3.Error) as exc:
+                    self.json_response({'error':str(exc)}, HTTPStatus.CONFLICT)
+                return
             if parsed.path in {"/api/library/placeholders", "/api/library/layout-preview"}:
                 if catalog_bootstrap.metadata(db_path).get("catalog_scope") == "season":
                     self.json_response({"error": "catalog_metadata_preparing"}, HTTPStatus.CONFLICT)
@@ -6385,6 +6553,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                 return
             if parsed.path == "/api/playback/catchup":
                 try:
+                    mark_interactive(30)
                     request = self.read_json()
                     if not isinstance(request, dict):
                         raise ValueError("JSON object required")
@@ -6392,7 +6561,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                     if cfg.get("playback", {}).get("enabled", True) is not True:
                         raise ValueError("playback is disabled")
                     params = catchup.season_params(request)
-                    rows = query_catalog(db_path, params, cfg, hidden_bgm_ids=auth_store.hidden_works(self.auth_session.user_id))["items"]
+                    rows = query_catalog(db_path, params, cfg, hidden_bgm_ids=auth_store.hidden_works(self.auth_session.user_id),
+                                         include_torrent_details=False)["items"]
                     ranges = None
                     if request.get("preview") is not True:
                         rows = catchup.selected_rows(rows, request.get("selectedBgmIds"))
@@ -6526,6 +6696,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
             playback_handoff_match = re.fullmatch(r"/api/anime/(\d+)/playback/handoff", parsed.path)
             if playback_handoff_match:
                 try:
+                    mark_interactive(30)
                     request = self.read_json()
                     cfg = config_store.read()
                     if cfg.get("playback", {}).get("enabled", True) is not True:
@@ -6990,6 +7161,8 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
                             plan = runtime_catalog.get_plan(db_path, plan_id)
                             if not plan or plan.get("state") != "preview":
                                 raise ValueError("plan is missing, stale, or already submitted")
+                            from ..torrents.content_policy import require_plan_allowed
+                            require_plan_allowed(db_path,plan)
                             if plan.get("jobs") and catalog_bootstrap.metadata(db_path).get("catalog_scope") == "season":
                                 raise ValueError("catalog_metadata_preparing")
                             reserve_submission_space(plan_id, plan)
@@ -7064,6 +7237,7 @@ def make_handler(db_path: Path, config_store: ConfigStore, *, submission_enabled
     Handler.recover_interrupted_maintenance = staticmethod(recover_interrupted_maintenance)
     Handler.archive_update_tick = staticmethod(archive_updater.tick)
     Handler.close_season_search = staticmethod(season_search.close)
+    Handler.start_content_classification = staticmethod(start_content_classification)
     return Handler
 
 
@@ -7665,6 +7839,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
 
     def monitor_archive_updates() -> None:
         next_names_check = 0.0
+        next_content_check = 0.0
         while not stop_monitor.is_set() and not restart_requested.is_set():
             if warmup_ready.is_set() and time.monotonic() >= next_names_check:
                 next_names_check = time.monotonic() + 300
@@ -7675,6 +7850,9 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
             try:
                 if warmup_ready.is_set():
                     handler.archive_update_tick()
+                    if time.monotonic()>=next_content_check:
+                        next_content_check=time.monotonic()+300
+                        handler.start_content_classification()
             except Exception as exc:
                 log_event("WARNING", "archive_schedule_failed", errorType=type(exc).__name__)
             if stop_monitor.wait(30):
@@ -7713,6 +7891,7 @@ def serve(db_path: Path, host: str, port: int, config_path: Path = DEFAULT_CONFI
     threading.Thread(target=monitor_follows, daemon=True, name="anm-release-follow-monitor").start()
     threading.Thread(target=monitor_managed_network, daemon=True, name="anm-managed-network").start()
     handler.catalog_warmup.start()
+    handler.start_content_classification()
     threading.Thread(target=monitor_network, daemon=True, name="anm-network-monitor").start()
     threading.Thread(target=monitor_qbt, daemon=True, name="anm-qbt-state-monitor").start()
     threading.Thread(target=monitor_application_updates, daemon=True, name="anm-application-update-monitor").start()

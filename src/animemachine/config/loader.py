@@ -10,6 +10,7 @@ import os
 import tempfile
 import re
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -43,10 +44,10 @@ def option_enabled(options: dict[str, Any] | None, value: Any, allow_unlisted: b
 
 def resource_group_enabled(groups: list[dict[str, Any]] | None, value: Any, allow_unlisted: bool = True) -> bool:
     """Match configured group names/aliases; an unrecognized group remains eligible."""
-    normalized = str(value or "unknown").strip().casefold()
+    normalized = unicodedata.normalize('NFKC',str(value or "unknown")).strip().casefold()
     for item in groups or []:
         names = [item.get("name"), item.get("id"), *(item.get("aliases") or [])]
-        if normalized in {str(name).strip().casefold() for name in names if name}:
+        if normalized in {unicodedata.normalize('NFKC',str(name)).strip().casefold() for name in names if name}:
             return bool(item.get("enabled", True))
     return bool(allow_unlisted)
 
@@ -95,21 +96,43 @@ def region_policy_enabled(policy: dict[str, Any] | None, country_codes: Any) -> 
 def load_resource_group_catalog() -> dict[str, Any]:
     for path in RESOURCE_GROUP_CATALOG_CANDIDATES:
         if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-            if data.get("schemaVersion") != 1:
-                raise ConfigError(f"unsupported resource-group catalog: {path}")
-            return data
+            stat = path.stat()
+            return _read_resource_group_catalog(str(path), stat.st_mtime_ns, stat.st_size)
     raise ConfigError("resource-groups.json is missing")
 
 
-def _keyword_matches(text: str, keyword: str) -> bool:
+@lru_cache(maxsize=4)
+def _read_resource_group_catalog(path: str, modified: int, size: int) -> dict[str, Any]:
+    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if data.get("schemaVersion") != 1:
+        raise ConfigError(f"unsupported resource-group catalog: {path}")
+    return data
+
+
+@lru_cache(maxsize=512)
+def _keyword_matcher(keyword: str) -> re.Pattern[str] | str | None:
+    keyword = unicodedata.normalize("NFKC", keyword)
     if keyword == "*":
-        return True
+        return None
     # Short ASCII group names (ANi, DKB, ASW...) require token boundaries;
     # otherwise ANi would accidentally match words such as "animation".
     if keyword.isascii() and re.fullmatch(r"[A-Za-z0-9]+", keyword):
-        return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])", text, re.I))
-    return keyword.casefold() in text.casefold()
+        return re.compile(rf"(?<![A-Za-z0-9]){re.escape(keyword)}(?![A-Za-z0-9])", re.I)
+    if keyword.isascii():
+        parts = re.split(r"[\s._-]+", keyword.strip())
+        return re.compile(r"(?<![A-Za-z0-9])" + r"[\s._-]+".join(map(re.escape, parts))
+                          + r"(?![A-Za-z0-9])", re.I)
+    return keyword.casefold()
+
+
+def _normalized_keyword_matches(text: str, folded: str, keyword: str) -> bool:
+    matcher = _keyword_matcher(keyword)
+    return True if matcher is None else matcher in folded if isinstance(matcher, str) else bool(matcher.search(text))
+
+
+def _keyword_matches(text: str, keyword: str) -> bool:
+    normalized = unicodedata.normalize('NFKC', text)
+    return _normalized_keyword_matches(normalized, normalized.casefold(), keyword)
 
 
 def serial_profile_language(config: dict[str, Any], ui_language: str | None = None) -> str:
@@ -145,7 +168,10 @@ def serial_group_matches(text: str, group: str, language: str,
                          require_subtitles: bool = True) -> list[dict[str, Any]]:
     """Return ordered serial-release rules whose group and subtitle clauses both match."""
     rules = (catalog or load_resource_group_catalog()).get("serialProfiles", {}).get(language, [])
-    haystack = f"{group or ''} {text or ''}"
+    text = unicodedata.normalize('NFKC', text or '')
+    folded = text.casefold()
+    haystack = unicodedata.normalize('NFKC', group or '') + ' ' + text
+    folded_haystack = haystack.casefold()
     language_match = _subtitle_language_matches(text or "", language)
     result = []
     for order, raw in enumerate(rules):
@@ -154,13 +180,13 @@ def serial_group_matches(text: str, group: str, language: str,
         # outer torrent filename retains every participant. Match against the
         # combined evidence so the highest-priority participating rule wins.
         group_text = haystack
-        if not any(_keyword_matches(group_text, value) for value in group_keywords):
+        if not any(_normalized_keyword_matches(group_text, folded_haystack, value) for value in group_keywords):
             continue
-        subtitle_match = language_match or any(_keyword_matches(haystack, value) for value in subtitle_keywords)
+        subtitle_match = language_match or any(_normalized_keyword_matches(text, folded, value) for value in subtitle_keywords)
         # Japanese playback does not require a subtitle track.  Keep the
         # configured group order while accepting a group-only match; unknown
         # groups still follow the explicit "other" switch.
-        if require_subtitles and not subtitle_match and language != "ja":
+        if not subtitle_match and ("*" in group_keywords or (require_subtitles and language != "ja")):
             continue
         result.append({"id": rule_id, "displayName": display_name, "order": order,
                        "wildcardGroup": "*" in group_keywords, "subtitleMatched": subtitle_match})
@@ -173,6 +199,23 @@ def serial_group_matches(text: str, group: str, language: str,
 def serial_rule_enabled(policy: dict[str, Any], language: str, rule_id: str) -> bool:
     configured = policy.get("serialSubtitle", {}).get("enabledByLanguage", {})
     return True if language not in configured else rule_id in configured[language]
+
+
+def serial_release_decision(policy: dict[str, Any], language: str, text: str, group: str,
+                            *, variant_text: str | None = None) -> tuple[str,list[dict[str,Any]]]:
+    known = serial_group_matches(text,group,language,require_subtitles=False)
+    matches = serial_group_matches(text,group,language)
+    enabled = [row for row in known if serial_rule_enabled(policy,language,row['id'])]
+    if known and not enabled:
+        return 'resource_group_disabled',matches
+    matched = [row for row in matches if serial_rule_enabled(policy,language,row['id'])]
+    if known and not matched:
+        return 'serial_language_mismatch',matches
+    if matched:
+        allowed = any(group_variant_enabled(policy,'serial',row['id'],text if variant_text is None else variant_text,language)
+                      for row in matched)
+        return ('eligible' if allowed else 'resource_variant_disabled'),matches
+    return ('eligible' if policy.get('allowUnlisted',{}).get('resourceGroup',False) else 'resource_group_disabled'),matches
 
 
 def manual_policy_override(request: dict[str, Any], anime_ids: Iterable[int], token: str) -> bool:
@@ -194,10 +237,10 @@ def source_family(policy: dict[str, Any], source_class: Any) -> str:
 def archive_group_enabled(policy: dict[str, Any], group: Any) -> bool:
     configured = policy.get("resourceGroups", [])
     archive_ids = {str(value).casefold() for value in policy.get("archiveGroupIds", [])}
-    normalized = str(group or "unknown").strip().casefold()
+    normalized = unicodedata.normalize('NFKC',str(group or "unknown")).strip().casefold()
     for item in configured:
         names = [item.get("name"), item.get("id"), *(item.get("aliases") or [])]
-        if normalized in {str(name).strip().casefold() for name in names if name}:
+        if normalized in {unicodedata.normalize('NFKC',str(name)).strip().casefold() for name in names if name}:
             return bool(item.get("enabled", True)) and str(item.get("id", "")).casefold() in archive_ids
     return bool(policy.get("allowUnlisted", {}).get("resourceGroup", False))
 
@@ -211,16 +254,16 @@ def group_variant_enabled(policy: dict[str, Any], family: str, group_id: str, te
     if group_id not in choices:
         return True
     # Lazy import keeps metadata classification independent of preference loading.
-    from ..torrents.variants import release_variant
+    from ..torrents.variants import release_variant, canonical_platform
     platform = release_variant(text).platform or "unknown"
-    return platform.casefold() in {value.casefold() for value in choices[group_id]}
+    return canonical_platform(platform) in {canonical_platform(value) for value in choices[group_id]}
 
 
 def archive_group_id(policy: dict[str, Any], group: Any) -> str:
-    normalized = str(group or "unknown").strip().casefold()
+    normalized = unicodedata.normalize('NFKC',str(group or "unknown")).strip().casefold()
     for item in policy.get("resourceGroups", []):
         names = [item.get("name"), item.get("id"), *(item.get("aliases") or [])]
-        if normalized in {str(name).strip().casefold() for name in names if name}:
+        if normalized in {unicodedata.normalize('NFKC',str(name)).strip().casefold() for name in names if name}:
             return str(item["id"])
     return normalized
 
@@ -240,10 +283,7 @@ def torrent_policy_eligible(policy: dict[str, Any], source_class: Any, group: An
     if family == "serial":
         pseudo = {"torrentPolicy": policy, "ui": {"language": ui_language or "zh"}}
         language = serial_profile_language(pseudo, ui_language)
-        matches = serial_group_matches(text, str(group or ""), language)
-        return (any(serial_rule_enabled(policy, language, match["id"])
-                    and group_variant_enabled(policy, family, match["id"], text, language) for match in matches)
-                if matches else bool(allow.get("resourceGroup", False)))
+        return serial_release_decision(policy,language,text,str(group or ''))[0]=='eligible'
     return (resource_group_enabled(policy.get("resourceGroups"), group, allow.get("resourceGroup", False))
             and option_enabled(policy.get("subtitles"), subtitle, allow.get("subtitle", True)))
 
@@ -522,6 +562,18 @@ def _validate(data: Any) -> dict[str, Any]:
         raise ConfigError("torrentPolicy.serialSubtitle must be an object")
     if serial_subtitle.get("language", "auto") not in {"auto", "zh", "en", "ja"}:
         raise ConfigError("torrentPolicy.serialSubtitle.language is invalid")
+    configured_groups = serial_subtitle.get('enabledByLanguage',{})
+    if (not isinstance(configured_groups,dict) or set(configured_groups)-{'zh','en','ja'}
+            or any(not isinstance(values,list) or any(not isinstance(value,str) or not 1<=len(value)<=120 for value in values)
+                   or len(values)!=len(set(values)) for values in configured_groups.values())):
+        raise ConfigError('torrentPolicy.serialSubtitle.enabledByLanguage must contain group ID lists')
+    if serial_subtitle.get("groupDefaultsVersion", 0) == 0:
+        enabled = serial_subtitle.get("enabledByLanguage", {})
+        if isinstance(enabled, dict) and isinstance(enabled.get("zh"), list):
+            selected = enabled["zh"]
+            if selected and "tonight-moon" not in selected:
+                selected.insert(selected.index("haruhana") if "haruhana" in selected else len(selected), "tonight-moon")
+        serial_subtitle["groupDefaultsVersion"] = 1
     strategy_order = policy.get("strategyOrder")
     strategy_dimensions = {
         "resourceCompleteness", "releaseStrategy", "seriesCompleteness", "resourceGroup",

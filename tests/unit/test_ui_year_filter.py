@@ -17,9 +17,9 @@ const context=vm.createContext({$:id=>fields[id],exactYear:value=>/^\d{4}$/.test
  ensureEraYearOption:()=>{},updateSeasonControl:()=>{},eraDateRange:()=>({from:'2000-01',to:'2009-12'})});
 vm.runInContext(source.slice(source.indexOf('function applyEraDateRange('),source.indexOf('function applySeasonDateRange('))+'\nthis.apply=applyEraDateRange;',context);
 context.apply('2012');
-assert.equal(fields.season.value,'');assert.equal(fields.start_from.value,'2012-01');assert.equal(fields.start_to.value,'2012-12');
+assert.equal(fields.season.value,'');assert.equal(fields.start_from.value,'2011-12');assert.equal(fields.start_to.value,'2012-12');
 fields.start_from.value='2012-06';fields.start_to.value='2012-08';context.apply('2013');
-assert.equal(fields.start_from.value,'2013-01');assert.equal(fields.start_to.value,'2013-12');
+assert.equal(fields.start_from.value,'2012-12');assert.equal(fields.start_to.value,'2013-12');
 context.apply('2000s');assert.equal(fields.start_from.value,'2000-01');assert.equal(fields.start_to.value,'2009-12');
 '''
         result = subprocess.run([shutil.which('node'), '-e', script, str(source)], capture_output=True,

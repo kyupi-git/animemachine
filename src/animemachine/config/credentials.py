@@ -178,3 +178,10 @@ def load_into_environment(state_dir: Path | None = None) -> set[str]:
                 _STATE_LOADED.discard(environment)
             loaded.add(environment)
     return loaded
+
+
+def prepare_restart() -> None:
+    """Let the next process read updated files while keeping deployment secrets."""
+    for environment in tuple(_STATE_LOADED):
+        os.environ.pop(environment, None)
+    _STATE_LOADED.clear()

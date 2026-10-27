@@ -23,6 +23,8 @@ from .metainfo import inspect_bytes
 
 
 def keywords(db_path: Path, anime_id: int) -> tuple[int, list[str]]:
+    from .content_policy import require_allowed
+    require_allowed(db_path, anime_id)
     with contextlib.closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         work = db.execute("SELECT bgm_id,title_ja,title_zh_hans,title_en FROM anime_work WHERE id=?", (anime_id,)).fetchone()
         if work is None:
@@ -101,6 +103,9 @@ def discover(db_path: Path, anime_id: int, directory: Path, *,
     attempted: dict[str, int] = {}
     for source, item in rows:
         title = str(item.get("title") or "")
+        from .content_policy import excluded_text, marked
+        if marked(item.get('nsfw')) or excluded_text(title):
+            continue
         key = str(item.get("download_url") or item.get("details_url") or "")
         if not key or key in seen or attempted.get(source, 0) >= options['maxResults']:
             continue

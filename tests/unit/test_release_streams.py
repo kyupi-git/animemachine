@@ -11,6 +11,10 @@ from animemachine.torrents.variants import release_variant
 
 
 class ReleaseStreamTests(unittest.TestCase):
+    def test_empty_resource_list_does_not_read_catalog_or_provider(self):
+        with mock.patch.object(season_guard, 'live_frontier', side_effect=AssertionError('provider called')):
+            self.assertEqual([], season_guard.filter_streams(None, 1, [], lambda _: (), {}))
+
     def setUp(self):
         self.db = sqlite3.connect(':memory:')
         self.addCleanup(self.db.close)

@@ -434,13 +434,21 @@ def _path_key(path: Path) -> str:
         return os.path.normcase(os.path.abspath(str(path)))
 
 
+def _override_exclusion(db: sqlite3.Connection, expression: str) -> str:
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='external_media_override'").fetchone():
+        return ''
+    return (" AND NOT EXISTS(SELECT 1 FROM external_media_override o JOIN external_media_file ef "
+            "ON ef.source_id=o.source_id AND ef.absolute_path=o.absolute_path AND ef.size=o.size AND ef.mtime_ns=o.mtime_ns "
+            f"WHERE o.absolute_path={expression})")
+
+
 def _existing_rows(db: sqlite3.Connection, anime_id: int, expected_count: int | None) -> Iterable[tuple[Path, int, float | None, str, str | None]]:
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_local_file'").fetchone():
         for filename, size, kind in db.execute(
                 "SELECT f.absolute_path,f.size,f.file_kind FROM runtime_local_file f "
                 "JOIN runtime_work w ON w.target_unc=f.owner_path "
                 "WHERE w.anime_id=? AND w.library_state IN ('existing','downloading','queued') "
-                "ORDER BY f.absolute_path", (anime_id,)):
+                + _override_exclusion(db,'f.absolute_path') + " ORDER BY f.absolute_path", (anime_id,)):
             path = Path(filename)
             yield path, int(size), playback_episode(db, anime_id, _episode(path, expected_count=expected_count), expected_count), "preexisting", str(kind)
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_asset'").fetchone():
@@ -448,15 +456,21 @@ def _existing_rows(db: sqlite3.Connection, anime_id: int, expected_count: int | 
                                   f.file_kind
             FROM runtime_asset a JOIN runtime_work w ON w.target_unc=a.owner_path
             LEFT JOIN runtime_torrent_file f ON f.info_hash=a.source_info_hash AND f.file_index=a.source_file_index
-            WHERE w.anime_id=? ORDER BY a.final_path""", (anime_id,)):
+            WHERE w.anime_id=?""" + _override_exclusion(db,'a.final_path') + " ORDER BY a.final_path", (anime_id,)):
             path = Path(str(row[0]))
             yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, expected_count=expected_count), expected_count), "managed", str(row[4] or "") or None
     if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_media_file'").fetchone():
-        for row in db.execute("""SELECT f.absolute_path,f.size,f.episode_number,s.kind FROM external_media_file f
+        has_overrides = db.execute("SELECT 1 FROM sqlite_master WHERE name='external_media_override'").fetchone()
+        manual = ("EXISTS(SELECT 1 FROM external_media_override o WHERE o.source_id=f.source_id "
+                  "AND o.absolute_path=f.absolute_path AND o.size=f.size AND o.mtime_ns=f.mtime_ns)") if has_overrides else '0'
+        for row in db.execute(f"""SELECT f.absolute_path,f.size,f.episode_number,s.kind,{manual} FROM external_media_file f
                                   JOIN external_library_source s USING(source_id)
                                   WHERE anime_id=? AND match_state='verified' ORDER BY absolute_path""", (anime_id,)):
             path = Path(str(row[0]))
-            yield path, int(row[1] or 0), playback_episode(db, anime_id, _episode(path, float(row[2]) if row[2] is not None else None, expected_count), expected_count), 'preexisting' if row[3] == 'local' else "external", "main_video"
+            episode = float(row[2]) if row[2] is not None else None
+            if not row[4]:
+                episode = playback_episode(db, anime_id, _episode(path, episode, expected_count), expected_count)
+            yield path, int(row[1] or 0), episode, 'preexisting' if row[3] == 'local' else "external", "main_video"
 
 
 def _scan_preexisting(db: sqlite3.Connection, anime_id: int, config: dict[str, Any], known: set[str], expected_count: int | None) -> Iterable[tuple[Path, int, float | None, str, str | None]]:
@@ -474,6 +488,11 @@ def _scan_preexisting(db: sqlite3.Connection, anime_id: int, config: dict[str, A
             continue
         if not root.is_dir():
             continue
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='external_media_override'").fetchone():
+            known.update(_path_key(Path(row[0])) for row in db.execute('''SELECT o.absolute_path FROM external_media_override o
+                JOIN external_media_file f ON f.source_id=o.source_id AND f.absolute_path=o.absolute_path
+                AND f.size=o.size AND f.mtime_ns=o.mtime_ns WHERE instr(o.absolute_path,?)=1''',
+                (str(root)+os.sep,)))
         for path in path_policy.walk_files(root, config=config):
             key = _path_key(path)
             if key in known or not path.is_file() or not _is_main_video(path):
@@ -508,7 +527,7 @@ def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str
             if {'runtime_asset', 'runtime_work'} <= tables:
                 rows.extend(db.execute(f"""SELECT w.anime_id,a.final_path,NULL,k.episode_count
                     FROM runtime_asset a JOIN runtime_work w ON w.target_unc=a.owner_path
-                    JOIN anime_work k ON k.id=w.anime_id WHERE w.anime_id IN ({marks})""", chunk))
+                    JOIN anime_work k ON k.id=w.anime_id WHERE w.anime_id IN ({marks})""" + _override_exclusion(db,'a.final_path'), chunk))
             if 'external_media_file' in tables:
                 rows.extend(db.execute(f"""SELECT m.anime_id,m.absolute_path,m.episode_number,k.episode_count
                     FROM external_media_file m JOIN anime_work k ON k.id=m.anime_id
@@ -517,7 +536,7 @@ def latest_cached_episodes(db_path: Path, anime_ids: list[int], config: dict[str
                 local_rows = list(db.execute(f"""SELECT w.anime_id,f.absolute_path,NULL,k.episode_count
                     FROM runtime_local_file f JOIN runtime_work w ON w.target_unc=f.owner_path
                     JOIN anime_work k ON k.id=w.anime_id WHERE f.file_kind='main_video'
-                    AND w.anime_id IN ({marks})""", chunk))
+                    AND w.anime_id IN ({marks})""" + _override_exclusion(db,'f.absolute_path'), chunk))
                 rows.extend(local_rows)
                 known_main_paths.update(str(row[1]) for row in local_rows)
             for anime_id, filename, hint, expected in rows:

@@ -6,7 +6,7 @@
 
 1. 在 NAS 的应用中心安装并打开 **Docker / 容器管理**。终端部署使用 Docker Engine 24+、Compose 2.20.3+。
 2. 在 NAS 的数据盘上新建固定目录，例如 `docker/animemachine`，并确认有足够的可用空间。
-3. [下载 compose.yaml](../../../deploy/compose/compose.yaml)，保存到这个目录。在 GitHub 文件页面可点击 **Download raw file**。保存后的完整文件名为 **`compose.yaml`**。
+3. [下载 compose.yaml](https://github.com/kyupi-git/animemachine/releases/latest/download/compose.yaml)，保存到这个目录。也可直接使用发布包根目录的同名文件。保存后的完整文件名为 **`compose.yaml`**。
 
 默认会在项目目录内建立 `config`、`data`、`library`、`torrents` 和 `external` 等目录。下载的动画存放在 `library` 或 `external/ani-rss`；因此应把项目建在有足够空间的磁盘上。
 

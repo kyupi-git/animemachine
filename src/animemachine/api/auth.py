@@ -9,6 +9,7 @@ import os
 import secrets
 import sqlite3
 import time
+import math
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -72,6 +73,9 @@ class Store:
                 user_id INTEGER NOT NULL,bgm_id INTEGER NOT NULL,hidden_at INTEGER NOT NULL,
                 PRIMARY KEY(user_id,bgm_id)
               );
+              CREATE TABLE IF NOT EXISTS usage_notice(
+                user_id INTEGER PRIMARY KEY,shown_at REAL NOT NULL,accepted_at REAL
+              );
             """)
             count = int(db.execute("SELECT COUNT(*) FROM auth_user").fetchone()[0])
         if enabled and count == 0:
@@ -82,6 +86,25 @@ class Store:
     @staticmethod
     def _digest(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def notice(self, user_id: int, *, accept: bool = False) -> dict[str, Any]:
+        now = time.time()
+        with contextlib.closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+            row = db.execute("SELECT shown_at,accepted_at FROM usage_notice WHERE user_id=?", (user_id,)).fetchone()
+            if row is None:
+                db.execute("INSERT OR IGNORE INTO usage_notice VALUES(?,?,NULL)", (user_id, now))
+                row = db.execute("SELECT shown_at,accepted_at FROM usage_notice WHERE user_id=?", (user_id,)).fetchone()
+            if row[1] is None and float(row[0]) > now:
+                db.execute("UPDATE usage_notice SET shown_at=? WHERE user_id=?", (now, user_id))
+                row = (now, None)
+            wait = max(0, min(5, math.ceil(5 - (now - float(row[0])))))
+            waiting = accept and row[1] is None and wait>0
+            if accept and row[1] is None and not waiting:
+                db.execute("UPDATE usage_notice SET accepted_at=? WHERE user_id=?", (now, user_id))
+            result = {"accepted": row[1] is not None or (accept and not waiting), "waitSeconds": wait}
+        if waiting:
+            raise ValueError("notice_wait_required")
+        return result
 
     def hidden_works(self, user_id: int) -> list[int]:
         with contextlib.closing(sqlite3.connect(self.path)) as db:
